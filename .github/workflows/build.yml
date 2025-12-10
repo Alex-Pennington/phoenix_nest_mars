@@ -1,0 +1,212 @@
+name: Build and Release
+
+on:
+  push:
+    branches: [main, develop]
+    tags: ['v*']
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      release_type:
+        description: 'Release type'
+        required: false
+        default: 'none'
+        type: choice
+        options:
+          - none
+          - draft
+          - prerelease
+          - release
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+
+env:
+  VERSION_MAJOR: 1
+  VERSION_MINOR: 0
+  VERSION_PATCH: 0
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      version_full: ${{ steps.version.outputs.version_full }}
+      commit_short: ${{ steps.version.outputs.commit_short }}
+      build_number: ${{ steps.version.outputs.build_number }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Calculate version
+        id: version
+        run: |
+          # Get commit info
+          COMMIT_SHORT=$(git rev-parse --short HEAD)
+          COMMIT_COUNT=$(git rev-list --count HEAD)
+          
+          # Base version from env or tag
+          if [[ "${{ github.ref }}" == refs/tags/v* ]]; then
+            VERSION="${{ github.ref_name }}"
+            VERSION="${VERSION#v}"
+            VERSION_FULL="${VERSION}"
+          else
+            VERSION="${VERSION_MAJOR}.${VERSION_MINOR}.${VERSION_PATCH}"
+            VERSION_FULL="${VERSION}-dev+${COMMIT_SHORT}.${COMMIT_COUNT}"
+          fi
+          
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+          echo "version_full=${VERSION_FULL}" >> $GITHUB_OUTPUT
+          echo "commit_short=${COMMIT_SHORT}" >> $GITHUB_OUTPUT
+          echo "build_number=${COMMIT_COUNT}" >> $GITHUB_OUTPUT
+          
+          echo "### Version Info" >> $GITHUB_STEP_SUMMARY
+          echo "- **Version**: ${VERSION}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Full Version**: ${VERSION_FULL}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Commit**: ${COMMIT_SHORT}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Build Number**: ${COMMIT_COUNT}" >> $GITHUB_STEP_SUMMARY
+
+  build-linux:
+    needs: version
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Qt6 dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            qt6-base-dev \
+            qt6-serialport-dev \
+            qt6-charts-dev \
+            libqt6concurrent6 \
+            libssl-dev \
+            build-essential
+
+      - name: Build Communications Processor
+        working-directory: src/cp
+        run: |
+          # Inject version into build
+          qmake6 CP-standalone.pro \
+            "DEFINES+=GIT_COMMIT_SHORT=\\\\\\\"${{ needs.version.outputs.commit_short }}\\\\\\\"" \
+            "DEFINES+=BUILD_NUMBER=\\\\\\\"${{ needs.version.outputs.build_number }}\\\\\\\""
+          make -j$(nproc)
+          
+          # Name artifact with version
+          mv communicationsprocessor "CP-${{ needs.version.outputs.version_full }}-linux-x64"
+
+      - name: Generate artifact attestation
+        if: github.event_name != 'pull_request'
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: src/cp/CP-${{ needs.version.outputs.version_full }}-linux-x64
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: CP-linux-x64
+          path: src/cp/CP-${{ needs.version.outputs.version_full }}-linux-x64
+
+  build-windows:
+    needs: version
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Qt
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.6.0'
+          host: 'windows'
+          target: 'desktop'
+          arch: 'win64_mingw'
+          modules: 'qtserialport qtcharts'
+
+      - name: Build Communications Processor
+        shell: bash
+        working-directory: src/cp
+        run: |
+          # Inject version into build
+          qmake CP-standalone.pro \
+            "DEFINES+=GIT_COMMIT_SHORT=\\\\\\\"${{ needs.version.outputs.commit_short }}\\\\\\\"" \
+            "DEFINES+=BUILD_NUMBER=\\\\\\\"${{ needs.version.outputs.build_number }}\\\\\\\""
+          mingw32-make -j${NUMBER_OF_PROCESSORS:-4}
+          
+          # Name artifact with version
+          mv release/communicationsprocessor.exe "CP-${{ needs.version.outputs.version_full }}-windows-x64.exe"
+
+      - name: Generate artifact attestation
+        if: github.event_name != 'pull_request'
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: src/cp/CP-${{ needs.version.outputs.version_full }}-windows-x64.exe
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: CP-windows-x64
+          path: src/cp/CP-${{ needs.version.outputs.version_full }}-windows-x64.exe
+
+  release:
+    needs: [version, build-linux, build-windows]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && github.event.inputs.release_type != 'none')
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+
+      - name: Determine release type
+        id: release_type
+        run: |
+          if [[ "${{ github.ref }}" == refs/tags/v* ]]; then
+            VERSION="${{ github.ref_name }}"
+            if [[ "$VERSION" == *"-alpha"* ]] || [[ "$VERSION" == *"-beta"* ]] || [[ "$VERSION" == *"-rc"* ]]; then
+              echo "prerelease=true" >> $GITHUB_OUTPUT
+              echo "draft=false" >> $GITHUB_OUTPUT
+            else
+              echo "prerelease=false" >> $GITHUB_OUTPUT
+              echo "draft=false" >> $GITHUB_OUTPUT
+            fi
+          else
+            case "${{ github.event.inputs.release_type }}" in
+              draft) echo "draft=true" >> $GITHUB_OUTPUT; echo "prerelease=false" >> $GITHUB_OUTPUT ;;
+              prerelease) echo "draft=false" >> $GITHUB_OUTPUT; echo "prerelease=true" >> $GITHUB_OUTPUT ;;
+              release) echo "draft=false" >> $GITHUB_OUTPUT; echo "prerelease=false" >> $GITHUB_OUTPUT ;;
+              *) echo "draft=true" >> $GITHUB_OUTPUT; echo "prerelease=false" >> $GITHUB_OUTPUT ;;
+            esac
+          fi
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || format('v{0}', needs.version.outputs.version_full) }}
+          name: Phoenix Nest MARS v${{ needs.version.outputs.version }}
+          draft: ${{ steps.release_type.outputs.draft }}
+          prerelease: ${{ steps.release_type.outputs.prerelease }}
+          generate_release_notes: true
+          files: |
+            CP-linux-x64/*
+            CP-windows-x64/*
+          body: |
+            ## Phoenix Nest MARS v${{ needs.version.outputs.version }}
+            
+            **Build**: #${{ needs.version.outputs.build_number }}  
+            **Commit**: `${{ needs.version.outputs.commit_short }}`
+            
+            ### Downloads
+            | Platform | File |
+            |----------|------|
+            | Linux x64 | `CP-${{ needs.version.outputs.version_full }}-linux-x64` |
+            | Windows x64 | `CP-${{ needs.version.outputs.version_full }}-windows-x64.exe` |
+            
+            ### Verify Attestation
+            ```bash
+            gh attestation verify <artifact> --owner Alex-Pennington
+            ```

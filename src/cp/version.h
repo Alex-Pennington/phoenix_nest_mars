@@ -19,9 +19,37 @@
 #ifndef VERSION_H
 #define VERSION_H
 
-#define VERSION "release"
-// #define VERSION "alpha"
-//#define VERSION "beta"
+// Semantic version - update for releases
+#define VERSION_MAJOR 1
+#define VERSION_MINOR 0
+#define VERSION_PATCH 0
+
+// Stringify helper macros
+#define STRINGIFY_(x) #x
+#define STRINGIFY(x) STRINGIFY_(x)
+
+// Build metadata - injected by CI, defaults for local builds
+#ifndef GIT_COMMIT_SHORT
+#define GIT_COMMIT_SHORT local
+#endif
+
+#ifndef BUILD_NUMBER
+#define BUILD_NUMBER 0
+#endif
+
+// Version strings
+#define VERSION_STRING_BASE "1.0.0"
+
+#ifdef NDEBUG
+#define VERSION VERSION_STRING_BASE
+#else
+#define VERSION VERSION_STRING_BASE "-dev+" STRINGIFY(GIT_COMMIT_SHORT) "." STRINGIFY(BUILD_NUMBER)
+#endif
+
+// Release channel
+// #define RELEASE_CHANNEL "alpha"
+// #define RELEASE_CHANNEL "beta"
+#define RELEASE_CHANNEL "release"
 
 #define ALPHA_TIME 39
 #define BETA_TIME 99

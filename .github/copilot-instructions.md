@@ -21,9 +21,20 @@ HF digital communications software for Military Auxiliary Radio System (MARS) op
 cd src/cp && qmake CP-standalone.pro && make
 cd src/smlinux && qmake StationMapper-linux.pro && make
 
+# With version injection (CI style)
+qmake CP-standalone.pro "DEFINES+=GIT_COMMIT_SHORT=\\\"abc1234\\\"" "DEFINES+=BUILD_NUMBER=\\\"42\\\""
+
 # Python modules require: numpy scipy matplotlib
 # Optional: voacapl for real propagation (falls back to simulated)
 ```
+
+## Versioning
+
+- **Format**: `MAJOR.MINOR.PATCH[-PRERELEASE][+COMMIT.BUILD]`
+- **Version source**: `src/cp/version.h` defines `VERSION_MAJOR/MINOR/PATCH`
+- **CI injects**: `GIT_COMMIT_SHORT` and `BUILD_NUMBER` at build time
+- **Release tags**: `v1.0.0`, `v1.0.0-alpha`, `v1.0.0-rc.1`
+- **Dev builds**: `1.0.0-dev+abc1234.42`
 
 ## Architecture & Data Flows
 
