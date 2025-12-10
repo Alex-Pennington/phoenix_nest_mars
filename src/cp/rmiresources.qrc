@@ -1,0 +1,22 @@
+<RCC>
+    <qresource prefix="/">
+        <file>images/application-exit.png</file>
+        <file>images/clear.png</file>
+        <file>images/connect.png</file>
+        <file>images/disconnect.png</file>
+        <file>images/fileopen.png</file>
+        <file>images/fileprint.png</file>
+        <file>images/filesave.png</file>
+        <file>images/folder.png</file>
+        <file>images/RMIIcon.ico</file>
+        <file>images/RMIIcon.png</file>
+        <file>images/settings.png</file>
+        <file>images/Letter A.png</file>
+        <file>LGPLv3.pdf</file>
+        <file>images/kchart.png</file>
+        <file>default.qss</file>
+        <file>MSCSuite.pdf</file>
+        <file>UserManual.pdf</file>
+        <file>KLUserManual.pdf</file>
+    </qresource>
+</RCC>

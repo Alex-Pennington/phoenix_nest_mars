@@ -1,0 +1,60 @@
+# Build artifacts
+*.o
+*.obj
+*.exe
+*.out
+*.app
+moc_*
+ui_*
+qrc_*
+Makefile
+.qmake.stash
+
+# Qt Creator
+*.pro.user
+*.pro.user.*
+*.creator.user
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+ENV/
+.venv/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Build directories
+build/
+debug/
+release/
+
+# Generated binaries (keep releases/ for intentional releases)
+src/cp/CP
+src/cp/CommunicationsProcessor
+src/smlinux/StationMapper
+
+# VOACAP working files
+*.ig1
+*.ICE
+*.out
+*.dat
+itshfbc/
+
+# Logs
+*.log
+
+# Test outputs
+src/propagation/examples/*.png

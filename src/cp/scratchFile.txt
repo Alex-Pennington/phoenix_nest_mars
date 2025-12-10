@@ -1,0 +1,528 @@
+status_label -
+
+/**************************************************************
+ * RIGCat File Parser - Not Used *
+ * ***********************************************************/
+//void MainWindow::parseStartElementContents(QMap<QString, QString> *CATMap, QXmlStreamReader *xmlData){
+//    //    qDebug() << "Function Name: " << Q_FUNC_INFO;
+//    //    QString funcName = Q_FUNC_INFO;
+//    //    emit signalUpdateDebugLog("Function Name: " + funcName);
+//    bool foundStart =false;
+//    QString initialElement;
+//    QString currentElement;
+//    //    qDebug() << "Start document?" << xmlData->isStartDocument();
+//    while (!foundStart) {
+//        xmlData->readNext();
+//        //        qDebug() << "Start document?" << xmlData->isStartDocument();
+//        if(xmlData->isStartDocument()){
+//            foundStart = true;
+//        }//found startDocument
+//        if(xmlData->atEnd()){
+//            break;
+//        }//if end xmlData
+//    }//find start of xmldata
+//    while (!xmlData->atEnd()) {
+//        currentElement.clear();
+//        xmlData->readNextStartElement();
+//        //        qDebug() << "tokenString" << xmlData->tokenString() << "name" << xmlData->name() << "text" << xmlData->text() << "line" << xmlData->lineNumber();
+//        if(xmlData->isStartElement()){
+//            if(initialElement.isEmpty()){
+//                initialElement.append(xmlData->name());
+//            }//set initialElement name
+//            currentElement.append(xmlData->name());
+//            /*******************************************
+//             * MODEM MODES
+//             * ****************************************/
+//            if (currentElement == "MMODES") {
+//                //                qDebug() << "MMODES";
+//                bool isMMODES = true;
+//                while(isMMODES){
+//                    xmlData->readNextStartElement();
+//                    //                    qDebug() << "tokenString" << xmlData->tokenString() << "name" << xmlData->name() << "text" << xmlData->text();
+//                    if(xmlData->isEndElement() && xmlData->name() == "MMODES"){
+//                        isMMODES = false;
+//                    }//if end MODES
+//                    else if(xmlData->name() == "ELEMENT"){
+//                        bool isELEMENT = true;
+//                        QString command, string, symbol;
+//                        while(isELEMENT){
+//                            xmlData->readNextStartElement();
+//                            //                            qDebug() << "tokenString" << xmlData->tokenString() << "name" << xmlData->name() << "text" << xmlData->text();
+//                            if(xmlData->isEndElement() && xmlData->name() == "ELEMENT"){
+//                                isELEMENT = false;
+//                            }//end element
+//                            else if(xmlData->name() == "SYMBOL"){
+//                                symbol = "MMODE "+xmlData->readElementText();
+//                            }//if SYMBOL
+//                            else if(xmlData->name() == "STRING"){
+//                                string = xmlData->readElementText();
+//                            }//if STRING
+//                            else if(xmlData->name() == "COMMAND"){
+//                                command = xmlData->readElementText();
+//                            }//if STRING
+//                            else if(xmlData->name() == "BYTE"){
+//                                string = xmlData->readElementText();
+//                            }//if BYTE
+//                            else if(xmlData->name() == "BYTES"){
+//                                string = xmlData->readElementText();
+//                            }//if BYTES
+//                            else {
+//                                //error in formatting
+//                                emit signalUpdateApplicationLog("ERROR MMODES formatting - " +
+//                                                                QString::number(xmlData->lineNumber()));
+//                                //                                qDebug() << "ERROR MMODES formatting - " << xmlData->lineNumber();
+//                                continue;
+//                            }//else formatting error
+//                        }//while isELEMENT
+//                        if(!command.isEmpty() && !symbol.isEmpty()){
+//                            CATMap->insert(symbol, command);
+//                        }//if we have valid data for entry
+//                    }//if ELEMENT
+//                }//while isMMODES
+//                continue;
+//            }//if MMODES
+//            /*******************************************
+//             * MODEM SPEED
+//             * ****************************************/
+//            if (currentElement == "SPEED") {
+//                //                qDebug() << "SPEED";
+//                bool isSPEED = true;
+//                while(isSPEED){
+//                    xmlData->readNextStartElement();
+//                    //                    qDebug() << "tokenString" << xmlData->tokenString() << "name" << xmlData->name() << "text" << xmlData->text();
+//                    if(xmlData->isEndElement() && xmlData->name() == "SPEED"){
+//                        isSPEED = false;
+//                    }//if end SPEED
+//                    else if(xmlData->name() == "ELEMENT"){
+//                        bool isELEMENT = true;
+//                        QString command, string, symbol;
+//                        while(isELEMENT){
+//                            xmlData->readNextStartElement();
+//                            //                            qDebug() << "tokenString" << xmlData->tokenString() << "name" << xmlData->name() << "text" << xmlData->text();
+//                            if(xmlData->isEndElement() && xmlData->name() == "ELEMENT"){
+//                                isELEMENT = false;
+//                            }//end element
+//                            else if(xmlData->name() == "SYMBOL"){
+//                                symbol = "BAUD "+xmlData->readElementText();
+//                            }//if SYMBOL
+//                            else if(xmlData->name() == "COMMAND"){
+//                                command = xmlData->readElementText();
+//                            }//if COMMAND
+//                            else if(xmlData->name() == "STRING"){
+//                                string = xmlData->readElementText();
+//                            }//if STRING
+//                            else if(xmlData->name() == "BYTE"){
+//                                string = xmlData->readElementText();
+//                            }//if BYTE
+//                            else if(xmlData->name() == "BYTES"){
+//                                string = xmlData->readElementText();
+//                            }//if BYTES
+//                            else {
+//                                //error in formatting
+//                                emit signalUpdateApplicationLog("ERROR SPEED formatting - " +
+//                                                                QString::number(xmlData->lineNumber()));
+//                                //                                qDebug() << "ERROR SPEED formatting - " << xmlData->lineNumber();
+//                                continue;
+//                            }//else formatting error
+//                        }//while isELEMENT
+//                        if(!command.isEmpty() && !symbol.isEmpty()){
+//                            CATMap->insert(symbol, command);
+//                        }//if we have valid data for entry
+//                    }//if ELEMENT
+//                }//while isSPEED
+//                continue;
+//            }//if SPEED
+//            /*******************************************
+//             * MODEM INTERLEAVE
+//             * ****************************************/
+//            if (currentElement == "INTERLEAVE") {
+//                //                qDebug() << "INTERLEAVE";
+//                bool isINTERLEAVE = true;
+//                while(isINTERLEAVE){
+//                    xmlData->readNextStartElement();
+//                    //                    qDebug() << "tokenString" << xmlData->tokenString() << "name" << xmlData->name() << "text" << xmlData->text();
+//                    if(xmlData->isEndElement() && xmlData->name() == "INTERLEAVE"){
+//                        isINTERLEAVE = false;
+//                    }//if end SPEED
+//                    else if(xmlData->name() == "ELEMENT"){
+//                        bool isELEMENT = true;
+//                        QString command, string, symbol;
+//                        while(isELEMENT){
+//                            xmlData->readNextStartElement();
+//                            //                            qDebug() << "tokenString" << xmlData->tokenString() << "name" << xmlData->name() << "text" << xmlData->text();
+//                            if(xmlData->isEndElement() && xmlData->name() == "ELEMENT"){
+//                                isELEMENT = false;
+//                            }//end element
+//                            else if(xmlData->name() == "SYMBOL"){
+//                                symbol = "INT "+xmlData->readElementText();
+//                            }//if SYMBOL
+//                            else if(xmlData->name() == "COMMAND"){
+//                                command = xmlData->readElementText();
+//                            }//if COMMAND
+//                            else if(xmlData->name() == "STRING"){
+//                                string = xmlData->readElementText();
+//                            }//if STRING
+//                            else if(xmlData->name() == "BYTE"){
+//                                string = xmlData->readElementText();
+//                            }//if BYTE
+//                            else if(xmlData->name() == "BYTES"){
+//                                string = xmlData->readElementText();
+//                            }//if BYTES
+//                            else {
+//                                //error in formatting
+//                                emit signalUpdateApplicationLog("ERROR INTERLEAVE formatting - " +
+//                                                                QString::number(xmlData->lineNumber()));
+//                                //                                qDebug() << "ERROR INTERLEAVE formatting - " << xmlData->lineNumber();
+//                                continue;
+//                            }//else formatting error
+//                        }//while isELEMENT
+//                        if(!command.isEmpty() && !symbol.isEmpty()){
+//                            CATMap->insert(symbol, command);
+//                        }//if we have valid data for entry
+//                    }//if ELEMENT
+//                }//while isINTERLEAVE
+//                continue;
+//            }//if INTERLEAVE
+//            /*******************************************
+//             * MODES
+//             * ****************************************/
+//            if(currentElement == "MODES"){
+//                //                qDebug() << "MODES";
+//                QString symbol;
+//                bool isMODES = true;
+//                while (isMODES) {
+//                    xmlData->readNextStartElement();
+//                    //                    qDebug() << "tokenString" << xmlData->tokenString() << "name" << xmlData->name() << "text" << xmlData->text();
+//                    if(xmlData->isEndElement() && xmlData->name() == "MODES"){
+//                        isMODES = false;
+//                    }//if MODES endElement
+//                    else if (xmlData->name() == "ELEMENT") {
+//                        bool isELEMENT = true;
+//                        QString command;
+//                        while (isELEMENT) {
+//                            xmlData->readNextStartElement();
+//                            //                            qDebug() << "tokenString" << xmlData->tokenString() << "name" << xmlData->name() << "text" << xmlData->text();
+//                            if(xmlData->isEndElement() && xmlData->name() == "ELEMENT"){
+//                                isELEMENT = false;
+//                            }//end ELEMENT
+//                            else if (xmlData->name().toString() == "SYMBOL") {
+//                                symbol = "MODE "+xmlData->readElementText();
+//                            }//if SYMBOL
+//                            else if (xmlData->name().toString() == "STRING") {
+//                                command.append("STRING:"+xmlData->readElementText()+"/");
+//                            }//if STRING
+//                            else if (xmlData->name().toString() == "BYTE") {
+//                                command.append("BYTE:"+xmlData->readElementText()+"/");
+//                            }//if BYTE
+//                            else if (xmlData->name().toString() == "BYTES") {
+//                                command.append("BYTES:"+xmlData->readElementText()+"/");
+//                            }//if BYTE
+//                            else if (xmlData->name().toString() == "SIZE") {
+//                                command.append("SIZE:"+xmlData->readElementText()+"/");
+//                            }//if BYTE
+//                            else {
+//                                //formatting error
+//                                emit signalUpdateApplicationLog("ERROR MODES formatting - " +
+//                                                                QString::number(xmlData->lineNumber()));
+//                                //                                qDebug() << "ERROR MODES formatting - " << xmlData->lineNumber();
+//                                continue;
+//                            }//else formatting error
+//                        }//while isELEMENT
+//                        CATMap->insert(symbol, command);
+//                    }//if ELEMENT
+//                }//while isMODES
+//                continue;
+//            }//if MODES
+//            /*******************************************
+//             * OP_MODES
+//             * ****************************************/
+//            if(currentElement == "OP_MODES"){
+//                //                qDebug() << "OP_MODES";
+//                QString symbol;
+//                bool isOP_MODES = true;
+//                while (isOP_MODES) {
+//                    xmlData->readNextStartElement();
+//                    //                    qDebug() << "tokenString" << xmlData->tokenString() << "name" << xmlData->name() << "text" << xmlData->text();
+//                    if(xmlData->isEndElement() && xmlData->name() == "OP_MODES"){
+//                        isOP_MODES = false;
+//                    }//if OP_MODES endElement
+//                    else if (xmlData->name() == "ELEMENT") {
+//                        bool isELEMENT = true;
+//                        QString command;
+//                        while (isELEMENT) {
+//                            xmlData->readNextStartElement();
+//                            //                            qDebug() << "tokenString" << xmlData->tokenString() << "name" << xmlData->name() << "text" << xmlData->text();
+//                            if(xmlData->isEndElement() && xmlData->name() == "ELEMENT"){
+//                                isELEMENT = false;
+//                            }//end ELEMENT
+//                            else if (xmlData->name().toString() == "SYMBOL") {
+//                                symbol = "OP_MODE "+xmlData->readElementText();
+//                            }//if SYMBOL
+//                            else if (xmlData->name().toString() == "STRING") {
+//                                command.append("STRING:"+xmlData->readElementText()+"/");
+//                            }//if STRING
+//                            else if (xmlData->name().toString() == "BYTE") {
+//                                command.append("BYTE:"+xmlData->readElementText()+"/");
+//                            }//if BYTE
+//                            else if (xmlData->name().toString() == "BYTES") {
+//                                command.append("BYTES:"+xmlData->readElementText()+"/");
+//                            }//if BYTE
+//                            else if (xmlData->name().toString() == "SIZE") {
+//                                command.append("SIZE:"+xmlData->readElementText()+"/");
+//                            }//if BYTE
+//                            else {
+//                                //formatting error
+//                                emit signalUpdateApplicationLog("ERROR OPMODES formatting - " +
+//                                                                QString::number(xmlData->lineNumber()));
+//                                //                                qDebug() << "ERROR OP_MODES formatting - " << xmlData->lineNumber();
+//                                continue;
+//                            }//else formatting error
+//                        }//while isELEMENT
+//                        CATMap->insert(symbol, command);
+//                    }//if ELEMENT
+//                }//while isOP_MODES
+//                continue;
+//            }//if OP_MODES
+//            /*******************************************
+//             * LSBMODES
+//             * ****************************************/
+//            if (currentElement == "LSBMODES") {
+//                //                qDebug() << "LSBMODES";
+//                bool isLSBMODES = true;
+//                while(isLSBMODES){
+//                    xmlData->readNextStartElement();
+//                    //                    qDebug() << "tokenString" << xmlData->tokenString() << "name" << xmlData->name() << "text" << xmlData->text();
+//                    if(xmlData->name() == "STRING"){
+//                        QString string = xmlData->readElementText();
+//                        CATMap->insert(QString("LSBMODE "+string), string);
+//                    }//if STRING
+//                    else if(xmlData->isEndElement() && xmlData->name() == "LSBMODES"){
+//                        isLSBMODES = false;
+//                    }//if LSBMODES is ended
+//                    else {
+//                        //error in formatting
+//                        emit signalUpdateApplicationLog("ERROR LSBMODES formatting - " +
+//                                                        QString::number(xmlData->lineNumber()));
+//                        //                        qDebug() << "ERROR LSBMODES formatting - " << xmlData->lineNumber();
+//                        continue;
+//                    }
+//                }//whie isLSBMODES
+//                continue;
+//            }//if LSBMODES
+//            /*******************************************
+//             * BANDWIDTHS
+//             * ****************************************/
+//            if (currentElement == "BANDWIDTHS") {
+//                //                qDebug() << "BANDWIDTHS";
+//                bool isBANDWIDTHS = true;
+//                while (isBANDWIDTHS) {
+//                    xmlData->readNextStartElement();
+//                    //                    qDebug() << "tokenString" << xmlData->tokenString() << "name" << xmlData->name() << "text" << xmlData->text();
+//                    if(xmlData->isStartElement() && xmlData->name() == "ELEMENT"){
+//                        bool isELEMENT = true;
+//                        QString symbol, string;
+//                        while (isELEMENT) {
+//                            xmlData->readNextStartElement();
+//                            if(xmlData->name() == "SYMBOL"){
+//                                symbol = xmlData->readElementText();
+//                            }//if SYMBOL
+//                            else if (xmlData->name() == "STRING") {
+//                                string = xmlData->readElementText();
+//                            }//if STRING
+//                            else if (xmlData->isEndElement() && (xmlData->name() == "ELEMENT")) {
+//                                isELEMENT = false;
+//                            }//end of element
+//                        }//while isELEMENT
+//                        if(!symbol.isEmpty() && !string.isEmpty()){
+//                            //                            qDebug() << "BW "+symbol << string;
+//                            CATMap->insert("BW "+symbol,string);
+//                        }
+//                    }//if startElement ELEMENT
+//                    else if(xmlData->isEndElement() && xmlData->name() == "BANDWIDTHS"){
+//                        isBANDWIDTHS = false;
+//                    }
+//                    else {
+//                        emit signalUpdateApplicationLog("ERROR BANDWIDTHS formatting - " +
+//                                                        QString::number(xmlData->lineNumber()));
+//                        //                        qDebug() << "ERROR BANDWIDTHS formatting - " << xmlData->lineNumber();
+//                        continue;
+//                    }
+//                }//while isBANDWIDTHS
+//                continue;
+//            }//if isBANDWIDTHS
+//            /*******************************************
+//             * REPLY
+//             * ****************************************/
+//            if (currentElement == "REPLY") {
+//                //                qDebug() << "REPLY";
+//                bool isREPLY = true;
+//                QString symbol, size, replyString, dataString, replyTerminator;
+//                while (isREPLY) {
+//                    xmlData->readNextStartElement();
+//                    //                    qDebug() << "tokenString" << xmlData->tokenString() << "name" << xmlData->name() << "text" << xmlData->text();
+//                    if (xmlData->isEndElement() && xmlData->name() == "REPLY") {
+//                        isREPLY = false;
+//                    }
+//                    else if(xmlData->name() == "SYMBOL"){
+//                        symbol = "REPLY "+xmlData->readElementText();
+//                    }//SYMBOL
+//                    else if (xmlData->name() == "SIZE") {
+//                        size = "REPLYSIZE:"+xmlData->readElementText();
+//                    }//SIZE
+//                    else if (xmlData->name() == "STRING") {
+//                        if(replyString.isEmpty()){
+//                            replyString.append("STRING:"+xmlData->readElementText()+"/");
+//                        }
+//                        else {
+//                            replyTerminator = xmlData->readElementText();
+//                        }
+//                    }//STRING
+//                    else if (xmlData->name() == "FILL") {
+//                        replyString.append("FILL:"+xmlData->readElementText()+"/");
+//                    }
+//                    else if (xmlData->name() == "BYTES") {
+//                        replyString.append("BYTES:"+xmlData->readElementText()+"/");
+//                    }
+//                    else if (xmlData->name() == "BYTE") {
+//                        replyString.append("BYTE:"+xmlData->readElementText()+"/");
+//                    }
+//                    else if (xmlData->name() == "DATA") {
+//                        bool isData = true;
+//                        while (isData) {
+//                            xmlData->readNextStartElement();
+//                            //                            qDebug() << "tokenString" << xmlData->tokenString() << "name" << xmlData->name() << "text" << xmlData->text();
+//                            if(xmlData->isEndElement() && xmlData->name() == "DATA"){
+//                                isData = false;
+//                            }
+//                            else if(xmlData->isStartElement()){
+//                                dataString.append(xmlData->name()+":");
+//                                dataString.append(xmlData->readElementText()+"|");
+//                            }//append start element text
+//                        }//while isData
+//                    }//if DATA
+//                    else {
+//                        //formatting error
+//                        emit signalUpdateApplicationLog("ERROR REPLY formatting - " +
+//                                                        QString::number(xmlData->lineNumber()));
+//                        //                        qDebug() << "ERROR REPLY formatting - " << xmlData->lineNumber();
+//                        continue;
+//                    }//else formatting error
+//                }//while isREPLY
+//                if(!symbol.isEmpty() &&
+//                        !size.isEmpty() &&
+//                        (!replyString.isEmpty() || !dataString.isEmpty())){
+//                    //                    qDebug() << "Stop";
+//                    QString definitionString = size+"/"+
+//                            replyString+"DATA["+dataString+"]/"+
+//                            replyTerminator;
+//                    //                    qDebug() << symbol << definitionString;
+//                    CATMap->insert(symbol,definitionString);
+//                }//if all the fields are filled
+//                continue;
+//            }//if REPLY
+//            /*******************************************
+//             * COMMAND
+//             * ****************************************/
+//            if (currentElement == "COMMAND") {
+//                //                qDebug() << "COMMAND";
+//                bool isCommand = true;
+//                QString symbol, size, commandString, dataString, badSymbol, commandTerminator;
+//                while (isCommand) {
+//                    xmlData->readNextStartElement();
+//                    //                    qDebug() << "tokenString" << xmlData->tokenString() << "name" << xmlData->name() << "text" << xmlData->text();
+//                    if(xmlData->isEndElement() && xmlData->name() == "COMMAND"){
+//                        isCommand = false;
+//                    }//if is end COMMAND element
+//                    else if (xmlData->name() == "SYMBOL") {
+//                        symbol = "COMMAND "+xmlData->readElementText();
+//                    }
+//                    else if (xmlData->name() == "SIZE") {
+//                        size = "COMMANDSIZE:"+xmlData->readElementText();
+//                    }
+//                    else if (xmlData->name() == "STRING") {
+//                        if(commandString.isEmpty()){
+//                            commandString.append(xmlData->readElementText()+"/");
+//                        }
+//                        else {
+//                            commandTerminator = xmlData->readElementText();
+//                        }
+//                    }//STRING
+//                    else if (xmlData->name() == "BYTES") {
+//                        commandString.append("BYTES:"+xmlData->readElementText()+"/");
+//                    }
+//                    else if (xmlData->name() == "BYTE") {
+//                        commandString.append("BYTE:"+xmlData->readElementText()+"/");
+//                    }
+//                    else if (xmlData->name() == "INFO") {
+//                        commandString.append("INFO:"+xmlData->readElementText()+"/");
+//                    }
+//                    else if (xmlData->name() == "OK") {
+//                        commandString.append("OK:"+xmlData->readElementText()+"/");
+//                    }
+//                    else if (xmlData->name() == "BAD") {
+//                        badSymbol = "BAD:"+xmlData->readElementText();
+//                    }
+//                    else if (xmlData->name() == "DATA") {
+//                        bool isData = true;
+//                        while (isData) {
+//                            xmlData->readNextStartElement();
+//                            //                            qDebug() << "tokenString" << xmlData->tokenString() << "name" << xmlData->name() << "text" << xmlData->text();
+//                            if(xmlData->isEndElement() && xmlData->name() == "DATA"){
+//                                isData = false;
+//                            }
+//                            else if(xmlData->isStartElement()){
+//                                dataString.append(xmlData->name()+":");
+//                                dataString.append(xmlData->readElementText()+"|");
+//                            }//append start element text
+//                        }//while isData
+//                    }//if DATA
+//                    else {
+//                        //formatting error
+//                        emit signalUpdateApplicationLog("ERROR COMMAND formatting - " +
+//                                                        QString::number(xmlData->lineNumber()));
+//                        //                        qDebug() << "ERROR COMMAND formatting - " << xmlData->lineNumber();
+//                        continue;
+//                    }//else formatting error
+//                }//while isCOMMAND
+//                QString definitionString = size+"/"+
+//                        commandString+"/"+
+//                        "DATA["+dataString+"]/"+
+//                        badSymbol+"/"+
+//                        commandTerminator;
+//                CATMap->insert(symbol,definitionString);
+//                continue;
+//            }//if COMMAND
+//            /*******************************************
+//             * SINGLE ELEMENTS
+//             * ****************************************/
+//            else {
+//                if(currentElement == "RIGDEF")
+//                    continue;
+//                QString string = xmlData->readElementText();
+//                //                qDebug() << currentElement << "text" << string;
+//                if(string == "\n\n" || string.isEmpty()){
+//                    continue;
+//                }
+//                else{
+//                    CATMap->insert(currentElement, string);
+//                    continue;
+//                }
+//                continue;
+//            }//else try to store it in QMap
+//        }//if is startElement
+
+//        else if(xmlData->atEnd()){
+//            break;
+//        }//else if at end
+//        else if (xmlData->isEndElement() && xmlData->name().toString() == initialElement) {
+//            //            qDebug() << "Found last element!";
+//            break;
+//        }//else if we found the initialElement endElement
+//        if(xmlData->hasError()){
+//            emit signalUpdateApplicationLog("ERROR - " +
+//                                            xmlData->errorString() +
+//                                            QString::number(xmlData->lineNumber()));
+//        }//if xmldata error
+//    }//while not at end of xmldata
+//    return;
+//}//parseStartElementContents

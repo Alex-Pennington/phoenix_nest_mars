@@ -1,0 +1,60 @@
+Change Log
+
+
+02 Jan 2024
+~~~~~~~~~~
+ - Adjusted Checksum Header wrapper in CP Chat so header now contains call sign of machine address instead of ALL.
+
+21 Nov 2023
+~~~~~~~~~~
+ - Updated User Manual
+
+ - Updated CP code to handle non scanning calls that fail
+
+
+
+20 Nov 2023
+~~~~~~~~~~
+ * Gave ALE some much needed TLC
+    - Can now set ALE Address to send chat to, or make ALE call (Connect button) from CP Chat
+    - Splitter states in ALE dialog are now saved/restored
+    - ALE Dialog now saves/restores the last position it was moved to
+    - ALE Dialog now saves/restores the last size it was set to
+ * Gave Retry Queue some much needed TLC since ALE can use that feature
+    - Fixed crash bug in Retry Queue after message(s) deleted
+    - Now works properly when enabled and ALE call fails
+ * Other dialog windows now save/restore size and position
+
+16 Nov 2023
+~~~~~~~~~~
+ - Color of received messages is no longer hard coded.  Color of received messages now follows QSS style sheet for QTextBrowser widget.  Basically user/operator can set their own text color in their style sheet.
+
+For example:
+
+QTextBrowser
+{
+   color: #ffffff; /*white*/
+...
+...
+}
+
+15 Nov 2023
+~~~~~~~~~~
+ - Updated ALE UI
+ - Fixed socket connect error
+ - Maybe better support for High DPI monitors?
+
+14 Nov 2023
+~~~~~~~~~~
+ - Display modem dialog on error now an option (default to false)
+ - Chat message "header" now shows who message is from/to
+     Rcvd CT ZYG23B PASS from AAA Nov 14 20:27:04Z:
+     Sent CT to BBB Nov 14 20:14:23Z:
+
+13 Nov 2023
+~~~~~~~~~~
+ - Fixed bug when no modem speeds are available in CP Chat
+ - Actually tested that the bug was fixed. ;>
+ - Fixed bug where Recipient ComboBox would reset to ALL when message was received
+ - Messages received via Machine Tab (ZEE) are now also displayed temporarily in the Machine Tab
+ - Fixed bug where NACK message was not removed before sending message to recipient
