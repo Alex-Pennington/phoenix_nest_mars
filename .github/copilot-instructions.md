@@ -126,9 +126,82 @@ The GPL build has stubbed components (see `src/cp/BUILD_README.md`):
 - **voacapl**: Run `makeitshfbc` after install to create `~/itshfbc` data dirs
 - **SMLinux v0.71**: Feature-reduced port; full VOACAP integration pending
 
+## Development Workflow
+
+### Git Branching & Releases
+
+| Branch/Tag | Purpose | CI Behavior |
+|------------|---------|-------------|
+| `main` | Stable development | Builds → **draft** release |
+| `develop` | Feature integration | Builds only (no release) |
+| `v*` tags | Official releases | Builds → **published** release |
+| PRs | Code review | Builds only (validation) |
+
+### Release Types
+
+```bash
+# Dev build (automatic on push to main)
+git push origin main
+# → Creates draft release: v1.0.0-dev+abc1234.42
+
+# Prerelease (alpha/beta/rc)
+git tag v1.0.0-alpha
+git push --tags
+# → Creates prerelease (public, marked as pre-release)
+
+# Stable release
+git tag v1.0.0
+git push --tags
+# → Creates full release (public, latest)
+```
+
+### Preferred Workflow
+
+1. **Feature development**: Work on feature branch or directly on `main` for small changes
+2. **Commit with conventional commits**: `feat:`, `fix:`, `docs:`, `refactor:`, `chore:`
+3. **Push to main**: Triggers CI build, creates draft release with attestation
+4. **Review draft**: Check GitHub Actions, verify artifacts
+5. **Publish or tag**:
+   - Quick iteration: Publish draft release manually
+   - Official release: Create semver tag (`v1.0.0`)
+
+### Version Injection
+
+The CI injects version metadata at build time:
+
+```bash
+# CI passes these defines to qmake:
+qmake DEFINES+=GIT_COMMIT_SHORT=abc1234 DEFINES+=BUILD_NUMBER=42
+
+# version.h uses STRINGIFY macros to convert symbols to strings:
+#define STRINGIFY_(x) #x
+#define STRINGIFY(x) STRINGIFY_(x)
+#define VERSION VERSION_STRING_BASE "-dev+" STRINGIFY(GIT_COMMIT_SHORT) "." STRINGIFY(BUILD_NUMBER)
+```
+
+### Artifact Naming
+
+| Platform | Format |
+|----------|--------|
+| Linux | `CP-{version}-linux-x64` |
+| Windows | `CP-{version}-windows-x64.exe` |
+
+Examples:
+- `CP-1.0.0-dev+f700aba.3-windows-x64.exe` (dev build)
+- `CP-1.0.0-linux-x64` (release build)
+
+### Attestation Verification
+
+All release artifacts include SLSA attestation:
+
+```bash
+gh attestation verify CP-1.0.0-windows-x64.exe --owner Alex-Pennington
+```
+
 ## When Modifying
 
 1. **Adding MARS channels**: Update `MARS_CHANNELS` dict in `src/propagation/ice_generator.py`
 2. **V3PROTOCOL changes**: Update both `src/cp/classxml.cpp` and `src/smlinux/classxml.cpp`
 3. **Settings changes**: Modify structs in `globals.h`, update serialization in `dialogsettings.cpp`
 4. **New dialogs**: Create `.ui` + `dialog*.cpp/.h`, add to `.pro` SOURCES/HEADERS/FORMS
+5. **Version bump**: Update `VERSION_MAJOR/MINOR/PATCH` in `src/cp/version.h` AND `.github/workflows/build.yml`
