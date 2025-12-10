@@ -175,11 +175,12 @@ jobs:
               echo "draft=false" >> $GITHUB_OUTPUT
             fi
           else
+            # Pushes to main create public dev releases
             case "${{ github.event.inputs.release_type }}" in
               draft) echo "draft=true" >> $GITHUB_OUTPUT; echo "prerelease=false" >> $GITHUB_OUTPUT ;;
               prerelease) echo "draft=false" >> $GITHUB_OUTPUT; echo "prerelease=true" >> $GITHUB_OUTPUT ;;
               release) echo "draft=false" >> $GITHUB_OUTPUT; echo "prerelease=false" >> $GITHUB_OUTPUT ;;
-              *) echo "draft=true" >> $GITHUB_OUTPUT; echo "prerelease=false" >> $GITHUB_OUTPUT ;;
+              *) echo "draft=false" >> $GITHUB_OUTPUT; echo "prerelease=true" >> $GITHUB_OUTPUT ;;
             esac
           fi
 

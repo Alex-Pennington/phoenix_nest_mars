@@ -132,9 +132,9 @@ The GPL build has stubbed components (see `src/cp/BUILD_README.md`):
 
 | Branch/Tag | Purpose | CI Behavior |
 |------------|---------|-------------|
-| `main` | Stable development | Builds → **draft** release |
+| `main` | Stable development | Builds → **public prerelease** |
 | `develop` | Feature integration | Builds only (no release) |
-| `v*` tags | Official releases | Builds → **published** release |
+| `v*` tags | Official releases | Builds → **published release** |
 | PRs | Code review | Builds only (validation) |
 
 ### Release Types
@@ -142,7 +142,7 @@ The GPL build has stubbed components (see `src/cp/BUILD_README.md`):
 ```bash
 # Dev build (automatic on push to main)
 git push origin main
-# → Creates draft release: v1.0.0-dev+abc1234.42
+# → Creates public prerelease: v1.0.0-dev+abc1234.42
 
 # Prerelease (alpha/beta/rc)
 git tag v1.0.0-alpha
