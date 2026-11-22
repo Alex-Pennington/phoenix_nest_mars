@@ -1,0 +1,30 @@
+VZCZCMMM773      
+RR UHLTMGH  
+DE UHZNFCJ #0415 3111640 
+ZNY EEEEE 
+ZEK  
+R 071640Z NOV 2019 
+FM NETC G3-5 CUOPS HQ ARMY MARS FHU AZ 
+TO UHLTMGH/ALL RJMOG 
+UHJCWB/ALL MARS STATIONS 
+BT 
+UNCLAS  
+EXER/MARS COMEX 19-4//  
+MSGID/GENADMIN/NETC G3-5 CUOPS HQ ARMY MARS FHU AZ/415//  
+SUBJ/VETERANS DAY OBSERVATION//  
+POC/EDWIN CARLISLE/CTR/NETC G3-5 CUOPS HF TEAM/MARS/FT HUACHUCA AZ/-//  
+AKNLDG/YES/ALL MARS TO THEIR RESPECTIVE RJMOG.  RJMOG TO UHMQRZL//  
+GENTEXT/REMARKS/On 11 November 2019, local time/day, Veterans Day is observed.  COMEX 19-4 spans the federal holiday, and a pause in the exercise will be observed on this day.  All COMEX 19-4 activities are suspended for the entirety of 11 November, local time zone, and will resume the following local day.//  
+GENTEXT/AUTHENTICATION/XXX// 
+BT 
+#0415 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+NNNN
+

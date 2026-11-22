@@ -1,0 +1,53 @@
+VZCZCMMM171 
+PP UHJCWB 
+DE UHZNFCJ #0402 3090001 
+ZNY EEEEE 
+ZEK 
+P 050001Z NOV 2019 
+FM NETC G3-5 CUOPS HQ ARMY MARS FHU AZ 
+TO UHJCWB/ALL MARS STATIONS (RESTRICTED) 
+BT 
+UNCLAS 
+EXER/COMEX 19-4// 
+MSGID/GENADMIN/NETC G3-5 CUOPS HQ ARMY MARS FHU AZ/402// 
+SUBJ/NETWORK ACTIVATION// 
+AKNLDG/YES/RMJOG TO UHZNFCJ// 
+GENTEXT/REMARKS/MARS to activate multi-layer HF radio networks to 
+support COMEX 19-4. 
+ 
+This exercise is a simulation.  No actual disruption to national 
+infrastructure is associated with this exercise.  This message 
+begins exercise Phase 2. 
+ 
+MARS stations begin exercising the time period immediately 
+following a notional (simulated) denial of service to 
+telecommunications and power infrastructure.  If this were an 
+actual incident, in addition to instructions this message would 
+contain what known, releasable information exists about the 
+situation.  The current situation is that no incident has actually 
+occurred and telecommunications and power are operating normally. 
+ 
+MARS members shall exercise a bias for action, perform tasks, 
+coordinate with Amateur Radio stations, and provide true and 
+accurate information products as they actually exist. 
+ 
+All MARS stations activate region and national multi-layer HF 
+networks and submit COMSPOT reports indicating the planned 
+operations over the next 48 hours.// 
+GENTEXT/AUTHENTICATION/XXX// 
+BT 
+ 
+#0402 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+NNNN
+

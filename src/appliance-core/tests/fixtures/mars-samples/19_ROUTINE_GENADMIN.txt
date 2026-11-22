@@ -1,0 +1,59 @@
+VZCZCMMM999  
+RR UHHZLF UHRTMR  
+DE UHSWSLC #0030 1761527  
+ZNR UUUUU  
+R 251527Z JUN 2025  
+FM ARMY MARS PROGRAM MANAGER CHIEF ARMY MARS  
+TO UHHZLF/ALL ARMY MARS  
+INFO UHRTMR/CHIEF AIR FORCE MARS (CAFM)  
+BT  
+UNCLAS  
+MSGID/GENADMIN/NET G3-5 CUOPS HQ ARMY MARS FHU AZ/30//  
+SUBJ/DOD COMEX 25-2 SITUATIONAL AWARENESS INFORMATION BROADCAST//  
+GENTEXT/REMARKS/1. EXERCISE EXERCISE EXERCISE.  
+At the national level, communications systems remain operational  
+with no reported outages or areas of concern.  All Auxiliarists are  
+encouraged to monitor the Space Weather Prediction Center dashboards  
+and WWV/H at :18 and :45 minutes past the hour for solar updates.  
+  
+2. Auxiliarists are reminded to sign in at WWW.DODMARS.ORG.  
+  
+3. Only Auxiliarists who have a change in their NCMARSSTAT station  
+status or those who did not submit a status in June should complete  
+the RI and forward to Granite Wolf.  
+  
+4. Continue to monitor your local news outlets and local/regional  
+communications networks.  Be prepared to report communication  
+outages lasting longer than 12 hours to Granite Wolf.  
+  
+5. Continue normal net schedules and operations with a focus on  
+ensuring all Auxiliarists receive this broadcast message.  With the  
+exception of disseminating these broadcast messages, updates to the  
+NCMARSTAT, and communication outage reporting in accordance with 4  
+above, there should be minimal other digital traffic on the nets and  
+no other traffic going to Granite Wolf.  
+  
+6. Auxiliarists be prepared to receive and execute the semi-annual  
+key change.  Anticipate the TAK server credential will also change.  
+  
+7. Remain vigilant and prepared to respond.  
+  
+EXERCISE EXERCISE EXERCISE  
+  
+V/R  
+FENWICK  
+Chief Army MARS//  
+BT  
+#0030  
+[DIGEST:D456441FDB91A6B64B26CFBC7FB6FEF4]  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+ 
+NNNN

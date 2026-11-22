@@ -1,0 +1,35 @@
+VZCZCMMM999  
+RR B7Q DE AAD4FZ #0703 0380029  
+BT  
+UNCLAS  
+MSGID/GENADMIN/MARS STATION AAR4HR/703//  
+SUBJ/REGION FOUR INFORMATION AND MESSAGE CENTER OPERATIONS//  
+GENTEXT/REMARKS/  
+  
+This message supersedes #0250.  
+  
+COMEX 25-1 is 19-24FEB.  Prepare now by installing and configuring  
+TAK, watch the OPORD webinar recording, and update your addressbook.  
+ To receive credit for participation you must sign in at STARTX and  
+submit an AAR after ENDX on DODMARS.org.  
+  
+Active traffic can be found on the AMARS Region Four Message Centers  
+which operate 10a to 8p ET / 9a to 7p CT Monday to Friday (1500Z to  
+0100Z).  
+  
+Army Message Centers  
+  
+ALE Address    Call Sign    Channels  
+XQZ            TANCAPKAPPA  ALE South  
+               KAPPARED     M917  
+               KAPPAWHITE   M903  
+//  
+BT  
+  
+[DIGEST:022BB823058F34AB9D0DB4F8C47BE17F]  
+  
+  
+  
+NNNN 
+ 
+ 

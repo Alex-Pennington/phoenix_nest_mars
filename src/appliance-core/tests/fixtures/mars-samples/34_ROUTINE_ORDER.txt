@@ -1,0 +1,52 @@
+ 
+      
+2336Z 
+VZCZCMMM999 
+RR N7X DE AAA4X9 #0402 0402045 
+FM AMARS REGION FOUR OPS OFFICER 
+TO UHRSW/ALL REGION FOUR MARS 
+BT 
+UNCLAS  
+EXER/22-1//  
+MSGID/ORDER/AMARS REGION FOUR OPS OFFICER/402//  
+REF/A/ORDER/DOD COMEX OPORD 220124/242143Z/-//  
+ORDTYP/WARNORD/REGION FOUR OPS OFFICER//  
+TIMEZONE/Z//  
+HEADING/TASK ORGANIZATION//  
+5UNIT  
+/UNIT DES /UNITLOC /CMNTS  
+//  
+GENTEXT/SITUATION/In support of CJCS 2-18, region four Army and Air  
+Force MARS will support DOD COMEX 22-1.//  
+GENTEXT/MISSION/MARS Auxiliarists will activate the RJMOG and  
+execute DOD COMEX 22-1 from 1601Z on 18 Feb 2020 through 2359Z on 21  
+Feb 2022.//  
+GENTEXT/EXECUTION/Tasks for this exercise will include:  
+a) Call-up/rally/staging procedures  
+b) Monitoring of specific DOD calling channels  
+c) Activation of the region four RJMOG  
+d) Respond to requests for information (RI)  
+e) Liaise with AUXCOM resources to fulfill RIs  
+f) Train on NCS and message relay procedures  
+  
+Auxiliarists should prepare by ensuring station hardware and  
+software are properly configured and operating within required  
+parameters.  Members are reminded to delete existing strip  
+definitions from the Response Collector and Message Creator  
+applications.  This will help  
+ensure stations are using the latest strips issued during the  
+exercise.  A webinar to discuss the OPORD will be held on 15 Feb  
+2022 at 0001  
+Zulu.  The link to access the webinar is included in the forthcoming  
+OPORD.  All members are encouraged to attend.//  
+AKNLDG/NO/-//  
+BT  
+  
+[DIGEST:EADC49186777663FD8AEC4E3E7EF2A9C]  
+  
+  
+  
+  
+NNNN 
+ 
+ 
