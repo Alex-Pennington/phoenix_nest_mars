@@ -226,6 +226,13 @@ JsonWriter& JsonWriter::begin_object() {
     return *this;
 }
 
+JsonWriter& JsonWriter::begin_object(const std::string& k) {
+    key(k);
+    s_ += '{';
+    first_ = true;
+    return *this;
+}
+
 JsonWriter& JsonWriter::end_object() {
     s_ += '}';
     first_ = false;

@@ -194,6 +194,20 @@ std::optional<Message> Store::next_to_send(int64_t now) {
     return row(s);
 }
 
+std::optional<Message> Store::next_to_send(int64_t now, const std::function<bool(const std::string&)>& may) {
+    Stmt s(db_, (std::string("SELECT ") + kCols +
+                 " FROM messages WHERE direction = 'out' AND state = 'queued' AND next_try_at <= ?"
+                 " ORDER BY CASE prec WHEN 'Z' THEN 0 WHEN 'O' THEN 1 WHEN 'P' THEN 2 ELSE 3 END,"
+                 " created_at, rowid")
+                    .c_str());
+    s.bind(1, now);
+    while (s.step()) {
+        Message m = row(s);
+        if (may(m.dst)) return m;
+    }
+    return std::nullopt;
+}
+
 void Store::set_state(const std::string& id, const std::string& state, const std::string& error) {
     Stmt s(db_, "UPDATE messages SET state = ?, last_error = ?, updated_at = ? WHERE id = ?");
     s.bind(1, state).bind(2, error).bind(3, now_utc()).bind(4, id);

@@ -82,7 +82,18 @@ CoreStatus Core::status() {
     s.counts = store_.counts();
     s.frames_dropped = parser_.dropped();
     s.acks_waiting = static_cast<int>(acks_.size());
+    s.link_gate = cfg_.link_gate;
+    if (link_) {
+        s.link = link_->state();
+        if (cfg_.link_gate)
+            for (auto& m : store_.queue(1000))
+                if (m.state == "queued" && !link_->link_up(m.dst)) ++s.held_for_link;
+    }
     return s;
+}
+
+bool Core::waits_for_link(const std::string& station) const {
+    return cfg_.link_gate && (!link_ || !link_->link_up(station));
 }
 
 std::vector<Message> Core::list(int limit) {
@@ -119,8 +130,20 @@ void Core::tick() {
         return;
     }
 
-    auto next = store_.next_to_send(now_utc());
+    std::optional<Message> next;
+    if (cfg_.link_gate) {
+        next = store_.next_to_send(now_utc(), [this](const std::string& dst) {
+            return !waits_for_link(dst);
+        });
+        // Say once per message that it waits, and for whom.
+        for (auto& m : store_.queue(1000))
+            if (m.state == "queued" && waits_for_link(m.dst) && told_waiting_.insert(m.id).second)
+                log(m.id, "waiting for a link to " + m.dst);
+    } else {
+        next = store_.next_to_send(now_utc());
+    }
     if (!next) return;
+    if (told_waiting_.erase(next->id)) log(next->id, "link to " + next->dst + " is up");
     Frame f;
     f.type = FrameType::Msg;
     f.id = next->id;

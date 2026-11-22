@@ -37,6 +37,7 @@ bool parse_json(const std::string& text, JsonValue& out);
 class JsonWriter {
 public:
     JsonWriter& begin_object();
+    JsonWriter& begin_object(const std::string& key);  // a member object
     JsonWriter& end_object();
     JsonWriter& begin_array(const std::string& key);
     JsonWriter& end_array();

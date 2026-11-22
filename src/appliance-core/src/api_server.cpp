@@ -26,7 +26,30 @@ std::string error_reply(const std::string& why) {
     return w.str();
 }
 
-void write_message(JsonWriter& w, const Message& m) {
+void write_link(JsonWriter& w, const CoreStatus& s) {
+    const LinkState& l = s.link;
+    w.begin_object("link")
+        .field("gate", s.link_gate)
+        .field("held", s.held_for_link)
+        .field("source", l.socket.empty() ? std::string() : std::string("ale-scan"))
+        .field("socket", l.socket)
+        .field("reachable", l.reachable)
+        .field("error", l.reachable ? std::string() : l.error)
+        .field("polled_at", l.polled_at)
+        .field("scanner", l.scanner)
+        .field("plan", l.plan)
+        .field("engine", l.engine)
+        .field("clock", l.clock)
+        .field("hold_window", l.hold_window)
+        .field("links_reported", l.links_reported)
+        .begin_array("stations");
+    for (auto& st : l.links)
+        w.begin_object().field("station", st.station).field("state", st.state).field("since", st.since)
+            .field("up", st.up()).end_object();
+    w.end_array().end_object();
+}
+
+void write_message(JsonWriter& w, const Message& m, bool waiting_for_link = false) {
     w.begin_object()
         .field("id", m.id)
         .field("direction", m.direction)
@@ -40,6 +63,7 @@ void write_message(JsonWriter& w, const Message& m) {
         .field("updated_at", static_cast<long long>(m.updated_at))
         .field("body", m.body);
     if (!m.last_error.empty()) w.field("last_error", m.last_error);
+    if (waiting_for_link) w.field("waiting_for_link", true);
     w.end_object();
 }
 
@@ -547,7 +571,10 @@ std::string ApiServer::handle(Core& core, const std::string& line) {
             .field("acks_waiting", s.acks_waiting)
             .field("frames_dropped", static_cast<long long>(s.frames_dropped));
         auto adv = compose::advisor();
-        w.field("advisor", adv ? adv->name() : std::string()).end_object();
+        w.field("advisor", adv ? adv->name() : std::string());
+        // Link state from greybeard-ale (link_monitor.h); "link": null with no source.
+        write_link(w, s);
+        w.end_object();
         return w.str();
     }
 
@@ -605,7 +632,8 @@ std::string ApiServer::handle(Core& core, const std::string& line) {
         if (bad) return error_reply("limit must be a number");
         JsonWriter w;
         w.begin_object().field("ok", true).begin_array("messages");
-        for (const Message& m : core.queue(limit)) write_message(w, m);
+        for (const Message& m : core.queue(limit))
+            write_message(w, m, m.state == "queued" && core.waits_for_link(m.dst));
         w.end_array().end_object();
         return w.str();
     }

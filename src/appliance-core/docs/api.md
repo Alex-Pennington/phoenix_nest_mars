@@ -31,6 +31,25 @@ themselves.
 
 `advisor` names the helper plugged in with `--advisor`, or is empty.
 
+`link` is greybeard-ale's link state, read from ale-scan's control socket
+(`--link-socket`):
+
+    "link":{"gate":true,"held":1,"source":"ale-scan","socket":"/run/user/1000/ale-scan.sock",
+      "reachable":true,"error":"","polled_at":1795391434,"scanner":"scanning","plan":"day",
+      "engine":true,"clock":"wwv","hold_window":0,"links_reported":true,
+      "stations":[{"station":"AAR4XY","state":"linked","since":1795391434,"up":true}]}
+
+- `gate`: messages wait for a link (`--link-gate`). `held`: how many wait now.
+- `source` is empty when no socket is given; `reachable` and `error` say whether
+  the last read worked.
+- `scanner`, `plan`, `engine`, `hold_window` and `clock` come from ale-scan's own
+  status. `clock` is `wwv` once WWV has set the clock, `host` before. The core
+  never shows ale-scan's channel list.
+- `stations`: per-station links, when the source reports them. ale-scan does not
+  yet (greybeard-ale's link control is still to come), so today `links_reported`
+  is false and the list is empty. The `links` field the core reads is a proposal
+  to greybeard-ale; `tools/stub_ale_scan.py` answers with it.
+
 ## compose_templates
 
 `{"cmd":"compose_templates"}` →
@@ -162,6 +181,9 @@ implements `compose::Advisor` can be set with `compose::set_advisor`.
 messages not yet sent, in the order they will go (the one on the air, then
 FLASH, IMMEDIATE, PRIORITY, ROUTINE, oldest first within each). Each message
 has the same fields as `list`.
+With `--link-gate`, a message whose station has no link yet carries
+`"waiting_for_link":true`; it goes as soon as one is reported, and the log says
+"waiting for a link to B" and then "link to B is up". ACKs are never held.
 
 ## log
 

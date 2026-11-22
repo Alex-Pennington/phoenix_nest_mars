@@ -3,6 +3,7 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
 #include <optional>
 #include <string>
 #include <vector>
@@ -67,6 +68,8 @@ public:
     // The outgoing message to send next: highest precedence first, then the
     // oldest, skipping any still waiting out a retry delay.
     std::optional<Message> next_to_send(int64_t now);
+    // The first in sending order whose destination `may` allows.
+    std::optional<Message> next_to_send(int64_t now, const std::function<bool(const std::string& dst)>& may);
 
     void set_state(const std::string& id, const std::string& state, const std::string& error = "");
     void mark_sending(const std::string& id);

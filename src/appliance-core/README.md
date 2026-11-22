@@ -71,6 +71,24 @@ not a modem signal (one sample per byte), and `tools/stub_channel.py` without
         --captures data/B-cap --db-dir data --api-port 4101
     tools/stub_channel.py --from data/A-outbox --to data/B-cap --from data/B-outbox --to data/A-cap
 
+## Waiting for an ALE link
+
+greybeard-ale does the scanning, calling and linking; the core only asks it.
+Given ale-scan's control socket, the core reads its state every two seconds and
+shows it in `status` as `link`. With `--link-gate` it also holds each message
+until greybeard-ale reports a link to that station:
+
+    appliance-core --station A ... --link-socket /run/user/1000/ale-scan.sock --link-gate
+
+ale-scan reports no per-station links yet, so with the gate on nothing would go
+on the real scanner today. To try the gate, use the stand-in:
+
+    tools/stub_ale_scan.py --socket data/scan.sock &
+    appliance-core --loopback-pair A,B --db-dir data --api-port 4100 \
+        --link-socket data/scan.sock --link-gate
+    appliance-cli send --to B "HELLO"          # waits: no link to B
+    echo "link B linked" | socat - UNIX-CONNECT:data/scan.sock    # now it goes
+
 ## Two stations with no modem at all
 
     appliance-core --loopback-pair A,B --db-dir ./data --api-port 4100

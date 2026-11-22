@@ -3,6 +3,7 @@
 #pragma once
 
 #include "frame.h"
+#include "link_monitor.h"
 #include "modem.h"
 #include "store.h"
 
@@ -13,6 +14,7 @@
 #include <mutex>
 #include <optional>
 #include <string>
+#include <set>
 #include <thread>
 
 namespace pna {
@@ -23,6 +25,9 @@ struct CoreConfig {
     int max_attempts = 3;     // modem failures before a message is marked failed
     int retry_delay_s = 10;   // first retry delay; doubles each time
     bool send_acks = true;    // answer each received message with an ACK frame
+    // Hold each message until greybeard-ale reports a link to its station
+    // (needs a link monitor). ACKs are not held: they answer a station just heard.
+    bool link_gate = false;
 };
 
 struct CoreStatus {
@@ -34,6 +39,9 @@ struct CoreStatus {
     QueueCounts counts;
     size_t frames_dropped = 0;
     int acks_waiting = 0;
+    bool link_gate = false;
+    int held_for_link = 0;    // queued messages waiting for a link
+    LinkState link;           // socket empty: no link source
 };
 
 class Core {
@@ -53,6 +61,10 @@ public:
     const std::string& station() const { return cfg_.station; }
 
     CoreStatus status();
+    // greybeard-ale's link state (see link_monitor.h). Set before start().
+    void set_link_monitor(std::shared_ptr<LinkMonitor> m) { link_ = std::move(m); }
+    // Whether a message to `station` would wait for a link now.
+    bool waits_for_link(const std::string& station) const;
     std::vector<Message> list(int limit);
     std::optional<Message> get(const std::string& id);
     std::vector<Message> queue(int limit);
@@ -81,6 +93,8 @@ private:
     std::thread thread_;
     std::atomic<bool> running_{false};
     std::function<void(const std::string&)> log_fn_;
+    std::shared_ptr<LinkMonitor> link_;
+    std::set<std::string> told_waiting_;  // messages already logged as waiting for a link
 };
 
 }  // namespace pna

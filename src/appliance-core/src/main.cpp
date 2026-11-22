@@ -8,6 +8,7 @@
 #include "compose.h"
 #include "core.h"
 #include "greybeard_modem.h"
+#include "link_monitor.h"
 #include "loopback_modem.h"
 
 #include <csignal>
@@ -60,7 +61,11 @@ void usage() {
         "  --advisor PROG        a local program that explains compose fields and suggests\n"
         "                        wording (gets the request as one JSON argument; see\n"
         "                        docs/api.md). Without it the built-in guidance is used.\n"
-        "  --advisor-arg ARG     an argument put before the request (repeatable)\n";
+        "  --advisor-arg ARG     an argument put before the request (repeatable)\n"
+        "  --link-socket PATH    read link state from greybeard-ale: ale-scan --control's\n"
+        "                        socket (status every --link-poll-ms, default 2000)\n"
+        "  --link-gate           hold each message until greybeard-ale reports a link to\n"
+        "                        its station (needs --link-socket)\n";
 }
 
 struct Station {
@@ -68,9 +73,14 @@ struct Station {
     std::unique_ptr<ApiServer> api;
 };
 
+std::shared_ptr<LinkMonitor> g_link;
+bool g_link_gate = false;
+
 bool start_station(Station& s, CoreConfig cfg, std::unique_ptr<ModemDriver> modem, uint16_t port) {
     std::string name = cfg.station;
+    cfg.link_gate = g_link_gate;
     s.core = std::make_unique<Core>(std::move(cfg), std::move(modem));
+    if (g_link) s.core->set_link_monitor(g_link);
     s.core->on_log([name](const std::string& t) { log_line(name, t); });
     s.core->start();
     s.api = std::make_unique<ApiServer>(*s.core, port);
@@ -94,6 +104,9 @@ int main(int argc, char** argv) {
     int loop_bps = 600;
     bool acks = true;
     int max_attempts = 3;
+    std::string link_socket;
+    int link_poll_ms = 2000;
+    bool link_gate = false;
 
     for (int i = 1; i < argc; ++i) {
         std::string a = argv[i];
@@ -122,6 +135,9 @@ int main(int argc, char** argv) {
             else if (a == "--max-attempts") max_attempts = std::stoi(next());
             else if (a == "--advisor") advisor_prog = next();
             else if (a == "--advisor-arg") advisor_args.push_back(next());
+            else if (a == "--link-socket") link_socket = next();
+            else if (a == "--link-poll-ms") link_poll_ms = std::stoi(next());
+            else if (a == "--link-gate") link_gate = true;
             else {
                 std::cerr << "unknown option " << a << " (try --help)\n";
                 return 2;
@@ -132,6 +148,15 @@ int main(int argc, char** argv) {
         }
     }
 
+    if (link_gate && link_socket.empty()) {
+        std::cerr << "--link-gate needs --link-socket\n";
+        return 2;
+    }
+    if (!link_socket.empty()) {
+        g_link = std::make_shared<LinkMonitor>(link_socket, link_poll_ms < 200 ? 200 : link_poll_ms);
+        g_link->start();
+        g_link_gate = link_gate;
+    }
     if (!advisor_prog.empty()) {
         std::vector<std::string> argv_adv{advisor_prog};
         argv_adv.insert(argv_adv.end(), advisor_args.begin(), advisor_args.end());
@@ -197,5 +222,6 @@ int main(int argc, char** argv) {
         if (s.api) s.api->stop();
         if (s.core) s.core->stop();
     }
+    if (g_link) g_link->stop();
     return 0;
 }
