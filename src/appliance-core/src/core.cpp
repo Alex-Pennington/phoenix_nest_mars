@@ -118,6 +118,16 @@ std::optional<Message> Core::get(const std::string& id) {
 
 void Core::tick() {
     std::lock_guard<std::mutex> g(mu_);
+    if (link_) {
+        // Log when the clock source changes, so the log shows when message
+        // times stopped (or started) coming from WWV.
+        LinkState ls = link_->state();
+        std::string c = ls.reachable ? (ls.clock == "wwv" ? "wwv" : "host") : "";
+        if (!c.empty() && c != told_clock_) {
+            log("", c == "wwv" ? "clock set by WWV" : "clock not set by WWV: times come from this computer's clock");
+            told_clock_ = c;
+        }
+    }
     if (on_air_ || !modem_->ready() || modem_->busy()) return;
 
     if (!acks_.empty()) {

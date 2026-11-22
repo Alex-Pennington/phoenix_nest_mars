@@ -34,6 +34,19 @@ bool read_link(const JsonValue& e, StationLink& out) {
 }
 }  // namespace
 
+std::string clock_note(const LinkState& s, long long now) {
+    if (s.socket.empty()) return "";
+    if (!s.reachable) return "can't tell: greybeard-ale's scanner isn't answering";
+    if (s.clock == "wwv") {
+        if (s.last_wwv_at <= 0 || now < s.last_wwv_at) return "set by WWV";
+        long long m = (now - s.last_wwv_at) / 60;
+        if (m < 1) return "set by WWV just now";
+        if (m < 120) return "set by WWV " + std::to_string(m) + " min ago";
+        return "set by WWV " + std::to_string(m / 60) + " h ago";
+    }
+    return "not set by WWV yet: times come from this computer's clock";
+}
+
 bool StationLink::up() const { return state == "linked" || state == "up" || state == "active"; }
 
 bool parse_link_status(const std::string& line, LinkState* s) {
@@ -54,6 +67,8 @@ bool parse_link_status(const std::string& line, LinkState* s) {
     s->engine = eng && eng->type == JsonValue::Type::Bool && eng->b;
     s->clock = str_of(v.get("clock"));
     s->note = str_of(v.get("note"));
+    const JsonValue* lw = v.get("last_wwv_unix");
+    s->last_wwv_at = lw && lw->type == JsonValue::Type::Number ? static_cast<long long>(lw->n) : 0;
     s->hold_window = 0;
     const JsonValue* hold = v.get("hold");
     if (hold && hold->is_object()) {

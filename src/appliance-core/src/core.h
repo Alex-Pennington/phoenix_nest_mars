@@ -94,7 +94,8 @@ private:
     std::atomic<bool> running_{false};
     std::function<void(const std::string&)> log_fn_;
     std::shared_ptr<LinkMonitor> link_;
-    std::set<std::string> told_waiting_;  // messages already logged as waiting for a link
+    std::set<std::string> told_waiting_;
+    std::string told_clock_;              // the clock source last logged  // messages already logged as waiting for a link
 };
 
 }  // namespace pna

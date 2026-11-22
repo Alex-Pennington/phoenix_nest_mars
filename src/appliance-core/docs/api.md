@@ -43,8 +43,11 @@ themselves.
 - `source` is empty when no socket is given; `reachable` and `error` say whether
   the last read worked.
 - `scanner`, `plan`, `engine`, `hold_window` and `clock` come from ale-scan's own
-  status. `clock` is `wwv` once WWV has set the clock, `host` before. The core
-  never shows ale-scan's channel list.
+  status. `clock` is `wwv` once WWV has set the clock, `host` before;
+  `last_wwv_at` is when WWV last set it (0 if never), and `clock_note` says it in
+  words ("set by WWV 17 min ago", or "not set by WWV yet: times come from this
+  computer's clock"). The log says when the clock source changes. The core never
+  shows ale-scan's channel list.
 - `stations`: per-station links, when the source reports them. ale-scan does not
   yet (greybeard-ale's link control is still to come), so today `links_reported`
   is false and the list is empty. The `links` field the core reads is a proposal

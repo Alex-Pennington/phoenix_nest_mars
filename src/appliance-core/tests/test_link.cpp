@@ -121,6 +121,20 @@ int main() {
         one += R"(,"link":{"with":"AAR4XY","state":"linked"}})";
         CHECK(parse_link_status(one, &s) && s.links.size() == 1 && s.links[0].up());
 
+        // The clock check.
+        LinkState c;
+        CHECK(parse_link_status(kScanNoLinks, &c) && c.last_wwv_at == 1763849000);
+        CHECK(clock_note(c, 1763850000).empty());  // no socket: no link source
+        c.socket = "x";
+        c.reachable = true;
+        CHECK(clock_note(c, 1763849000 + 30) == "set by WWV just now");
+        CHECK(clock_note(c, 1763849000 + 17 * 60) == "set by WWV 17 min ago");
+        CHECK(clock_note(c, 1763849000 + 5 * 3600) == "set by WWV 5 h ago");
+        c.clock = "host";
+        CHECK(clock_note(c, 1763850000).find("not set by WWV") == 0);
+        c.reachable = false;
+        CHECK(clock_note(c, 1763850000).find("can't tell") == 0);
+
         CHECK(!parse_link_status(R"({"ok":false,"error":"unknown command"})", &s) && s.error == "unknown command");
         CHECK(!parse_link_status("not json", &s) && !s.error.empty());
     }
@@ -182,6 +196,10 @@ int main() {
         for (auto& e : a.events(0, 200))
             if (e.text.find("waiting for a link to B") != std::string::npos) told = true;
         CHECK(told);
+        bool clock_logged = false;
+        for (auto& e : a.events(0, 200))
+            if (e.text == "clock set by WWV") clock_logged = true;
+        CHECK(clock_logged);
 
         // Another station's link doesn't release it.
         fake.set(with_links(R"([{"station":"C","state":"linked"}])"));
@@ -204,6 +222,14 @@ int main() {
         fake.set(R"({"ok":false,"error":"busy"})");
         CHECK(wait_for([&] { return !a.status().link.reachable; }));
         CHECK(a.status().link.error == "busy" && a.get(id2)->state == "queued");
+        std::string hosted = with_links("[]");
+        hosted.replace(hosted.find(R"("clock":"wwv")"), 13, R"("clock":"host")");
+        fake.set(hosted);
+        CHECK(wait_for([&] {
+            for (auto& e : a.events(0, 400))
+                if (e.text.find("clock not set by WWV") == 0) return true;
+            return false;
+        }));
 
         a.stop();
         b.stop();

@@ -40,6 +40,8 @@ void write_link(JsonWriter& w, const CoreStatus& s) {
         .field("plan", l.plan)
         .field("engine", l.engine)
         .field("clock", l.clock)
+        .field("last_wwv_at", l.last_wwv_at)
+        .field("clock_note", clock_note(l, static_cast<long long>(std::time(nullptr))))
         .field("hold_window", l.hold_window)
         .field("links_reported", l.links_reported)
         .begin_array("stations");

@@ -42,6 +42,7 @@ struct LinkState {
     std::string plan;
     bool engine = false;
     std::string clock;          // "wwv", "host" or ""
+    long long last_wwv_at = 0;  // UNIX time WWV last set the clock, 0 if never
     int hold_window = 0;        // 0: scanning, not held
     std::string note;
     // Per-station links, when the source reports them.
@@ -52,6 +53,10 @@ struct LinkState {
 // Reads one status reply into *s (keeps socket and times). False, with
 // s->error set, when it isn't a good reply.
 bool parse_link_status(const std::string& line, LinkState* s);
+
+// The clock check, in words for the operator: whether WWV set the clock and
+// how long ago. Empty when there is no link source.
+std::string clock_note(const LinkState& s, long long now);
 
 // One request on a Unix stream socket: sends line + "\n", returns the first
 // line of the answer. False with *error on anything else.
