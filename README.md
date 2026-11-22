@@ -8,7 +8,7 @@ Open-source HF digital communications software for Military Auxiliary Radio Syst
 |-----------|--------|-------------|
 | **CP** | ✅ Building | Communications Processor - core message handling |
 | **SMLinux** | ✅ Building | Station Mapper Linux port - NCS operations & mapping |
-| **Crypto** | ✅ Working | KIK/TEK key tape management & MS-DMT encryption |
+| **Cipher slot** | 🚧 Planned | Pluggable cipher interface; this build sends plain text only |
 | **Propagation** | ✅ Working | VOACAP-based coverage prediction |
 | **Modem** | 🚧 Future | MIL-STD-188-110A/MELP-e (separate project) |
 
@@ -43,24 +43,8 @@ make
 
 **Note:** SMLinux v0.71 is a feature-reduced port. Full VOACAP/heatmap integration pending.
 
-### Crypto
-MARS key tape management and MS-DMT encryption infrastructure:
-
-- **Intel HEX parser** with checksum verification for key files
-- **KeyTape class** for managing KIK/TEK key collections
-- **CipherEngine** for session management and encryption
-- **Time-based TEK slot calculation** for key rotation
-- **Auto-discovery** of keys from directory structure
-
-Key structure supports ZYG (general membership, 6-month rotation) and ZYI1/ZYI2 (interop, 12-month) key types with hierarchical derivation from shared 32-byte master seeds.
-
-```python
-from crypto.cipher_keys import KeyTape, CipherEngine
-
-tape = KeyTape.from_directory("/path/to/keys")
-engine = CipherEngine(tape)
-ciphertext = engine.encrypt(plaintext)
-```
+### Cipher slot
+CP calls a cipher interface (`src/cp/cipherlibraryclass.h`). This build ships only a plain-text pass-through. A cipher authorized for MARS traffic plugs in behind the same calls.
 
 ### Propagation
 Offline HF propagation prediction using VOACAP/voacapl:
@@ -107,7 +91,6 @@ phoenix-nest-mars/
 ├── src/
 │   ├── cp/              # Communications Processor
 │   ├── smlinux/         # Station Mapper Linux
-│   ├── crypto/          # KIK/TEK key management
 │   └── propagation/     # VOACAP prediction module
 ├── docs/                # Documentation
 ├── scripts/             # Build/utility scripts
@@ -123,7 +106,6 @@ phoenix-nest-mars/
 
 Components have varying licenses:
 - CP/SMLinux: Based on GPL sources from MARS community
-- Crypto: Project-specific
 - Propagation: MIT
 
 ## Contributing
