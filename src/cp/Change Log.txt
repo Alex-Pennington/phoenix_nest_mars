@@ -48,7 +48,7 @@ QTextBrowser
 ~~~~~~~~~~
  - Display modem dialog on error now an option (default to false)
  - Chat message "header" now shows who message is from/to
-     Rcvd CT ZYG23B PASS from AAA Nov 14 20:27:04Z:
+     Rcvd CT KEYNAME PASS from AAA Nov 14 20:27:04Z:
      Sent CT to BBB Nov 14 20:14:23Z:
 
 13 Nov 2023

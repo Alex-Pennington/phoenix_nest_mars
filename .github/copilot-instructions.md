@@ -8,7 +8,6 @@ HF digital communications software for Military Auxiliary Radio System (MARS) op
 |-----------|----------|-------|---------|
 | **CP** | C++/Qt5 | `qmake CP-standalone.pro && make` | Message processor, modem interface |
 | **SMLinux** | C++/Qt5 | `qmake StationMapper-linux.pro && make` | NCS station mapping & visualization |
-| **Crypto** | Python 3 | N/A | KIK/TEK key tape management |
 | **Propagation** | Python 3 | N/A | VOACAP-based HF coverage prediction |
 
 ## Build Commands
@@ -57,19 +56,6 @@ qmake CP-standalone.pro "DEFINES+=GIT_COMMIT_SHORT=\\\"abc1234\\\"" "DEFINES+=BU
   
   See `src/cp/mainwindow.cpp` `slotReadMSDMTCMDSocket()` for command parsing.
 
-### Key Hierarchy (Crypto)
-
-```
-KIK (96 bytes)
-├── Seed (0-31):    Shared across key types for same period
-├── Variant (32-63): Differentiates ZYG/ZYI1/ZYI2
-└── MAC (64-95):    Integrity verification
-
-TEK: 256 bytes (ZYG) or 464 bytes (ZYI1/ZYI2) → 16-byte blocks for time slots
-```
-
-Key files use Intel HEX format. See `src/crypto/cipher_keys.py` for `IntelHexParser`, `KeyTape`, `CipherEngine`.
-
 ### Propagation Pipeline
 
 ```
@@ -87,7 +73,7 @@ MARS channels defined in `src/propagation/ice_generator.py` (`MARS_CHANNELS` dic
 - **UI**: `.ui` files with corresponding `dialog*.cpp/.h` pairs
 - **Class naming**: `Class*` prefix for data/logic, `Dialog*` for UI
 
-### Python Module Patterns (Propagation/Crypto)
+### Python Module Patterns (Propagation)
 
 ```python
 # Propagation usage
@@ -96,10 +82,6 @@ pred = PropagationPredictor("AAR6XX", lat, lon)
 result = pred.predict_coverage(channel="A4", utc_hour=18, ssn=100)
 result.render_heatmap("output.png")
 
-# Crypto usage  
-from crypto.cipher_keys import KeyTape, CipherEngine
-tape = KeyTape.from_directory("/path/to/keys")
-engine = CipherEngine(tape)
 ```
 
 ## Critical Files

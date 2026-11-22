@@ -11,12 +11,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Initial open source release
 - Communications Processor (CP) - Qt6 message processor
 - Station Mapper Linux (SMLinux) - NCS operations tool
-- Crypto module - KIK/TEK key tape management
 - Propagation module - VOACAP-based HF coverage prediction
 - GitHub Actions CI/CD with artifact attestation
 - Semantic versioning with build metadata
 
 ### Changed
+- Removed the crypto module and replaced the cipher interface headers with Phoenix Nest's own; this build is plain text only
 - Ported CP to Qt6 compatibility
 - Removed QTextToSpeech dependency (unused)
 

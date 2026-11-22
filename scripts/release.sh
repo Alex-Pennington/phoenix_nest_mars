@@ -70,7 +70,6 @@ create_binary_release() {
     
     # Copy Python modules
     cp -r "$PROJECT_ROOT/src/propagation" "$TEMP_DIR/$RELEASE_NAME/lib/"
-    cp -r "$PROJECT_ROOT/src/crypto" "$TEMP_DIR/$RELEASE_NAME/lib/"
     
     # Copy docs
     cp -r "$PROJECT_ROOT/docs" "$TEMP_DIR/$RELEASE_NAME/"
