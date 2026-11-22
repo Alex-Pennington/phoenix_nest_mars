@@ -107,27 +107,57 @@ scan.
 
 ## Message format: ACP 126
 
-`src/acp126.h` builds the ACP 126 form MARS stations send: the call-up
-`CALLED DE STATION NR 051` inside the ACP 127 envelope (VZCZC, optional DTG
-and FM/TO, BT, text, BT, NNNN). **No public ACP 126 edition could be read**, so
-this is drawn from the traffic samples (43, 44 and 45), not an edition, and
-should be checked against one when it can be. The samples hold no other
-ACP 126 form.
+`src/acp126.h` builds the ACP 126 forms MARS stations send: the call-up
+`CALLED DE STATION NR 051` inside the ACP 127 envelope. **No public ACP 126
+edition could be read**, so this is drawn from the traffic samples, not an
+edition, and should be checked against one when it can be. The samples' notes
+name two MSC templates, and the builder makes exactly those:
+
+- **simple** (the default): call-up, BT, text, BT, NNNN (samples 44, 45).
+- **plaindress**: call-up, a DTG line from the clock, FM and TO, then BT and
+  text (sample 43). FM and at least one TO are required.
 
     {"cmd":"send_acp126","to_station":"B","calls":"NET","station":"AAR4XX",
-     "text":"...","dtg":"true","from":"...","to":"...","unclas":"false"}
+     "procedure":"plaindress","from":"...","to":"...","text":"...","unclas":"false"}
 
-NR is three digits, 001 to 999 per calling station.
+NR is three digits, 001 to 999 per calling station. MSC sent sample 45 as
+`ALL DE NR 001` when the station's own call wasn't set; the builder refuses an
+empty calling station instead.
+
+## Chat lines (ACP 201 style)
+
+`src/acp201.h` reads and builds the chat lines that run over the same modem
+path as traffic: `KAPPA71-CM DE AAR4XX // QRU U,A // 2001Z K`. It names VER,
+`QRU U,A` (and `[COMP]`), `ZEE n`, `QSL n`, `TRAFFIC COMPLETE`, MSC's
+automatic receipt (`QSL _R_<RI> #0025 3051616/<calls>`) and remote SQL
+queries, which it reads and never runs. Text may hold `//` (a status strip
+ends in it). Drawn from the batch 2 samples; no ACP 201 edition was read.
+
+    {"cmd":"send_chat","to_station":"B","call":"KAPPA71-CM","station":"AAR4XX","text":"QRU U,A"}
+
+`parse_traffic` reads a chat line as well as an enveloped message.
 
 ## Reading received traffic
 
 `src/received.h` reads traffic in the forms MARS stations actually send, which
 depart from the edition in many ways: text before VZCZC or after NNNN, FL2
-and FL3 folded onto one line, no precedence prosign, an empty originator,
-`ZNY EEEEE` over unclassified text, no UNCLAS line, lines over 69 characters,
-page headers, and the MSC `[DIGEST:...]` line. It reads all three forms
-(ACP 127, ACP 127 folded, ACP 126 call-up), names every departure it took in
-`warnings`, and refuses anything not unclassified.
+and FL3 folded onto one line, no precedence prosign, an empty originator, a
+relay's second RI after DE, `ZNY EEEEE` over unclassified text, `ZEK ZOB`, no
+UNCLAS line, lines over 69 characters, page headers (also after the closing
+BT), a missing NNNN after the closing BT, and the MSC `[DIGEST:...]` line. It
+names every departure it took in `warnings`, and refuses anything not
+unclassified or cut off before the closing BT.
+
+It also names the MSC template that composed each message, as the samples'
+SOURCES.csv does (`procedure` in the reply):
+
+- `ACP127_PLAINDRESS`: unfolded header, FM and TO, plain text.
+- `ACP127_CODRESS`: a key indicator after the DTG, a `GR` count and cipher
+  groups. The groups are kept as received and not read (the cipher isn't
+  here); a count that differs from `GR` is warned.
+- `16L_P2P_*` and `16L_RI_*`: the folded header, from a call sign or an RI.
+  FULL has FM/TO, ABBR doesn't, SIMPLE has no precedence prosign by design.
+- `ACP126_PLAINDRESS` and `ACP126_SIMPLE`, as above.
 
     {"cmd":"parse_traffic","id":"B-3"}
 
@@ -140,3 +170,7 @@ call signs, RIs, tactical calls, channel designators, names, places and
 authenticators; the README there says what was replaced, kept and left out.
 `test_received` reads every one. 42 read; sample 46 is too garbled to find its
 VZCZC, and the test expects that.
+
+`test_templates` checks the reader's procedure against `TEMPLATES.csv` in each
+fixture directory, and the batch 2 fixtures (`mars-samples-b2`) where they are
+present. It skips what isn't there, so the build passes without them.

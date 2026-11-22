@@ -2,6 +2,7 @@
 
 #include "acp126.h"
 #include "acp127.h"
+#include "acp201.h"
 #include "received.h"
 #include "json.h"
 #include "net.h"
@@ -124,7 +125,8 @@ std::string send_acp127(Core& core, std::map<std::string, std::string>& req) {
 }
 
 // send_acp126: the call-up form "CALL DE STATION NR nnn" (see acp126.h),
-// with the next channel serial and NR, and the DTG line if "dtg":"true".
+// with the next channel serial and NR. "procedure" is "simple" (the default)
+// or "plaindress", which adds the DTG line from the clock and needs FM and TO.
 std::string send_acp126(Core& core, std::map<std::string, std::string>& req) {
     acp126::Message m;
     std::string prec = req.count("prec") ? req["prec"] : "R";
@@ -137,7 +139,8 @@ std::string send_acp126(Core& core, std::map<std::string, std::string>& req) {
     if (!req["from"].empty()) m.from = to_address(req["from"]);
     for (auto& l : split_lines(req["to"])) m.to.push_back(to_address(l));
     m.unclas_line = req["unclas"] != "false";
-    m.with_dtg = req["dtg"] == "true" || req["dtg"] == "1";
+    if (req.count("procedure") && !acp126::procedure_from(req["procedure"], m.procedure))
+        return error_reply("procedure must be simple or plaindress");
     m.text = req["text"];
     std::time_t t = std::time(nullptr);
     std::tm u{};
@@ -153,20 +156,73 @@ std::string send_acp126(Core& core, std::map<std::string, std::string>& req) {
     std::string id = core.submit(req["to_station"], m.prec, text, &err);
     if (id.empty()) return error_reply(err);
     JsonWriter w;
-    w.begin_object().field("ok", true).field("id", id).field("source", acp126::kSource).field("message", text).end_object();
+    w.begin_object().field("ok", true).field("id", id).field("source", acp126::kSource)
+        .field("procedure", acp126::procedure_name(m.procedure)).field("message", text).end_object();
+    return w.str();
+}
+
+// send_chat: one chat line "<call> DE <station> // <text> // HHMMZ K"
+// (acp201.h), timed from the UTC clock, sent at ROUTINE.
+std::string send_chat(Core& core, std::map<std::string, std::string>& req) {
+    acp201::Chat c;
+    c.to = req["call"];
+    c.from = req["station"];
+    c.text = req["text"];
+    std::time_t t = std::time(nullptr);
+    std::tm u{};
+    gmtime_r(&t, &u);
+    c.hour = u.tm_hour;
+    c.minute = u.tm_min;
+    std::string err, line = acp201::build(c, &err);
+    if (line.empty()) return error_reply(err);
+    std::string id = core.submit(req["to_station"], 'R', line, &err);
+    if (id.empty()) return error_reply(err);
+    JsonWriter w;
+    w.begin_object().field("ok", true).field("id", id).field("message", line).end_object();
     return w.str();
 }
 
 // parse_traffic: reads a stored message in any form MARS stations send
-// (received.h) and lists what it had to tolerate.
+// (received.h), or a chat line (acp201.h), and lists what it had to tolerate.
 std::string parse_traffic(Core& core, std::map<std::string, std::string>& req) {
     auto msg = core.get(req["id"]);
     if (!msg) return error_reply("no message with that id");
-    received::Message m;
     std::string err;
+    if (acp201::looks_like_chat(msg->body)) {
+        acp201::Chat c;
+        acp201::parse(msg->body, c, &err);
+        std::string by, warnings;
+        for (auto& b : c.receipt_by) by += (by.empty() ? "" : " ") + b;
+        for (auto& x : c.warnings) warnings += (warnings.empty() ? "" : "\n") + x;
+        char hhmm[8];
+        std::snprintf(hhmm, sizeof hhmm, "%02d%02d", c.hour, c.minute);
+        JsonWriter w;
+        w.begin_object()
+            .field("ok", true)
+            .field("id", msg->id)
+            .field("form", "acp201-chat")
+            .field("procedure", "ACP201_CHAT")
+            .field("to", c.to)
+            .field("from", c.from)
+            .field("kind", acp201::kind_name(c.kind))
+            .field("text", c.text)
+            .field("time", std::string(hhmm) + (c.zulu ? "Z" : ""))
+            .field("number", c.number)
+            .field("prec", c.prec ? std::string(1, c.prec) : "")
+            .field("receipt_of", c.receipt_of)
+            .field("receipt_serial", c.receipt_serial)
+            .field("receipt_time", c.receipt_time)
+            .field("receipt_by", by)
+            .field("warnings", warnings)
+            .end_object();
+        return w.str();
+    }
+    received::Message m;
     if (!received::parse(msg->body, m, &err)) return error_reply("not a message this reader can place: " + err);
     std::string routing, warnings;
     for (auto& r : m.routing) routing += (routing.empty() ? "" : " ") + r;
+    std::string relay;
+    for (auto& r : m.relay) relay += (relay.empty() ? "" : " ") + r;
     for (auto& x : m.warnings) warnings += (warnings.empty() ? "" : "\n") + x;
     std::string prec = m.prec ? std::string(1, m.prec) : "";
     JsonWriter w;
@@ -174,15 +230,21 @@ std::string parse_traffic(Core& core, std::map<std::string, std::string>& req) {
         .field("ok", true)
         .field("id", msg->id)
         .field("form", received::form_name(m.form))
+        .field("procedure", received::procedure(m))
         .field("channel", m.channel)
         .field("channel_serial", m.channel_serial)
         .field("prec", prec)
         .field("precedence", m.prec ? acp127::prec_name(m.prec) : "")
         .field("routing", routing)
         .field("originator", m.originator)
+        .field("relay", relay)
         .field("serial", m.serial)
         .field("time_filed", m.time_filed)
         .field("security", m.security)
+        .field("zek", m.zek_line)
+        .field("key_indicator", m.key_indicator)
+        .field("group_count", m.group_count)
+        .field("enciphered", m.enciphered)
         .field("from", join_addresses({m.from}))
         .field("to", join_addresses(m.to))
         .field("info", join_addresses(m.info))
@@ -356,8 +418,9 @@ std::string ApiServer::handle(Core& core, const std::string& line) {
     if (cmd == "parse_acp127") return parse_acp127(core, req);
     if (cmd == "send_acp126") return send_acp126(core, req);
     if (cmd == "parse_traffic") return parse_traffic(core, req);
+    if (cmd == "send_chat") return send_chat(core, req);
 
-    return error_reply("unknown cmd; use status, send, send_acp127, send_acp126, parse_acp127, parse_traffic, list or get");
+    return error_reply("unknown cmd; use status, send, send_acp127, send_acp126, send_chat, parse_acp127, parse_traffic, list or get");
 }
 
 }  // namespace pna

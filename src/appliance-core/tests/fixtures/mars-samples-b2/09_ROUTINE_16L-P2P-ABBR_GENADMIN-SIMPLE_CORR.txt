@@ -1,0 +1,50 @@
+VZCZCMMM999 
+RR B7Q DE AAD4FZ #0256 0501157 
+BT 
+UNCLAS 
+MSGID/GENADMIN/MARS STATION AAR4HR/256// 
+SUBJ/REGION FOUR INFORMATION AND MESSAGE CENTER OPERATIONS// 
+GENTEXT/REMARKS/ 
+ 
+This message supersedes #0703. 
+ 
+COMEX 25-1 is 19-24FEB.  Ensure you have TAK operational along with 
+your addressbook updated.  To receive credit for participation you 
+must sign in on DODMARS.org at STARTX and submit an AAR. 
+ 
+Important COMEX information: 
+ 
+19FEB STARTX, Sign-in form opens. RI's will come via C2I, ALE, and 
+K8Q. 
+192359Z FEB 25 ALE Webinar on https://connect.apan.org/mars/ 
+202359Z FEB 25 TAK Webinar on https://connect.apan.org/mars/ 
+242200Z FEB 25 ENDEX, Sign-in form closes. 
+032200Z MAR 25 AAR Survey Closes 
+132300Z MAR 25 AAR Webinar on https://connect.apan.org/mars/ 
+ 
+During COMEX 25-1, KAPPARED will operate extended hours on M919 from 
+0100Z to 0300Z. 
+ 
+Active traffic can be found on the AMARS Region Four Message Centers 
+which operate 10a to 8p ET / 9a to 7p CT Monday to Friday (1500Z to 
+0100Z). 
+ 
+Army Message Centers 
+ 
+ALE Address    Call Sign    Channels 
+XQZ            TANCAPKAPPA  ALE South 
+               KAPPARED     M920 
+               KAPPAWHITE   M921 
+ 
+ 
+// 
+BT 
+ 
+[DIGEST:73C35F340C85D319AE841F1C13651B12] 
+ 
+ 
+NNNN 
+ 
+ 
+ 
+ 

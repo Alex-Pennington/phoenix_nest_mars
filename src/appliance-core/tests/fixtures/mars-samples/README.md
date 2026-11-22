@@ -29,3 +29,6 @@ Left out on purpose:
   src/received.h.
 
 `[DIGEST:...]` values don't verify, because the scrubs changed the text they hash.
+
+`TEMPLATES.csv` names, for each file, the MSC template (procedure), the form
+and the composer, from the samples' SOURCES.csv without its source paths.

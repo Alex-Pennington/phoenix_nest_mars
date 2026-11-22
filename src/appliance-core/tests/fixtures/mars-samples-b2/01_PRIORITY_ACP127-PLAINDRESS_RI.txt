@@ -1,0 +1,54 @@
+VZCZCMMM999  
+PP UHJCWB UHRTMR  
+DE UHRRRWN UHXXZ #0718 0492331  
+ZNR UUUUU  
+P 182331Z FEB 2025  
+FM USNORTHCOM FORWARD  
+NETC G3-5 CUOPS HQ ARMY MARS FHU AZ  
+TO UHJCWB/ALL MARS STATIONS  
+INFO UHRTMR/CHIEF AIR FORCE MARS (CAFM)  
+BT  
+UNCLAS  
+  
+MSGID/RI/ARMY MARS PROGRAM MANAGER CHIEF ARMY MARS/0718//  
+  
+GENTEXT/SPECIFIC INFORMATION REQUESTED/  
+MARS Station Status  
+Use response strip format provided in this message to report Station Status. Report as soon as feasible only factual information and report only once during activation .  
+  
+Last time information of value (LTIOV): Auxiliarists submit starting 1600Z 19 FEB 2025 until 2359Z 24 FEB 2025.//  
+  
+GENTEXT/METHOD OF RESPONSE/  
+Address response message to UHRRRWN/IRONCRANE 2G ALE address X53 on Army ALESOUTH. Station may have to edit personal address book to enable addressing.  
+  
+If IRONCRANE is not available after several attemps, send traffic to UHFJBWT/STONEFLINT 2G ALE address Q81 on Army ALESOUTH  
+  
+USMTF RRI Paste Response Strips template with ACP-127 formatting is preferred.//  
+  
+GENTEXT/METHOD OF DELIVERY/  
+Individual stations shall send response traffic via ALE as noted in Method of Response. Consolidation of responses is allowed to facilitate stations without ALE only.  
+  
+GENTEXT/APPROVED RESPONSE STRIP  
+NCMARStat10Jan25/Report Date(DD)/Report Month(AAA)/Indiv MARS Call(X)/Closest City(X)/County or Equiv(X)/State(AA)/Mil Base within 25 Miles(X)/Base Access(,Access Y,Access N)/Station Status(,FMC,PMC,NMC)/2G ALE Cap(,2G Y,2G N)/GMRS Lic(,GMRS Y,GMRS N)/Off Grid Pwr Avail(,Off Grid Y,Off Grid N)/# Hrs Ops Off Grid(## hours a day)/Station on TAK(,TAK Y,TAK N)/Remarks(X)//  
+  
+AKNLDG/YES/C2I Net on 00,000 (primary) 19 FEB 2025 at 2300Z//  
+  
+  
+  
+BT  
+  
+#0718  
+[DIGEST:C360ECFE62ACF714382C206A1628C694]  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+NNNN 
+ 
+ 

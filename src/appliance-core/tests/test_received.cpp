@@ -152,8 +152,9 @@ int main() {
         return m;
     };
     CHECK(warned(read("03_"), "no originator") && warned(read("03_"), "indented"));
-    CHECK(warned(read("04_"), "no precedence") && warned(read("04_"), "no UNCLAS") &&
-          warned(read("04_"), "before VZCZC") && warned(read("04_"), "after NNNN"));
+    // 04 is the 16L SIMPLE template, which sends no prosign by design.
+    CHECK(!warned(read("04_"), "no precedence") && received::procedure(read("04_")) == "16L_P2P_SIMPLE");
+    CHECK(warned(read("04_"), "no UNCLAS") && warned(read("04_"), "before VZCZC") && warned(read("04_"), "after NNNN"));
     CHECK(warned(read("10_"), "ZNY EEEEE") && read("10_").serial_again == "0212");
     CHECK(read("12_").zek && read("29_").zek);
     CHECK(warned(read("23_"), "time filed on a line of its own") && read("23_").routing[2] == "UHDJRKW-OP");
@@ -192,7 +193,10 @@ int main() {
         };
         CHECK(!received::parse(swap("UNCLAS", "CONFIDENTIAL"), m, &err));
         CHECK(!received::parse(swap("0010101\r\nBT", "0010101\r\nZNY CCCCC\r\nBT"), m, &err));
-        CHECK(!received::parse(swap("NNNN", "NNN"), m, &err) && err.find("format line 16") != std::string::npos);
+        // No NNNN: taken with a warning after a closing BT, refused when cut off before it.
+        CHECK(received::parse(swap("NNNN", "NNN"), m, &err) && warned(m, "no NNNN"));
+        CHECK(!received::parse(swap("TEXT\r\nBT\r\nNNNN", "TEXT\r\n"), m, &err) &&
+              err.find("format line 16") != std::string::npos);
         CHECK(!received::parse(swap(" DE ", " XX "), m, &err) && err.find("format line 3") != std::string::npos);
         CHECK(!received::parse(swap("VZCZC", "VZC"), m, &err));
         CHECK(!received::parse(swap("TEXT\r\nBT\r\n", "TEXT\r\n"), m, &err));
@@ -231,7 +235,7 @@ int main() {
         m.calls = {"IRONCRANE"};
         m.station = "AAR4XX";
         m.serial = 51;
-        m.with_dtg = true;
+        m.procedure = acp126::Message::Procedure::Plaindress;
         m.prec = 'R';
         m.dtg = acp127::Dtg{19, 21, 9, 'Z', 2, 2025};
         m.from = {"", "TEST STATION ONE"};
@@ -298,6 +302,19 @@ int main() {
             std::string again = ApiServer::handle(
                 a, R"({"cmd":"send_acp126","to_station":"B","calls":"NET","station":"AAR4XX","text":"X"})");
             CHECK(field(again, "message").find("NET DE AAR4XX NR 002") != std::string::npos);
+            CHECK(field(r, "procedure") == "ACP126_SIMPLE" && field(again, "procedure") == "ACP126_SIMPLE");
+            CHECK(field(ApiServer::handle(a, R"({"cmd":"send_acp126","to_station":"B","calls":"NET","station":"AAR4XX",)"
+                                             R"("procedure":"plaindress","from":"TEST ONE","text":"X"})"),
+                        "error").find("PLAINDRESS") != std::string::npos);
+
+            // A chat line out and back.
+            std::string chat = ApiServer::handle(
+                a, R"({"cmd":"send_chat","to_station":"B","call":"KAPPA71-CM","station":"AAR4XX","text":"QRU U,A"})");
+            std::string cid = field(chat, "id");
+            CHECK(!cid.empty() && field(chat, "message").rfind("KAPPA71-CM DE AAR4XX // QRU U,A // ", 0) == 0);
+            CHECK(wait_for([&] { auto m = a.get(cid); return m && m->state == "acked"; }));
+            std::string cr = ApiServer::handle(b, R"({"cmd":"parse_traffic","id":")" + cid + R"("})");
+            CHECK(field(cr, "form") == "acp201-chat" && field(cr, "kind") == "qru" && field(cr, "from") == "AAR4XX");
             CHECK(field(ApiServer::handle(a, R"({"cmd":"send_acp126","to_station":"B","calls":"","station":"AAR4XX","text":"X"})"),
                         "error").find("called station") != std::string::npos);
             a.stop();

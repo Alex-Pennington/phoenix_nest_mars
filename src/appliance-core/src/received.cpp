@@ -51,6 +51,14 @@ bool has_lower(const std::string& s) {
     return false;
 }
 
+bool is_page_header(const std::vector<std::string>& w) {
+    // "PAGE 2 RI #0129 UNCLAS", "PAGE 2 RI 0163 UNCLAS", "PAGE 2 RI #0209".
+    if (w.size() < 4 || w.size() > 5 || w[0] != "PAGE" || !all_digits(w[1])) return false;
+    const std::string& s = w[3];
+    if (!all_digits(s[0] == '#' ? s.substr(1) : s)) return false;
+    return w.size() == 4 || w[4] == "UNCLAS";
+}
+
 bool is_prec_prosign(const std::string& t) {
     return t.size() == 2 && t[0] == t[1] && (t[0] == 'Z' || t[0] == 'O' || t[0] == 'P' || t[0] == 'R');
 }
@@ -58,7 +66,8 @@ bool is_prec_prosign(const std::string& t) {
 const char* kMonths[12] = {"JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"};
 
 // "R 192109Z FEB 2025": precedence letter, DDHHMM and zone, month, optional year.
-bool read_dtg(const std::vector<std::string>& t, char& prec, acp127::Dtg& d) {
+// A CODRESS DTG carries the key indicator after it (batch 2 samples 02, 03).
+bool read_dtg(const std::vector<std::string>& t, char& prec, acp127::Dtg& d, std::string& key) {
     if (t.size() < 3 || t[0].size() != 1 || std::string("ZOPR").find(t[0][0]) == std::string::npos) return false;
     const std::string& g = t[1];
     if (g.size() != 7 || !all_digits(g.substr(0, 6)) || g[6] < 'A' || g[6] > 'Z') return false;
@@ -73,6 +82,8 @@ bool read_dtg(const std::vector<std::string>& t, char& prec, acp127::Dtg& d) {
     d.zone = g[6];
     d.month = month;
     d.year = t.size() > 3 && t[3].size() == 4 && all_digits(t[3]) ? std::stoi(t[3]) : 0;
+    size_t k = d.year ? 4 : 3;
+    key = k < t.size() ? t[k] : std::string();
     return true;
 }
 
@@ -121,6 +132,22 @@ const char* form_name(Form f) {
     return "";
 }
 
+std::string procedure(const Message& m) {
+    switch (m.form) {
+        case Form::Acp126: return m.has_dtg ? "ACP126_PLAINDRESS" : "ACP126_SIMPLE";
+        case Form::Acp127: return m.enciphered ? "ACP127_CODRESS" : "ACP127_PLAINDRESS";
+        case Form::Acp127Folded: break;
+    }
+    bool ri = starts_with(m.originator, "UH");
+    if (m.originator.empty())
+        for (auto& r : m.routing)
+            if (starts_with(r, "UH")) ri = true;
+    std::string p = ri ? "16L_RI_" : "16L_P2P_";
+    if (!m.prec) return p + "SIMPLE";
+    bool fm_to = !m.from.ri.empty() || !m.from.plain.empty() || !m.to.empty();
+    return p + (fm_to ? "FULL" : "ABBR");
+}
+
 std::string text_of(const Message& m) {
     std::string out;
     for (size_t i = 0; i < m.text.size(); ++i) out += (i ? "\n" : "") + m.text[i];
@@ -156,7 +183,13 @@ bool parse(const std::string& raw, Message& m, std::string* error) {
         }
     size_t n = v + 1;
     while (n < L.size() && trim(L[n]) != "NNNN") ++n;
-    if (n == L.size()) return fail(error, "format line 16: no NNNN");
+    // A message may end without NNNN (batch 2 sample 20). It is taken if the
+    // closing BT came; one cut off before that (sample 17) is refused below.
+    bool no_nnnn = n == L.size();
+    if (no_nnnn) {
+        L.push_back(std::string());
+        warn.push_back("format line 16: no NNNN");
+    }
     for (size_t i = n + 1; i < L.size(); ++i)
         if (!trim(L[i]).empty()) {
             warn.push_back("text after NNNN ignored");
@@ -202,7 +235,8 @@ bool parse(const std::string& raw, Message& m, std::string* error) {
         if (t == "BT") break;
         if (!t.empty()) H.push_back(t);
     }
-    if (b == n) return fail(error, "format line 11: no BT before NNNN");
+    if (b == n) return fail(error, no_nnnn ? "format line 16: no NNNN, and no BT: the message is cut off"
+                                           : "format line 11: no BT before NNNN");
 
     // Format lines 2 and 3: everything up to and including the DE line.
     size_t de_line = 0;
@@ -237,6 +271,14 @@ bool parse(const std::string& raw, Message& m, std::string* error) {
 
     size_t a = 0;
     if (a < after.size() && after[a] != "NR" && after[a][0] != '#') m.originator = upper(after[a++]);
+    // "DE UHRRRWN UHXXZ #0718 0492331": a relay names a second RI (batch 2 sample 01).
+    {
+        size_t hash = a;
+        while (hash < after.size() && after[hash][0] != '#') ++hash;
+        for (; hash < after.size() && a < hash && acp127::valid_ri(upper(after[a])) && !all_digits(after[a]) &&
+               after[a] != "NR";)
+            m.relay.push_back(upper(after[a++]));
+    }
     if (a < after.size() && after[a] == "NR") {
         m.form = Form::Acp126;
         if (a + 1 >= after.size() || !all_digits(after[a + 1])) return fail(error, "format line 3: NR without a number");
@@ -259,11 +301,14 @@ bool parse(const std::string& raw, Message& m, std::string* error) {
     }
     if (a < after.size()) warn.push_back("format line 3: extra text ignored");
     if (m.originator.empty()) warn.push_back("no originator after DE");
-    if (!m.prec && m.form != Form::Acp126) warn.push_back("no precedence prosign");
+    // The 16L SIMPLE template sends no prosign by design (batch 1 sample 04),
+    // and ACP 126 carries precedence on the DTG line if anywhere.
+    if (!m.prec && m.form == Form::Acp127) warn.push_back("no precedence prosign");
     if (m.routing.empty()) warn.push_back("no addressee before DE");
 
     // Format lines 4 to 10.
     std::vector<acp127::Address>* list = nullptr;
+    bool from_open = false;  // a long FM runs on to the next line (batch 2 sample 01)
     for (size_t i = de_line; i < H.size(); ++i) {
         const std::string& l = H[i];
         auto w = words(l);
@@ -274,16 +319,23 @@ bool parse(const std::string& raw, Message& m, std::string* error) {
             m.security = w[0] + " " + w[1];
             if (w[1][0] != 'U' && w[1][0] != 'E')
                 return fail(error, "format line 4: " + w[1] + " is not unclassified; only UNCLAS is accepted");
-        } else if (l == "ZEK") {
+        } else if (w[0] == "ZEK") {
             m.zek = true;
-        } else if (!m.has_dtg && !list && read_dtg(w, p, d)) {
+            m.zek_line = l;
+        } else if (!m.has_dtg && !list && read_dtg(w, p, d, m.key_indicator)) {
             m.has_dtg = true;
             m.dtg = d;
             if (m.prec && p != m.prec) warn.push_back("format line 5 precedence differs from format line 2");
             if (!m.prec) m.prec = p;
+        } else if (w.size() == 2 && w[0] == "GR" && all_digits(w[1])) {
+            m.group_count = std::stoi(w[1]);
+            list = nullptr;
+            from_open = false;
         } else if (starts_with(l, "FM ")) {
             m.from = read_address(l.substr(3), warn);
             list = nullptr;
+            from_open = true;
+            continue;
         } else if (starts_with(l, "TO ")) {
             list = &m.to;
             list->push_back(read_address(l.substr(3), warn));
@@ -293,29 +345,46 @@ bool parse(const std::string& raw, Message& m, std::string* error) {
         } else if (starts_with(l, "XMT ")) {
             list = &m.xmt;
             list->push_back(read_address(l.substr(4), warn));
+        } else if (from_open) {
+            m.from.plain += (m.from.plain.empty() ? "" : " ") + l;
+            warn.push_back("FM runs on to a second line");
+            continue;
         } else if (list) {
             list->push_back(read_address(l, warn));
         } else {
             warn.push_back("header line not placed: " + l.substr(0, 20));
         }
+        from_open = false;
     }
 
     // Format line 12, up to the closing BT.
     size_t e = b + 1;
     while (e < n && trim(L[e]) != "BT") ++e;
-    if (e == n) return fail(error, "format line 13: no closing BT");
+    if (e == n)
+        return fail(error, no_nnnn ? "format line 16: no NNNN, and no closing BT: the message is cut off"
+                                   : "format line 13: no closing BT");
     std::vector<std::string> T;
     for (size_t i = b + 1; i < e; ++i) {
         std::string t = L[i];
         auto w = words(t);
         // Page headers of a long message (sample 25).
-        if (w.size() == 5 && w[0] == "PAGE" && all_digits(w[1]) && w[3][0] == '#' && w[4] == "UNCLAS") continue;
+        if (is_page_header(w)) continue;
         T.push_back(t);
     }
     while (!T.empty() && trim(T.front()).empty()) T.erase(T.begin());
     while (!T.empty() && trim(T.back()).empty()) T.pop_back();
     if (T.empty()) return fail(error, "format line 12: no text");
-    {
+    // CODRESS: a key indicator and a group count, and cipher groups for text.
+    // The body is kept as received and not read (the cipher is not here).
+    if (m.form == Form::Acp127 && m.group_count >= 0 && !m.key_indicator.empty()) {
+        m.enciphered = true;
+        size_t groups = 0;
+        for (auto& t : T) groups += words(t).size();
+        if (static_cast<int>(groups) != m.group_count)
+            warn.push_back("GR " + std::to_string(m.group_count) + " but " + std::to_string(groups) + " groups received");
+    } else {
+        if (m.group_count >= 0) warn.push_back("GR line on a plain-text message");
+        if (!m.key_indicator.empty()) warn.push_back("format line 5: unread text after the date-time group");
         auto w = words(T[0]);
         static const char* kClassified[] = {"CONFIDENTIAL", "SECRET", "TOP", "CUI", "FOUO", "EFTO", "CONTROLLED"};
         for (const char* c : kClassified)
@@ -353,6 +422,8 @@ bool parse(const std::string& raw, Message& m, std::string* error) {
             m.digest = t.substr(8, t.size() - 9);
         } else if (starts_with(t, "C ")) {
             m.correction = t;
+        } else if (is_page_header(words(t))) {
+            // A page header can follow the closing BT (batch 2 samples 15, 19).
         } else {
             warn.push_back("line after the closing BT not placed");
         }

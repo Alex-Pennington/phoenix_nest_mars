@@ -60,7 +60,12 @@ std::string build(const Message& m, std::string* error) {
     std::snprintf(b, sizeof b, "DE %s NR %03d", m.station.c_str(), m.serial);
     L.push_back(call + b);
 
-    if (m.with_dtg) {
+    bool plain = m.procedure == Message::Procedure::Plaindress;
+    bool has_fm = !m.from.ri.empty() || !m.from.plain.empty();
+    if (!plain && (has_fm || !m.to.empty()))
+        return bad("SIMPLE has no FM or TO; use PLAINDRESS for an addressed message");
+    if (plain && (!has_fm || m.to.empty())) return bad("PLAINDRESS needs FM and at least one TO");
+    if (plain) {
         const acp127::Dtg& d = m.dtg;
         if (!acp127::prec_name(m.prec)[0]) return bad("precedence must be Z, O, P or R");
         if (d.day < 1 || d.day > 31 || d.hour < 0 || d.hour > 23 || d.minute < 0 || d.minute > 59 || d.month < 1 ||
@@ -72,7 +77,7 @@ std::string build(const Message& m, std::string* error) {
         L.push_back(l);
     }
     std::string err;
-    if (!m.from.ri.empty() || !m.from.plain.empty()) {
+    if (has_fm) {
         if (!check_address(m.from, "FM", &err)) return bad(err);
         L.push_back("FM " + address_text(m.from));
     }
@@ -112,6 +117,19 @@ std::string build(const Message& m, std::string* error) {
     out += "NNNN";
     if (error) error->clear();
     return out;
+}
+
+const char* procedure_name(Message::Procedure p) {
+    return p == Message::Procedure::Plaindress ? "ACP126_PLAINDRESS" : "ACP126_SIMPLE";
+}
+
+bool procedure_from(const std::string& s, Message::Procedure& p) {
+    std::string u;
+    for (char c : s) u += static_cast<char>(c >= 'a' && c <= 'z' ? c - 32 : c);
+    if (u == "PLAINDRESS" || u == "ACP126_PLAINDRESS") p = Message::Procedure::Plaindress;
+    else if (u == "SIMPLE" || u == "ACP126_SIMPLE") p = Message::Procedure::Simple;
+    else return false;
+    return true;
 }
 
 }  // namespace acp126
