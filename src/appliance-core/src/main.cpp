@@ -5,6 +5,7 @@
 //
 // See README.md for every option.
 #include "api_server.h"
+#include "compose.h"
 #include "core.h"
 #include "greybeard_modem.h"
 #include "loopback_modem.h"
@@ -55,7 +56,11 @@ void usage() {
         "  --loopback-bps N      simulated airtime (default 600, 0 = instant)\n\n"
         "Both:\n"
         "  --no-acks             do not answer received messages with an ACK\n"
-        "  --max-attempts N      modem failures before a message fails (default 3)\n";
+        "  --max-attempts N      modem failures before a message fails (default 3)\n"
+        "  --advisor PROG        a local program that explains compose fields and suggests\n"
+        "                        wording (gets the request as one JSON argument; see\n"
+        "                        docs/api.md). Without it the built-in guidance is used.\n"
+        "  --advisor-arg ARG     an argument put before the request (repeatable)\n";
 }
 
 struct Station {
@@ -83,6 +88,8 @@ int main(int argc, char** argv) {
     std::string pair, db_dir = ".", station, tx_mode, captures, outbox;
     std::string tx_prog = "gale-tx";
     std::vector<std::string> tx_args;
+    std::string advisor_prog;
+    std::vector<std::string> advisor_args;
     uint16_t api_port = 4100;
     int loop_bps = 600;
     bool acks = true;
@@ -113,6 +120,8 @@ int main(int argc, char** argv) {
             else if (a == "--loopback-bps") loop_bps = std::stoi(next());
             else if (a == "--no-acks") acks = false;
             else if (a == "--max-attempts") max_attempts = std::stoi(next());
+            else if (a == "--advisor") advisor_prog = next();
+            else if (a == "--advisor-arg") advisor_args.push_back(next());
             else {
                 std::cerr << "unknown option " << a << " (try --help)\n";
                 return 2;
@@ -121,6 +130,15 @@ int main(int argc, char** argv) {
             std::cerr << a << " needs a number\n";
             return 2;
         }
+    }
+
+    if (!advisor_prog.empty()) {
+        std::vector<std::string> argv_adv{advisor_prog};
+        argv_adv.insert(argv_adv.end(), advisor_args.begin(), advisor_args.end());
+        pna::compose::set_advisor(pna::compose::program_advisor(argv_adv));
+    } else if (!advisor_args.empty()) {
+        std::cerr << "--advisor-arg needs --advisor\n";
+        return 2;
     }
 
     std::signal(SIGINT, on_signal);

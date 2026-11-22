@@ -55,6 +55,8 @@ public:
     CoreStatus status();
     std::vector<Message> list(int limit);
     std::optional<Message> get(const std::string& id);
+    std::vector<Message> queue(int limit);
+    std::vector<Event> events(int64_t after, int limit);
 
     // Called for each event line (also written to the store's event table).
     void on_log(std::function<void(const std::string&)> fn) { log_fn_ = std::move(fn); }

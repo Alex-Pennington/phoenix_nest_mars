@@ -28,6 +28,14 @@ struct Message {
     std::string last_error;
 };
 
+// One line of the event log (events table rowid is its number).
+struct Event {
+    int64_t seq = 0;
+    int64_t ts = 0;
+    std::string msg_id;
+    std::string text;
+};
+
 struct QueueCounts {
     int queued = 0, sending = 0, sent = 0, acked = 0, failed = 0, received = 0;
 };
@@ -50,6 +58,11 @@ public:
     bool exists(const std::string& id);
     std::optional<Message> get(const std::string& id);
     std::vector<Message> list(int limit);
+    // Outgoing messages not yet sent (queued or sending), in the order they
+    // will go: precedence first, then age.
+    std::vector<Message> queue(int limit);
+    // Event lines with seq > after, oldest first, at most limit.
+    std::vector<Event> events(int64_t after, int limit);
 
     // The outgoing message to send next: highest precedence first, then the
     // oldest, skipping any still waiting out a retry delay.

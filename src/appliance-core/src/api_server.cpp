@@ -3,6 +3,7 @@
 #include "acp126.h"
 #include "acp127.h"
 #include "acp201.h"
+#include "compose.h"
 #include "received.h"
 #include "json.h"
 #include "net.h"
@@ -12,6 +13,7 @@
 #include <cstdio>
 #include <ctime>
 #include <map>
+#include <set>
 #include <sstream>
 
 namespace pna {
@@ -180,6 +182,177 @@ std::string send_chat(Core& core, std::map<std::string, std::string>& req) {
     JsonWriter w;
     w.begin_object().field("ok", true).field("id", id).field("message", line).end_object();
     return w.str();
+}
+
+// ---- compose (see compose.h and docs/api.md) ----
+
+compose::Context compose_ctx(Core& core) {
+    compose::Context c;
+    c.station = core.station();
+    return c;
+}
+
+// The operator's draft: every key but cmd, template and procedure is a field.
+compose::Draft draft_of(std::map<std::string, std::string>& req, const std::set<std::string>& also_skip = {}) {
+    compose::Draft d;
+    d.template_id = req["template"];
+    d.procedure = req["procedure"];
+    for (auto& kv : req)
+        if (kv.first != "cmd" && kv.first != "template" && kv.first != "procedure" && !also_skip.count(kv.first))
+            d.values[kv.first] = kv.second;
+    return d;
+}
+
+void write_issues(JsonWriter& w, const std::vector<compose::Issue>& issues) {
+    w.begin_array("issues");
+    for (auto& i : issues)
+        w.begin_object()
+            .field("field", i.field)
+            .field("level", i.level)
+            .field("text", i.text)
+            .field("fix", i.fix)
+            .field("example", i.example)
+            .end_object();
+    w.end_array();
+}
+
+std::string compose_templates() {
+    JsonWriter w;
+    w.begin_object().field("ok", true).begin_array("procedures");
+    for (auto& p : compose::procedures()) {
+        w.begin_object().field("id", p.id).field("title", p.title).field("summary", p.summary).field("available", p.available);
+        if (!p.available) w.field("why_not", p.why_not);
+        w.end_object();
+    }
+    w.end_array().begin_array("templates");
+    for (auto& t : compose::templates()) {
+        w.begin_object()
+            .field("id", t.id)
+            .field("title", t.title)
+            .field("summary", t.summary)
+            .field("procedure", t.procedure)
+            .field("prec", std::string(1, t.prec))
+            .begin_array("procedures");
+        for (auto& p : t.procedures) w.field("", p);
+        w.end_array().end_object();
+    }
+    w.end_array().end_object();
+    return w.str();
+}
+
+std::string compose_form(Core& core, std::map<std::string, std::string>& req) {
+    std::string err;
+    auto fields = compose::form(req["template"], req["procedure"], compose_ctx(core), &err);
+    if (fields.empty()) return error_reply(err);
+    const compose::Template* t = compose::find_template(req["template"]);
+    JsonWriter w;
+    w.begin_object()
+        .field("ok", true)
+        .field("template", t->id)
+        .field("title", t->title)
+        .field("summary", t->summary)
+        .field("procedure", req["procedure"].empty() ? t->procedure : req["procedure"])
+        .begin_array("fields");
+    for (auto& f : fields) {
+        w.begin_object()
+            .field("key", f.key)
+            .field("label", f.label)
+            .field("kind", f.kind)
+            .field("required", f.required)
+            .field("default", f.def)
+            .field("hint", f.hint)
+            .field("example", f.example);
+        if (!f.choices.empty()) {
+            w.begin_array("choices");
+            for (auto& c : f.choices) w.field("", c);
+            w.end_array();
+        }
+        w.end_object();
+    }
+    w.end_array().end_object();
+    return w.str();
+}
+
+// compose_check: the issues, and the message as it would go (serials shown
+// as 1; they are taken only when it is sent).
+std::string compose_check(Core& core, std::map<std::string, std::string>& req) {
+    compose::Result r = compose::check(draft_of(req), compose_ctx(core));
+    JsonWriter w;
+    w.begin_object().field("ok", true).field("ready", r.ready).field("procedure", r.procedure);
+    write_issues(w, r.issues);
+    if (r.ready) w.field("preview", r.message).field("to_station", r.to_station).field("prec", std::string(1, r.prec));
+    w.end_object();
+    return w.str();
+}
+
+// compose_send: refused while any error stands; otherwise takes the serials
+// and queues the message.
+std::string compose_send(Core& core, std::map<std::string, std::string>& req) {
+    compose::Draft d = draft_of(req);
+    compose::Context ctx = compose_ctx(core);
+    ctx.now = std::time(nullptr);
+    compose::Result r = compose::check(d, ctx);
+    if (!r.ready) {
+        JsonWriter w;
+        w.begin_object().field("ok", false).field("error", "the message has errors to fix first").field("ready", false);
+        write_issues(w, r.issues);
+        w.end_object();
+        return w.str();
+    }
+    if (r.to_station.empty()) return error_reply("no station to send to");
+    compose::Serials s;
+    if (!r.channel_counter.empty()) s.channel_serial = static_cast<int>(core.next_counter(r.channel_counter, 999));
+    if (!r.serial_counter.empty()) {
+        int n = static_cast<int>(core.next_counter(r.serial_counter, r.serial_wrap));
+        s.station_serial = n;
+        s.nr = n;
+    }
+    r = compose::check(d, ctx, s);
+    if (!r.ready) return error_reply("the message changed while it was being sent; check it again");
+    std::string err;
+    std::string id = core.submit(r.to_station, r.prec, r.message, &err);
+    if (id.empty()) return error_reply(err);
+    JsonWriter w;
+    w.begin_object().field("ok", true).field("id", id).field("procedure", r.procedure).field("message", r.message);
+    write_issues(w, r.issues);
+    w.end_object();
+    return w.str();
+}
+
+// compose_advise: the advisor's answer when one is set and answers, else the
+// built-in guidance. "source" says which.
+std::string compose_advise(Core& core, std::map<std::string, std::string>& req) {
+    compose::AdviceRequest a;
+    a.kind = req["kind"].empty() ? "explain" : req["kind"];
+    if (a.kind != "explain" && a.kind != "suggest") return error_reply("kind must be explain or suggest");
+    a.field = req["field"];
+    a.question = req["question"];
+    a.draft = draft_of(req, {"kind", "field", "question"});
+    compose::Context ctx = compose_ctx(core);
+    a.issues = compose::check(a.draft, ctx).issues;
+    std::string text, source = "builtin", note;
+    if (auto adv = compose::advisor()) {
+        std::string err;
+        if (adv->advise(a, text, &err)) source = adv->name();
+        else note = err;
+    }
+    if (source == "builtin") text = compose::builtin_advice(a, ctx);
+    JsonWriter w;
+    w.begin_object().field("ok", true).field("source", source).field("text", text);
+    if (!note.empty()) w.field("advisor_error", note);
+    w.end_object();
+    return w.str();
+}
+
+int limit_of(std::map<std::string, std::string>& req, int def, int max, bool* bad) {
+    int limit = def;
+    try {
+        if (req.count("limit")) limit = std::stoi(req["limit"]);
+    } catch (...) {
+        *bad = true;
+    }
+    if (limit < 1 || limit > max) limit = def;
+    return limit;
 }
 
 // parse_traffic: reads a stored message in any form MARS stations send
@@ -372,8 +545,9 @@ std::string ApiServer::handle(Core& core, const std::string& line) {
             .field("failed", s.counts.failed)
             .field("received", s.counts.received)
             .field("acks_waiting", s.acks_waiting)
-            .field("frames_dropped", static_cast<long long>(s.frames_dropped))
-            .end_object();
+            .field("frames_dropped", static_cast<long long>(s.frames_dropped));
+        auto adv = compose::advisor();
+        w.field("advisor", adv ? adv->name() : std::string()).end_object();
         return w.str();
     }
 
@@ -419,8 +593,50 @@ std::string ApiServer::handle(Core& core, const std::string& line) {
     if (cmd == "send_acp126") return send_acp126(core, req);
     if (cmd == "parse_traffic") return parse_traffic(core, req);
     if (cmd == "send_chat") return send_chat(core, req);
+    if (cmd == "compose_templates") return compose_templates();
+    if (cmd == "compose_form") return compose_form(core, req);
+    if (cmd == "compose_check") return compose_check(core, req);
+    if (cmd == "compose_send") return compose_send(core, req);
+    if (cmd == "compose_advise") return compose_advise(core, req);
 
-    return error_reply("unknown cmd; use status, send, send_acp127, send_acp126, send_chat, parse_acp127, parse_traffic, list or get");
+    if (cmd == "queue") {
+        bool bad = false;
+        int limit = limit_of(req, 100, 1000, &bad);
+        if (bad) return error_reply("limit must be a number");
+        JsonWriter w;
+        w.begin_object().field("ok", true).begin_array("messages");
+        for (const Message& m : core.queue(limit)) write_message(w, m);
+        w.end_array().end_object();
+        return w.str();
+    }
+
+    if (cmd == "log") {
+        bool bad = false;
+        int limit = limit_of(req, 100, 1000, &bad);
+        long long after = 0;
+        try {
+            if (req.count("after")) after = std::stoll(req["after"]);
+        } catch (...) {
+            bad = true;
+        }
+        if (bad) return error_reply("after and limit must be numbers");
+        auto ev = core.events(after, limit);
+        JsonWriter w;
+        w.begin_object().field("ok", true).begin_array("events");
+        for (auto& e : ev)
+            w.begin_object()
+                .field("seq", static_cast<long long>(e.seq))
+                .field("ts", static_cast<long long>(e.ts))
+                .field("id", e.msg_id)
+                .field("text", e.text)
+                .end_object();
+        w.end_array().field("last", static_cast<long long>(ev.empty() ? after : ev.back().seq)).end_object();
+        return w.str();
+    }
+
+    return error_reply(
+        "unknown cmd; use status, send, list, get, queue, log, send_acp127, send_acp126, send_chat, parse_acp127, "
+        "parse_traffic, compose_templates, compose_form, compose_check, compose_send or compose_advise");
 }
 
 }  // namespace pna

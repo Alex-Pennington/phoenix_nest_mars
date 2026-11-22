@@ -67,9 +67,10 @@ commsmuseum.co.uk. The current ACP series is not used. Paragraph numbers in the
 code are from that edition.
 
 - PLAINDRESS in the automatic (VZCZC) or manual (VV) form, format lines 1 to
-  13, 15 and 16. Lines end 2CR 1LF, and 2CR 8LF before NNNN. No line is over 69
-  characters; text is wrapped at spaces. Only A-Z, 0-9, space and - ? : ( ) . , /
-  are allowed.
+  13, 15 and 16. Lines end 2CR 1LF, and 2CR 8LF before NNNN. The edition's
+  69-character line limit (text wrapped at spaces) is the builder's default and
+  can be turned off with `limit_lines`, as MARS stations send longer lines.
+  Only A-Z, 0-9, space and - ? : ( ) . , / are allowed.
 - Only UNCLAS is built or accepted, because the appliance sends plain text
   (the cipher is a stand-in).
 - LTRS/FIGS shifts and the FLASH bell have no ASCII form and are not written.
@@ -162,6 +163,37 @@ SOURCES.csv does (`procedure` in the reply):
     {"cmd":"parse_traffic","id":"B-3"}
 
 `parse_acp127` stays strict, for the appliance's own messages.
+
+## Composing with guidance
+
+`src/compose.h` composes a message from a template, with guidance a
+first-time operator can follow. There is one template for each form the two
+sample batches show (GENADMIN and its simple, monthly, after-action and
+code-group forms, AKNLDG, RI, RRI and its strip and METAR forms, MARSSTATUS,
+bare strips, COMSPOT and both net reports, ORDER, WXOBS, SVC and free text),
+each in any procedure it can go in (the 16L forms, ACP 127 plaindress, ACP 126,
+chat). Codress is listed and refused: the cipher isn't here.
+
+A front end asks for a template's form (fields with labels, hints, examples
+and defaults for this station and time), sends what the operator typed to
+`compose_check`, and shows the issues: each says what is wrong, how to fix
+it, and gives a value that would be right. With no errors, it shows the whole
+message; `compose_send` takes the serials (the heading's serial and the MSGID
+serial are always the same) and queues it. A frequency is never accepted:
+channels go by designator.
+
+Breaking lines at 69 characters is an option on each message ("Break lines
+at 69 characters", off by default), as it is in Message Creator: MARS traffic
+doesn't keep to 69, so each line goes as written. With it on, prose is broken
+at spaces, and a strip (never broken) that won't fit is refused with the fix.
+
+`compose_advise` explains a field or the next fixes from the built-in
+guidance, or asks a local helper program given with `--advisor` (an AI
+helper, for instance). The core calls no outside service and needs no key.
+
+`queue` and `log` feed the panel's queue and activity views. `docs/api.md`
+has every call and reply. `test_compose` composes every template in every
+procedure it allows by doing only what the guidance says, and reads each back.
 
 ## Traffic samples
 

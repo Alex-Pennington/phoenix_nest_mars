@@ -90,6 +90,16 @@ std::vector<Message> Core::list(int limit) {
     return store_.list(limit);
 }
 
+std::vector<Message> Core::queue(int limit) {
+    std::lock_guard<std::mutex> g(mu_);
+    return store_.queue(limit);
+}
+
+std::vector<Event> Core::events(int64_t after, int limit) {
+    std::lock_guard<std::mutex> g(mu_);
+    return store_.events(after, limit);
+}
+
 std::optional<Message> Core::get(const std::string& id) {
     std::lock_guard<std::mutex> g(mu_);
     return store_.get(id);

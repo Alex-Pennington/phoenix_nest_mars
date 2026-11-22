@@ -78,9 +78,13 @@ struct Message {
     std::vector<Address> to, info, xmt;
     // Format line 10: accounting symbol or group count (e.g. "GR 37"); empty omits it.
     std::string line10;
-    // Format line 12: the text after UNCLAS. '\n' starts a new line; long
-    // lines are wrapped at spaces to fit 69 characters.
+    // Format line 12: the text after UNCLAS. '\n' starts a new line.
     std::string text;
+    // true: text lines are wrapped at spaces to fit 69 characters and no line
+    // may be longer (138.f). false: each line goes as written, the way MARS
+    // stations send it (the traffic samples are full of longer lines; Message
+    // Creator has the 69-character break as an option).
+    bool limit_lines = true;
     // Format line 15 (211.c): correction, e.g. "C LINE 8 WA ...". Empty omits it.
     std::string correction;
     // Classification letter from format lines 1, 4 and 12. Only 'U' is built.
@@ -88,7 +92,8 @@ struct Message {
 };
 
 // Builds the whole message, start to NNNN. Returns "" and sets *error when a
-// field breaks the format (bad character, line over 69, missing field).
+// field breaks the format (bad character, line over 69 when limit_lines,
+// missing field).
 std::string build(const Message& m, std::string* error);
 
 // Parses a message built by build() or by another station that follows the

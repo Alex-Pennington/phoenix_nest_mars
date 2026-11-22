@@ -163,6 +163,26 @@ std::vector<Message> Store::list(int limit) {
     return out;
 }
 
+std::vector<Message> Store::queue(int limit) {
+    Stmt s(db_, (std::string("SELECT ") + kCols +
+                 " FROM messages WHERE direction = 'out' AND state IN ('queued', 'sending')"
+                 " ORDER BY state = 'sending' DESC,"
+                 " CASE prec WHEN 'Z' THEN 0 WHEN 'O' THEN 1 WHEN 'P' THEN 2 ELSE 3 END, created_at, rowid LIMIT ?")
+                    .c_str());
+    s.bind(1, static_cast<int64_t>(limit));
+    std::vector<Message> out;
+    while (s.step()) out.push_back(row(s));
+    return out;
+}
+
+std::vector<Event> Store::events(int64_t after, int limit) {
+    Stmt s(db_, "SELECT rowid, ts, COALESCE(msg_id, ''), text FROM events WHERE rowid > ? ORDER BY rowid LIMIT ?");
+    s.bind(1, after).bind(2, static_cast<int64_t>(limit));
+    std::vector<Event> out;
+    while (s.step()) out.push_back(Event{s.i64(0), s.i64(1), s.text(2), s.text(3)});
+    return out;
+}
+
 std::optional<Message> Store::next_to_send(int64_t now) {
     Stmt s(db_, (std::string("SELECT ") + kCols +
                  " FROM messages WHERE direction = 'out' AND state = 'queued' AND next_try_at <= ?"

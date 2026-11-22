@@ -260,9 +260,9 @@ std::string build(const Message& m, std::string* error) {
             if (!valid_chars(w, &c))
                 return bad("format line 12: character '" + std::string(1, c) +
                            "' not allowed (write PARA, QUOTE or UNQUOTE instead of other punctuation)");
-            if (w.size() > kMaxLine) return bad("format line 12: a word is longer than 69 characters");
+            if (m.limit_lines && w.size() > kMaxLine) return bad("format line 12: a word is longer than 69 characters");
             if (line.empty()) line = w;
-            else if (line.size() + 1 + w.size() <= kMaxLine) line += " " + w;
+            else if (!m.limit_lines || line.size() + 1 + w.size() <= kMaxLine) line += " " + w;
             else {
                 L.push_back(line);
                 ++text_lines;
@@ -287,7 +287,7 @@ std::string build(const Message& m, std::string* error) {
     }
 
     for (auto& line : L)
-        if (line.size() > kMaxLine) return bad("line over 69 characters: " + line.substr(0, 20) + "...");
+        if (m.limit_lines && line.size() > kMaxLine) return bad("line over 69 characters: " + line.substr(0, 20) + "...");
 
     // Each line ends 2CR 1LF; the last before NNNN ends 2CR 8LF (138.b, 138.d).
     std::string out;

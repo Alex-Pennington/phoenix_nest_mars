@@ -51,7 +51,8 @@ struct Message {
     acp127::Address from;             // PLAINDRESS only, required
     std::vector<acp127::Address> to;  // PLAINDRESS only, at least one
     bool unclas_line = true;          // start the text with UNCLAS
-    std::string text;                 // '\n' starts a new line; wrapped at 69
+    std::string text;                 // '\n' starts a new line
+    bool limit_lines = true;          // wrap at 69 and refuse longer lines (see acp127.h)
 };
 
 // Builds the whole message, VZCZC to NNNN. Returns "" and sets *error when a

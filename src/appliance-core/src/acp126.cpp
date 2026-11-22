@@ -97,9 +97,9 @@ std::string build(const Message& m, std::string* error) {
             char c = 0;
             if (!acp127::valid_chars(w, &c))
                 return bad("text: character '" + std::string(1, c) + "' not allowed");
-            if (w.size() > acp127::kMaxLine) return bad("text: a word is longer than 69 characters");
+            if (m.limit_lines && w.size() > acp127::kMaxLine) return bad("text: a word is longer than 69 characters");
             if (line.empty()) line = w;
-            else if (line.size() + 1 + w.size() <= acp127::kMaxLine) line += " " + w;
+            else if (!m.limit_lines || line.size() + 1 + w.size() <= acp127::kMaxLine) line += " " + w;
             else {
                 L.push_back(line);
                 line = w;
@@ -110,7 +110,7 @@ std::string build(const Message& m, std::string* error) {
     if (L.size() == text_start) return bad("text: no text");
     L.push_back("BT");
     for (auto& l : L)
-        if (l.size() > acp127::kMaxLine) return bad("line over 69 characters: " + l.substr(0, 20) + "...");
+        if (m.limit_lines && l.size() > acp127::kMaxLine) return bad("line over 69 characters: " + l.substr(0, 20) + "...");
 
     std::string out;
     for (size_t i = 0; i < L.size(); ++i) out += L[i] + (i + 1 < L.size() ? "\r\r\n" : "\r\r\n\n\n\n\n\n\n\n");
