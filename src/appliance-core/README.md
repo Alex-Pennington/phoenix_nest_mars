@@ -30,18 +30,40 @@ Needs a C++17 compiler, CMake, SQLite3 and python3 (for the stand-ins).
   already in the directory counts as handled.
 - **Operator.** gale-term's Messages panel (`--core-port`) or `appliance-cli`.
 
-Both interfaces are as greybeard-ale's orchestrator described them on
-2026-11-22. Not yet fixed by its docs:
-- the field names in `CAPTURE.modems.json` (the core accepts `files`/`file`/`bytes`/`sha256`
-  and a few other likely spellings);
-- the exact `--mode` spelling (passed through as given).
+`CAPTURE.modems.json` is read as greybeard-ale's `tools/modem_verdict.py` writes
+it: a `verdicts` list, and for each decoded data burst `payload_file`,
+`payload_bytes` and `sha256`. Bursts with no payload and Harris voice payloads
+are passed over.
 
-## Until gale-tx and the payload files land
+## Two stations through the real 110A modem, on audio files
+
+Tested 2026-11-22 with greybeard-ale main a5a4cda and the modem
+(pennington_m110a_demod) at 8839b43. Build the modem's transmit and receive
+programs with greybeard-ale's own recipe, without installing anything:
+
+    M110A_BUILD=$PWD/m110a-build greybeard-ale/tools/m110a_tx/build.sh pennington_m110a_demod $PWD/lib
+    export GALE_M110A_TX_FILE=$PWD/lib/m110a_tx_file GALE_M110A_RX=$PWD/m110a-build/bin/m110a_rx
+
+(gale-tx needs Python's numpy and scipy.) Then run two stations, with
+greybeard-ale's gale-tx as the transmitter and its modem_verdict.py as the
+receiver, and `tools/stub_channel.py` carrying each burst WAV across:
+
+    appliance-core --station AAR4XX --tx-mode 600S --tx-cmd python3 --tx-arg greybeard-ale/tools/gale_tx.py \
+        --captures data/A-cap --db-dir data/A --api-port 4100
+    appliance-core --station AAR4XY --tx-mode 600S --tx-cmd python3 --tx-arg greybeard-ale/tools/gale_tx.py \
+        --captures data/B-cap --db-dir data/B --api-port 4101
+    tools/stub_channel.py --verdict greybeard-ale/tools/modem_verdict.py \
+        --from data/A/AAR4XX-outbox --to data/B-cap --from data/B/AAR4XY-outbox --to data/A-cap
+
+A message composed on one station decodes on the other and its ACK comes back,
+both ways. The audio is clean: no noise or fading is added.
+
+## With no modem build at hand
 
 `tools/stub_gale_tx.py` takes gale-tx's command line and writes a WAV that is
-not a modem signal (one sample per byte) so `tools/stub_channel.py` can carry it
-to the other station's captures directory as greybeard-ale would. Two stations
-on one machine:
+not a modem signal (one sample per byte), and `tools/stub_channel.py` without
+`--verdict` carries it across and writes the payload file and listing itself.
+`test_greybeard` uses these.
 
     appliance-core --station A --tx-mode 600S --tx-cmd python3 --tx-arg tools/stub_gale_tx.py \
         --captures data/A-cap --db-dir data --api-port 4100

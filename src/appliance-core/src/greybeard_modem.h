@@ -14,9 +14,10 @@
 // byte count and sha256. The driver watches the captures directory, checks every
 // listed file against its count and digest, and hands the bytes to the core.
 //
-// Both interfaces are as greybeard-ale's orchestrator described them on
-// 2026-11-22; gale-tx and the payload files are not in its repo yet. Until they
-// land, tools/stub_gale_tx.py stands in for gale-tx (see README).
+// The listing is read as greybeard-ale's tools/modem_verdict.py writes it
+// ("verdicts", each decoded data burst with payload_file, payload_bytes and
+// sha256). Tested against greybeard-ale main a5a4cda with the real 110A modem on
+// audio files (see README); tools/stub_gale_tx.py stands in for tests.
 #pragma once
 
 #include "modem.h"

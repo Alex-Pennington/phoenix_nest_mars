@@ -51,7 +51,7 @@ std::vector<const JsonValue*> entries_of(const JsonValue& v) {
     std::vector<const JsonValue*> out;
     const JsonValue* list = nullptr;
     if (v.is_array()) list = &v;
-    for (const char* k : {"files", "modems", "outputs", "payloads", "bursts"})
+    for (const char* k : {"verdicts", "files", "modems", "outputs", "payloads", "bursts"})
         if (!list) {
             const JsonValue* c = v.get(k);
             if (c && c->is_array()) list = c;
@@ -254,9 +254,16 @@ bool GreybeardModem::handle_listing(const std::string& name) {
     }
     auto entries = entries_of(v);
     std::vector<std::string> payloads;
+    size_t listed = 0;
     for (const JsonValue* e : entries) {
-        const JsonValue* f = first_of(*e, {"file", "name", "path", "bin"});
-        const JsonValue* n = first_of(*e, {"bytes", "size", "byte_count", "length"});
+        // modem_verdict.py: one verdict per burst found; only a decoded data
+        // burst has a payload file. Voice payloads are vocoder bits, not frames.
+        const JsonValue* kind = e->get("payload_kind");
+        if (e->get("waveform") && !first_of(*e, {"payload_file", "file", "name", "path", "bin"})) continue;
+        if (kind && kind->type == JsonValue::Type::String && kind->s.find("harris") != std::string::npos) continue;
+        ++listed;
+        const JsonValue* f = first_of(*e, {"payload_file", "file", "name", "path", "bin"});
+        const JsonValue* n = first_of(*e, {"payload_bytes", "bytes", "size", "byte_count", "length"});
         const JsonValue* h = first_of(*e, {"sha256", "sha_256", "digest"});
         if (!f || f->type != JsonValue::Type::String || !plain_name(f->s)) {
             event("skipped an entry in " + name + ": no plain file name");
@@ -276,7 +283,7 @@ bool GreybeardModem::handle_listing(const std::string& name) {
     }
     for (auto& p : payloads)
         if (cb_.on_rx && !p.empty()) cb_.on_rx(p);
-    if (entries.empty()) event(name + " lists no payload files");
+    if (listed == 0) event(name + " lists no payload files");
     return true;
 }
 
