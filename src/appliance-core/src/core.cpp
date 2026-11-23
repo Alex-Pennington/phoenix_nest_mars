@@ -3,6 +3,8 @@
 #include "codress.h"
 #include "crypto.h"
 
+#include <cctype>
+
 #include <chrono>
 
 namespace pna {
@@ -78,6 +80,91 @@ std::string Core::submit_codress(const std::string& to, char prec, const std::st
     store_.set_clear(id, clear, key);
     log(id, "enciphered with key " + key);
     return id;
+}
+
+bool Core::replace_identity(const station::Identity& id, std::string* error) {
+    if (!station::save_identity(id_path_, id, error)) return false;
+    std::lock_guard<std::mutex> g(mu_);
+    if (id_) id_->wipe();
+    id_ = std::make_shared<station::Identity>(id);
+    log("", "station keys restored from backup: fingerprint " + station::fingerprint(station::card_of(id)));
+    return true;
+}
+
+std::optional<station::Card> Core::card_for(const std::string& call) {
+    std::lock_guard<std::mutex> g(mu_);
+    if (id_ && call == id_->station) return station::card_of(*id_);
+    auto row = store_.card(call);
+    if (!row) return std::nullopt;
+    station::Card c;
+    if (!station::parse_card(row->card, c, nullptr) || c.station != call) return std::nullopt;
+    return c;
+}
+
+bool Core::add_card(const std::string& text, const std::string& source, bool replace, station::Card& card,
+                    std::string& what, std::string* error) {
+    if (!station::parse_card(text, card, error)) return false;
+    std::lock_guard<std::mutex> g(mu_);
+    if (id_ && card.station == id_->station) {
+        if (error) *error = "that is this station's own card";
+        return false;
+    }
+    std::string fp = station::fingerprint(card);
+    auto old = store_.card(card.station);
+    if (old && old->fingerprint == fp) {
+        what = "same";
+        return true;
+    }
+    if (old && !replace) {
+        if (error)
+            *error = "this station already holds a different card for " + card.station + " (fingerprint " +
+                     old->fingerprint + "); the new one is " + fp +
+                     ". If that station was rebuilt, check the new fingerprint with it by voice and import with replace";
+        log("", "a different station card for " + card.station + " was refused (" + fp + ")");
+        return false;
+    }
+    Store::CardRow r;
+    r.station = card.station;
+    r.card = station::card_text(text);
+    r.fingerprint = fp;
+    r.source = source;
+    r.added = now_utc();
+    store_.put_card(r);
+    what = old ? "replaced" : "added";
+    log("", "station card for " + card.station + " " + what + ", fingerprint " + fp + " (not yet checked by voice)");
+    return true;
+}
+
+std::vector<Store::CardRow> Core::cards() {
+    std::lock_guard<std::mutex> g(mu_);
+    return store_.cards();
+}
+
+bool Core::verify_card(const std::string& call, const std::string& fingerprint, std::string* error) {
+    std::lock_guard<std::mutex> g(mu_);
+    auto row = store_.card(call);
+    if (!row) {
+        if (error) *error = "no card for " + call;
+        return false;
+    }
+    std::string a, b;
+    for (char c : fingerprint)
+        if (c != ' ' && c != '-') a += static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+    for (char c : row->fingerprint)
+        if (c != ' ') b += c;
+    if (a != b) {
+        if (error) *error = "that is not " + call + "'s fingerprint on the card held here (" + row->fingerprint + ")";
+        return false;
+    }
+    store_.set_card_verified(call, true);
+    log("", "station card for " + call + " checked by voice");
+    return true;
+}
+
+bool Core::card_verified(const std::string& call) {
+    std::lock_guard<std::mutex> g(mu_);
+    auto row = store_.card(call);
+    return row && row->verified;
 }
 
 void Core::note(const std::string& text) {
@@ -300,6 +387,12 @@ void Core::handle_rx(const std::string& bytes) {
             log(f.id, std::string("received ") + prec_name(f.prec) + " from " + f.src +
                           (to_all ? " to all stations" : ""));
             read_codress(f.id, f.body);
+            // Station keys that came over the air wait for the operator.
+            station::SealedHead sh;
+            if (f.body.find("PNA STATION CARD 1") != std::string::npos)
+                log(f.id, "a station card came in: load it with cards import " + f.id);
+            if (station::sealed_head(f.body, sh) && id_ && sh.to == id_->station)
+                log(f.id, "a sealed key tape for " + sh.net + " from " + sh.from + " came in: open it with keys open " + f.id);
         }
         // Nobody acks a broadcast: every station on the net would answer at once.
         if (cfg_.send_acks && !to_all) {

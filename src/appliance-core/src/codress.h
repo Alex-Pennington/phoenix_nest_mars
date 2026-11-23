@@ -24,6 +24,7 @@
 #pragma once
 
 #include <string>
+#include <vector>
 
 namespace pna {
 namespace codress {
@@ -46,6 +47,12 @@ bool encipher(const std::string& plaindress, const std::string& indicator, const
 // the tape key for its indicator. False with *error when the groups are
 // damaged or missing, or the tag does not check (tampered or wrong key).
 bool decipher(const std::string& codress, const std::string& key, std::string& plaindress, std::string* error);
+
+// The group form on its own, for other blocks that travel as text (sealed
+// key tapes, station.h): bytes (a multiple of 5) to 8-character groups, and
+// back. from_groups is false with *error on a group that isn't one.
+std::vector<std::string> to_groups(const std::string& bytes);
+bool from_groups(const std::vector<std::string>& groups, std::string& bytes, std::string* error);
 
 }  // namespace codress
 }  // namespace pna

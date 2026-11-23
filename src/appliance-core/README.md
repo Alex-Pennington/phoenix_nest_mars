@@ -25,7 +25,8 @@ shell.
 
     cmake -S . -B build && cmake --build build && (cd build && ctest)
 
-Needs a C++17 compiler, CMake, SQLite3 and python3 (for the stand-ins).
+Needs a C++17 compiler, CMake, SQLite3, OpenSSL 3 (libcrypto) and python3
+(for the stand-ins).
 
 ## Run one station on greybeard-ale
 
@@ -141,8 +142,8 @@ code are from that edition.
   69-character line limit (text wrapped at spaces) is the builder's default and
   can be turned off with `limit_lines`, as MARS stations send longer lines.
   Only A-Z, 0-9, space and - ? : ( ) . , / are allowed.
-- Only UNCLAS is built or accepted, because the appliance sends plain text
-  (the cipher is a stand-in).
+- Only UNCLAS is built or accepted. Codress (below and docs/crypto.md) is
+  enciphered unclassified traffic, not classified traffic.
 - LTRS/FIGS shifts and the FLASH bell have no ASCII form and are not written.
 - The built message is the body of a core message, so it is queued and sent
   by precedence like any other. The PNA1 framing below is unchanged.
@@ -224,8 +225,10 @@ SOURCES.csv does (`procedure` in the reply):
 
 - `ACP127_PLAINDRESS`: unfolded header, FM and TO, plain text.
 - `ACP127_CODRESS`: a key indicator after the DTG, a `GR` count and cipher
-  groups. The groups are kept as received and not read (the cipher isn't
-  here); a count that differs from `GR` is warned.
+  groups. Groups enciphered by an appliance whose net key this station holds
+  are deciphered (`deciphered`, `text`); others, MARS cipher traffic
+  included, are kept as received with the reason in `why_not_deciphered`. A
+  count that differs from `GR` is warned.
 - `16L_P2P_*` and `16L_RI_*`: the folded header, from a call sign or an RI.
   FULL has FM/TO, ABBR doesn't, SIMPLE has no precedence prosign by design.
 - `ACP126_PLAINDRESS` and `ACP126_SIMPLE`, as above.
@@ -233,6 +236,22 @@ SOURCES.csv does (`procedure` in the reply):
     {"cmd":"parse_traffic","id":"B-3"}
 
 `parse_acp127` stays strict, for the appliance's own messages.
+
+## Codress, keys, signatures and the digest
+
+docs/crypto.md has the design and the operator's steps. In short:
+
+- Every message except chat carries MSC's `[DIGEST:...]` error check, and
+  `parse_traffic` says whether it passed. On a failure it offers a repeat
+  request.
+- Each box makes its own station keypair on first start. Its card, a short
+  text block with a fingerprint to read aloud, goes out by USB or over the
+  air. Messages are signed, and `parse_traffic` says whether the signature is
+  good.
+- Codress uses AES-256-GCM with a net key from a dated key tape. A keymaster
+  makes tapes with `pna-keymaster`, or with `net_tape`, which seals a copy to
+  each member's card and can send it over the air.
+- It is not the MARS cipher, and it reads only traffic from other appliances.
 
 ## Composing with guidance
 
@@ -242,7 +261,8 @@ sample batches show (GENADMIN and its simple, monthly, after-action and
 code-group forms, AKNLDG, RI, RRI and its strip and METAR forms, MARSSTATUS,
 bare strips, COMSPOT and both net reports, ORDER, WXOBS, SVC and free text),
 each in any procedure it can go in (the 16L forms, ACP 127 plaindress, ACP 126,
-chat). Codress is listed and refused: the cipher isn't here.
+chat). Codress is offered when this station holds a net key for now, and
+refused with the reason when it doesn't.
 
 A front end asks for a template's form (fields with labels, hints, examples
 and defaults for this station and time), sends what the operator typed to

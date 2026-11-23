@@ -9,8 +9,8 @@
 // It is an ERROR CHECK, NOT A SIGNATURE. It has no key: anyone can compute it
 // for any text, so it shows a message arrived without a garbled character, never
 // who sent it or that nobody changed it on purpose. Codress traffic is
-// authenticated by the cipher's own tag (codress.h); see docs/crypto.md for the
-// way plain traffic could be authenticated later.
+// authenticated by the cipher's own tag (codress.h), and any message can carry
+// its sender's signature (station.h, docs/crypto.md).
 //
 // Reading is a little more forgiving than MSC: lines are trimmed before BT and
 // UNCLAS are looked for, so indented traffic is read too. For text without

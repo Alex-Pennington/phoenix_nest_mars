@@ -8,10 +8,11 @@ the `appliance-cli` command.
 
 ## 1. Install
 
-You need a Linux computer with a C++17 compiler, CMake and SQLite3's headers.
+You need a Linux computer with a C++17 compiler, CMake, and SQLite3's and
+OpenSSL's headers.
 On Debian or Raspberry Pi OS:
 
-    sudo apt install build-essential cmake libsqlite3-dev
+    sudo apt install build-essential cmake libsqlite3-dev libssl-dev
 
 Then, from this folder (`src/appliance-core` in the repository):
 
@@ -99,6 +100,26 @@ every Tuesday at 0100Z and opens itself:
 The station notes it in the log 15 minutes before the start. Every call is in
 `docs/api.md`.
 
+## 5a. Keys, cards and codress
+
+Your box made its own station keys the first time it started. To work codress
+or check signatures with another station:
+
+| To | Type |
+|---|---|
+| Show your card and fingerprint | `appliance-cli station card` |
+| Send your card to a station | `appliance-cli api card_send to=NCS-A` |
+| Load a card that came in, or from a stick | `appliance-cli cards import ID` or `cards import FILE` |
+| Mark a card checked, after reading the fingerprint back by voice | `appliance-cli cards check NCS-A "K7QM 2XRD 9FTA HW3C"` |
+| Load a key tape from a stick | `appliance-cli keys import FILE` |
+| Open a sealed key tape that came in | `appliance-cli keys open ID` |
+| See your keys | `appliance-cli keys list` |
+| Wipe a key or a whole tape now | `appliance-cli keys zeroize QXR01` |
+
+When a key for today is loaded, the Messages panel offers codress, and every
+message you send is signed. Keymasters, see docs/crypto.md for making tapes
+and building a net from nothing.
+
 ## 6. Backups
 
 Everything is in `~/.local/share/phoenix-nest-mars`, one file per station
@@ -110,6 +131,11 @@ Everything is in `~/.local/share/phoenix-nest-mars`, one file per station
 
 Copy the settings file too. The address book also exports as CSV:
 `appliance-cli api book_export`.
+
+That folder also holds your station keys (`NAME.id`) and net keys
+(`NAME.keys`) in the clear, so treat the copy as you would the keys. To keep
+only the station keys, enciphered, use
+`appliance-cli api station_backup passphrase="..."` instead (docs/crypto.md).
 
 ## 7. When something's wrong
 

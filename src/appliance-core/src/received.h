@@ -91,6 +91,7 @@ struct Message {
     // After the closing BT.
     std::string serial_again;        // "0212" when the serial is repeated
     std::string digest;              // MSC [DIGEST:...] value, if any
+    std::string signature;           // [SIG:CALL:...] value, if any (station.h)
     std::string correction;
     std::vector<std::string> warnings;
 };

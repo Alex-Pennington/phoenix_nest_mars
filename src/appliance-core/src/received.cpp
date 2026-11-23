@@ -407,7 +407,7 @@ bool parse(const std::string& raw, Message& m, std::string* error) {
     if (m.security == "ZNY EEEEE") warn.push_back("format line 4 is ZNY EEEEE over unclassified text");
     bool long_line = false;
     for (size_t i = v; i <= n; ++i)
-        if (L[i].size() > acp127::kMaxLine) long_line = true;
+        if (L[i].size() > acp127::kMaxLine && !starts_with(trim(L[i]), "[SIG:")) long_line = true;
     if (long_line) warn.push_back("lines over 69 characters");
     m.text = T;
 
@@ -420,6 +420,8 @@ bool parse(const std::string& raw, Message& m, std::string* error) {
             if (m.serial_again != m.serial) warn.push_back("serial after BT differs from format line 3");
         } else if (starts_with(t, "[DIGEST:") && t.back() == ']') {
             m.digest = t.substr(8, t.size() - 9);
+        } else if (starts_with(t, "[SIG:") && t.back() == ']') {
+            m.signature = t.substr(5, t.size() - 6);
         } else if (starts_with(t, "C ")) {
             m.correction = t;
         } else if (is_page_header(words(t))) {

@@ -6,6 +6,9 @@
 //   SHA-256        the key tape's end check (keys.h)
 //   MD5            only for the MSC-compatible [DIGEST:] line (digest.h), an
 //                  error check with no key, never used for security
+//   Ed25519        station signatures (RFC 8032): signed messages, cards, sealed tapes
+//   X25519         sealing a key tape to one station (RFC 7748)
+//   scrypt         the passphrase on a station's key backup (RFC 7914)
 //   RAND_bytes     keys and nonces
 #pragma once
 
@@ -31,6 +34,21 @@ bool aes256gcm_open(const std::string& key, const std::string& nonce, const std:
 
 std::string sha256_hex(const std::string& data);   // lower-case hex
 std::string md5_hex_upper(const std::string& data);  // upper-case hex, as MSC writes it
+
+// Ed25519: 32-byte private seed and public key, 64-byte signatures.
+bool ed25519_keygen(std::string& priv, std::string& pub);
+std::string ed25519_public(const std::string& priv);  // "" on failure
+std::string ed25519_sign(const std::string& priv, const std::string& msg);  // "" on failure
+bool ed25519_verify(const std::string& pub, const std::string& msg, const std::string& sig);
+
+// X25519: 32-byte keys. x25519() is the shared secret, "" on failure
+// (including the all-zero result from a bad public key).
+bool x25519_keygen(std::string& priv, std::string& pub);
+std::string x25519_public(const std::string& priv);
+std::string x25519(const std::string& priv, const std::string& peer_pub);
+
+// scrypt (N = 2^15, r = 8, p = 1), `len` bytes, "" on failure.
+std::string scrypt(const std::string& pass, const std::string& salt, size_t len);
 
 std::string to_hex(const std::string& bytes);       // lower-case
 bool from_hex(const std::string& hex, std::string& bytes);

@@ -141,5 +141,94 @@ void wipe(std::string& s) {
     s.clear();
 }
 
+
+// ---- Ed25519 and X25519 (raw 32-byte keys)
+
+namespace {
+using PKey = std::unique_ptr<EVP_PKEY, decltype(&EVP_PKEY_free)>;
+
+bool keygen(int type, std::string& priv, std::string& pub) {
+    std::unique_ptr<EVP_PKEY_CTX, decltype(&EVP_PKEY_CTX_free)> pc(EVP_PKEY_CTX_new_id(type, nullptr),
+                                                                   &EVP_PKEY_CTX_free);
+    EVP_PKEY* raw = nullptr;
+    if (!pc || EVP_PKEY_keygen_init(pc.get()) != 1 || EVP_PKEY_keygen(pc.get(), &raw) != 1) return false;
+    PKey k(raw, &EVP_PKEY_free);
+    priv.assign(32, '\0');
+    pub.assign(32, '\0');
+    size_t a = 32, b = 32;
+    if (EVP_PKEY_get_raw_private_key(k.get(), reinterpret_cast<unsigned char*>(&priv[0]), &a) != 1 || a != 32 ||
+        EVP_PKEY_get_raw_public_key(k.get(), reinterpret_cast<unsigned char*>(&pub[0]), &b) != 1 || b != 32) {
+        wipe(priv);
+        pub.clear();
+        return false;
+    }
+    return true;
+}
+
+std::string public_of(int type, const std::string& priv) {
+    if (priv.size() != 32) return "";
+    PKey k(EVP_PKEY_new_raw_private_key(type, nullptr, u(priv), 32), &EVP_PKEY_free);
+    if (!k) return "";
+    std::string pub(32, '\0');
+    size_t n = 32;
+    if (EVP_PKEY_get_raw_public_key(k.get(), reinterpret_cast<unsigned char*>(&pub[0]), &n) != 1 || n != 32) return "";
+    return pub;
+}
+}  // namespace
+
+bool ed25519_keygen(std::string& priv, std::string& pub) { return keygen(EVP_PKEY_ED25519, priv, pub); }
+std::string ed25519_public(const std::string& priv) { return public_of(EVP_PKEY_ED25519, priv); }
+
+std::string ed25519_sign(const std::string& priv, const std::string& msg) {
+    if (priv.size() != 32) return "";
+    PKey k(EVP_PKEY_new_raw_private_key(EVP_PKEY_ED25519, nullptr, u(priv), 32), &EVP_PKEY_free);
+    std::unique_ptr<EVP_MD_CTX, decltype(&EVP_MD_CTX_free)> mc(EVP_MD_CTX_new(), &EVP_MD_CTX_free);
+    if (!k || !mc || EVP_DigestSignInit(mc.get(), nullptr, nullptr, nullptr, k.get()) != 1) return "";
+    std::string sig(64, '\0');
+    size_t n = 64;
+    if (EVP_DigestSign(mc.get(), reinterpret_cast<unsigned char*>(&sig[0]), &n, u(msg), msg.size()) != 1 || n != 64)
+        return "";
+    return sig;
+}
+
+bool ed25519_verify(const std::string& pub, const std::string& msg, const std::string& sig) {
+    if (pub.size() != 32 || sig.size() != 64) return false;
+    PKey k(EVP_PKEY_new_raw_public_key(EVP_PKEY_ED25519, nullptr, u(pub), 32), &EVP_PKEY_free);
+    std::unique_ptr<EVP_MD_CTX, decltype(&EVP_MD_CTX_free)> mc(EVP_MD_CTX_new(), &EVP_MD_CTX_free);
+    if (!k || !mc || EVP_DigestVerifyInit(mc.get(), nullptr, nullptr, nullptr, k.get()) != 1) return false;
+    return EVP_DigestVerify(mc.get(), u(sig), 64, u(msg), msg.size()) == 1;
+}
+
+bool x25519_keygen(std::string& priv, std::string& pub) { return keygen(EVP_PKEY_X25519, priv, pub); }
+std::string x25519_public(const std::string& priv) { return public_of(EVP_PKEY_X25519, priv); }
+
+std::string x25519(const std::string& priv, const std::string& peer_pub) {
+    if (priv.size() != 32 || peer_pub.size() != 32) return "";
+    PKey k(EVP_PKEY_new_raw_private_key(EVP_PKEY_X25519, nullptr, u(priv), 32), &EVP_PKEY_free);
+    PKey p(EVP_PKEY_new_raw_public_key(EVP_PKEY_X25519, nullptr, u(peer_pub), 32), &EVP_PKEY_free);
+    if (!k || !p) return "";
+    std::unique_ptr<EVP_PKEY_CTX, decltype(&EVP_PKEY_CTX_free)> pc(EVP_PKEY_CTX_new(k.get(), nullptr),
+                                                                   &EVP_PKEY_CTX_free);
+    std::string out(32, '\0');
+    size_t n = 32;
+    if (!pc || EVP_PKEY_derive_init(pc.get()) != 1 || EVP_PKEY_derive_set_peer(pc.get(), p.get()) != 1 ||
+        EVP_PKEY_derive(pc.get(), reinterpret_cast<unsigned char*>(&out[0]), &n) != 1 || n != 32) {
+        wipe(out);
+        return "";
+    }
+    if (out == std::string(32, '\0')) return "";
+    return out;
+}
+
+std::string scrypt(const std::string& pass, const std::string& salt, size_t len) {
+    std::string out(len, '\0');
+    if (EVP_PBE_scrypt(pass.data(), pass.size(), u(salt), salt.size(), 1u << 15, 8, 1, 64u * 1024 * 1024,
+                       reinterpret_cast<unsigned char*>(&out[0]), len) != 1) {
+        wipe(out);
+        return "";
+    }
+    return out;
+}
+
 }  // namespace crypto
 }  // namespace pna

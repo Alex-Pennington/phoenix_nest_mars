@@ -454,9 +454,11 @@ bool parse(const std::string& raw, Message& m, std::string* error) {
 
     // Format line 15 (optional), then NNNN. MSC stations (and this engine)
     // also put a [DIGEST:...] line before NNNN: an error check over the
-    // text (digest.h), not part of ACP 127, read by digest::check.
+    // text (digest.h), not part of ACP 127, read by digest::check. This
+    // engine may add a [SIG:...] line after it (station.h).
     if (starts_with(at(i), "C ")) m.correction = at(i++);
     if (starts_with(at(i), "[DIGEST:")) ++i;
+    if (starts_with(at(i), "[SIG:")) ++i;  // a station signature (station.h)
     if (at(i) != "NNNN") return fail(error, "format line 16: NNNN missing");
     if (i + 1 != L.size()) return fail(error, "text after NNNN");
     if (error) error->clear();

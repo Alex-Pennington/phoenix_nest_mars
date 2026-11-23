@@ -86,6 +86,19 @@ public:
     void set_clear(const std::string& id, const std::string& text, const std::string& key);
     std::optional<std::pair<std::string, std::string>> clear(const std::string& id);  // text, key
 
+    // Station cards (station.h) this station holds: other stations' public
+    // keys, as their card text, with whether the operator checked the
+    // fingerprint with that station by voice.
+    struct CardRow {
+        std::string station, card, fingerprint, source;
+        bool verified = false;
+        int64_t added = 0;
+    };
+    void put_card(const CardRow& c);
+    std::optional<CardRow> card(const std::string& station);
+    std::vector<CardRow> cards();
+    void set_card_verified(const std::string& station, bool v);
+
 private:
     void exec(const char* sql);
     sqlite3* db_ = nullptr;

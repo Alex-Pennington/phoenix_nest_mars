@@ -10,13 +10,17 @@
 #include "crypto.h"
 #include "digest.h"
 #include "keys.h"
+#include "station.h"
 #include "received.h"
 #include "json.h"
 #include "net.h"
 
 #include <sys/socket.h>
 
+#include <algorithm>
+#include <cctype>
 #include <cstdio>
+#include <optional>
 #include <ctime>
 #include <map>
 #include <set>
@@ -332,7 +336,7 @@ std::string compose_form(Core& core, std::map<std::string, std::string>& req) {
 // compose_check: the issues, and the message as it would go (serials shown
 // as 1; they are taken only when it is sent).
 std::string compose_check(Core& core, std::map<std::string, std::string>& req) {
-    compose::Result r = compose::check(draft_of(req), compose_ctx(core));
+    compose::Result r = compose::check(draft_of(req, {"sign"}), compose_ctx(core));
     JsonWriter w;
     w.begin_object().field("ok", true).field("ready", r.ready).field("procedure", r.procedure);
     write_issues(w, r.issues);
@@ -353,7 +357,7 @@ std::string compose_check(Core& core, std::map<std::string, std::string>& req) {
 // compose_send: refused while any error stands; otherwise takes the serials
 // and queues the message.
 std::string compose_send(Core& core, std::map<std::string, std::string>& req) {
-    compose::Draft d = draft_of(req);
+    compose::Draft d = draft_of(req, {"sign"});
     compose::Context ctx = compose_ctx(core);
     ctx.now = std::time(nullptr);
     compose::Result r = compose::check(d, ctx);
@@ -374,6 +378,10 @@ std::string compose_send(Core& core, std::map<std::string, std::string>& req) {
     }
     r = compose::check(d, ctx, s);
     if (!r.ready) return error_reply("the message changed while it was being sent; check it again");
+    // Signed by this station (station.h) unless the operator says not to.
+    // Codress is signed inside, before it is enciphered.
+    const bool signed_msg = core.identity() && req["sign"] != "N" && r.procedure != "ACP201_CHAT";
+    if (signed_msg) r.message = station::sign(r.message, *core.identity());
     // One copy for each station: a collective from the station book fans out.
     std::string err;
     std::vector<std::string> ids, refused;
@@ -411,6 +419,7 @@ std::string compose_send(Core& core, std::map<std::string, std::string>& req) {
     JsonWriter w;
     w.begin_object().field("ok", true).field("id", ids[0]).field("procedure", r.procedure).field("message", sent_text);
     if (!r.codress_key.empty()) w.field("codress_key", r.codress_key).field("clear", r.message);
+    w.field("signed", signed_msg);
     w.begin_array("ids");
     for (auto& i : ids) w.field("", i);
     w.end_array().begin_array("to_targets");
@@ -556,6 +565,13 @@ std::string parse_traffic(Core& core, std::map<std::string, std::string>& req) {
         .field("text", received::text_of(m))
         .field("warnings", warnings)
         .field("digest", digest::check_name(air));
+    // A station signature (station.h): on the plain copy for codress.
+    station::SigCheck sc =
+        station::check_signature(text_in, [&](const std::string& c) { return core.card_for(c); });
+    w.field("signature", sc.state).field("signer", sc.signer);
+    if (sc.state == "good") w.field("signer_checked", core.identity() && sc.signer == core.identity()->station
+                                                         ? true
+                                                         : core.card_verified(sc.signer));
     if (enciphered) {
         w.field("codress", true)
             .field("codress_key", key_indicator)
@@ -618,6 +634,239 @@ std::string parse_acp127(Core& core, std::map<std::string, std::string>& req) {
         .field("xmt", join_addresses(m.xmt))
         .field("text", m.text)
         .end_object();
+    return w.str();
+}
+
+// Sends a block of text (a card, a sealed tape) to one station as ACP 127
+// plaindress, signed. Returns the message id, or "" with *error.
+std::string send_block(Core& core, const std::string& to, const std::string& text, std::string* error) {
+    std::map<std::string, std::string> req = {{"template", "FREE_FORM"},
+                                              {"procedure", "ACP127_PLAINDRESS"},
+                                              {"prec", "R"},
+                                              {"routing", to},
+                                              {"originator", core.station()},
+                                              {"from", "MARS STATION " + core.station()},
+                                              {"to", to},
+                                              {"to_station", to},
+                                              {"text", text}};
+    JsonValue v;
+    std::string reply = compose_send(core, req);
+    if (!parse_json(reply, v)) {
+        if (error) *error = "could not queue it";
+        return "";
+    }
+    const JsonValue* ok = v.get("ok");
+    const JsonValue* id = v.get("id");
+    if (!ok || !ok->b || !id) {
+        const JsonValue* e = v.get("error");
+        if (error) *error = e && e->type == JsonValue::Type::String ? e->s : "could not queue it";
+        const JsonValue* is = v.get("issues");
+        if (error && is && is->is_array() && !is->arr.empty()) {
+            const JsonValue* t = is->arr[0].get("text");
+            if (t) *error += ": " + t->s;
+        }
+        return "";
+    }
+    return id->s;
+}
+
+// Station keys (station.h): this station's card and backup, other stations'
+// cards, and key tapes sealed to them.
+std::optional<std::string> station_cmd(Core& core, const std::string& cmd, std::map<std::string, std::string>& req) {
+    static const std::set<std::string> kCmds = {"station_card", "station_backup", "station_restore", "card_import",
+                                                "cards_list",   "card_check",     "card_send",       "net_tape",
+                                                "tape_seal"};
+    if (!kCmds.count(cmd)) return std::nullopt;
+    const station::Identity* me = core.identity();
+    if (!me && cmd != "station_restore" && cmd != "cards_list") return error_reply("this station has no keys of its own");
+    std::string err;
+    auto card_for = [&](const std::string& c) { return core.card_for(c); };
+
+    if (cmd == "station_card") {
+        JsonWriter w;
+        w.begin_object()
+            .field("ok", true)
+            .field("station", me->station)
+            .field("fingerprint", station::fingerprint(station::card_of(*me)))
+            .field("card", station::format_card(*me))
+            .end_object();
+        return w.str();
+    }
+    if (cmd == "station_backup") {
+        std::string out;
+        bool ok = station::backup(*me, req["passphrase"], out, &err);
+        crypto::wipe(req["passphrase"]);
+        if (!ok) return error_reply(err);
+        core.note("an encrypted backup of the station keys was made");
+        JsonWriter w;
+        w.begin_object().field("ok", true).field("backup", out).end_object();
+        return w.str();
+    }
+    if (cmd == "station_restore") {
+        station::Identity id;
+        bool ok = station::restore(req["text"], req["passphrase"], id, &err);
+        crypto::wipe(req["passphrase"]);
+        if (!ok) return error_reply(err);
+        if (id.station != core.station()) {
+            id.wipe();
+            return error_reply("that backup is for " + id.station + ", not this station");
+        }
+        ok = core.replace_identity(id, &err);
+        std::string fp = station::fingerprint(station::card_of(id));
+        id.wipe();
+        if (!ok) return error_reply(err);
+        JsonWriter w;
+        w.begin_object().field("ok", true).field("fingerprint", fp).end_object();
+        return w.str();
+    }
+    if (cmd == "card_import") {
+        std::string text = req["text"], source = req["source"].empty() ? "pasted" : req["source"];
+        if (!req["id"].empty()) {
+            auto m = core.get(req["id"]);
+            if (!m) return error_reply("no message with that id");
+            text = m->body;
+            source = "message " + m->id + " from " + m->src;
+        }
+        station::Card c;
+        std::string what;
+        if (!core.add_card(text, source, req["replace"] == "Y", c, what, &err)) return error_reply(err);
+        JsonWriter w;
+        w.begin_object()
+            .field("ok", true)
+            .field("station", c.station)
+            .field("fingerprint", station::fingerprint(c))
+            .field("result", what)
+            .field("checked", core.card_verified(c.station))
+            .field("next", core.card_verified(c.station)
+                               ? std::string()
+                               : "Read the fingerprint back with " + c.station + " by voice, then card_check it.")
+            .end_object();
+        return w.str();
+    }
+    if (cmd == "cards_list") {
+        JsonWriter w;
+        w.begin_object().field("ok", true);
+        if (me) w.field("station", me->station).field("fingerprint", station::fingerprint(station::card_of(*me)));
+        w.begin_array("cards");
+        for (auto& c : core.cards())
+            w.begin_object()
+                .field("station", c.station)
+                .field("fingerprint", c.fingerprint)
+                .field("checked", c.verified)
+                .field("source", c.source)
+                .field("added", static_cast<long long>(c.added))
+                .end_object();
+        w.end_array().end_object();
+        return w.str();
+    }
+    if (cmd == "card_check") {
+        if (!core.verify_card(req["station"], req["fingerprint"], &err)) return error_reply(err);
+        JsonWriter w;
+        w.begin_object().field("ok", true).field("station", req["station"]).field("checked", true).end_object();
+        return w.str();
+    }
+    if (cmd == "card_send") {
+        std::string id = send_block(core, req["to"], station::format_card(*me), &err);
+        if (id.empty()) return error_reply(err);
+        JsonWriter w;
+        w.begin_object().field("ok", true).field("id", id).end_object();
+        return w.str();
+    }
+    // net_tape: the keymaster makes a net's tape, loads it here, and seals
+    // one copy to each member whose card it holds; send=Y queues each copy
+    // to its station over the air.
+    // tape_seal: seals a tape the operator has (from pna-keymaster) to one station.
+    std::string tape_text, net, tape_id;
+    std::vector<std::string> members;
+    if (cmd == "net_tape") {
+        keys::Keyring* kr = core.keyring();
+        if (!kr) return error_reply("this station has no keyring");
+        net = req["net"];
+        for (auto& c : net) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+        int64_t now = kr->now();
+        int64_t start = now - now % 86400;  // today, 0000Z
+        if (!req["start"].empty()) {
+            std::string st = req["start"];
+            if (st.size() == 8) st += "0000";
+            if (st.back() != 'Z') st += "Z";
+            if (!keys::parse_time(st, start)) return error_reply("start must be YYYYMMDD or YYYYMMDDHHMM, UTC");
+        }
+        int days = 31, period = 24;
+        try {
+            if (!req["days"].empty()) days = std::stoi(req["days"]);
+            if (!req["period_hours"].empty()) period = std::stoi(req["period_hours"]);
+        } catch (...) {
+            return error_reply("days and period_hours must be numbers");
+        }
+        keys::Tape t;
+        if (!keys::make_tape(net, start, days, period, now, t, &err)) return error_reply(err);
+        tape_text = keys::format_tape(t);
+        for (auto& k : t.keys) crypto::wipe(k.secret);
+        tape_id = t.tape;
+        keys::ImportResult ir;
+        if (!kr->import_tape(tape_text, ir, &err)) {
+            crypto::wipe(tape_text);
+            return error_reply("the new tape did not load here: " + err);
+        }
+        core.note("key tape " + tape_id + " for " + net + " made here: " + std::to_string(ir.added) + " key(s) loaded");
+        std::string who = req["members"];
+        std::vector<std::string> named;
+        {
+            std::string cur;
+            for (char c : who + " ") {
+                if (c == ' ' || c == ',') {
+                    if (!cur.empty()) named.push_back(cur);
+                    cur.clear();
+                } else {
+                    cur += static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+                }
+            }
+        }
+        // A name in the station book (a collective) stands for its stations.
+        for (auto& n : named) {
+            std::vector<std::string> t2 = core.ops() ? core.ops()->send_targets(n) : std::vector<std::string>{};
+            if (t2.empty()) t2.push_back(n);
+            for (auto& x : t2)
+                if (x != me->station && std::find(members.begin(), members.end(), x) == members.end())
+                    members.push_back(x);
+        }
+    } else {  // tape_seal
+        tape_text = req["text"];
+        keys::Tape t;
+        if (!keys::parse_tape(tape_text, t, &err)) return error_reply("not a key tape: " + err);
+        for (auto& k : t.keys) crypto::wipe(k.secret);
+        net = t.net;
+        tape_id = t.tape;
+        members.push_back(req["to"]);
+    }
+    JsonWriter w;
+    w.begin_object().field("ok", true).field("net", net).field("tape", tape_id).begin_array("sealed");
+    std::vector<std::string> no_card;
+    for (auto& m : members) {
+        auto c = card_for(m);
+        if (!c) {
+            no_card.push_back(m);
+            continue;
+        }
+        std::string sealed;
+        if (!station::seal_tape(tape_text, net, tape_id, *me, *c, sealed, &err)) {
+            no_card.push_back(m + " (" + err + ")");
+            continue;
+        }
+        w.begin_object().field("station", m).field("checked", core.card_verified(m)).field("text", sealed);
+        if (req["send"] == "Y") {
+            std::string e, id = send_block(core, m, sealed, &e);
+            w.field("id", id);
+            if (id.empty()) w.field("error", e);
+        }
+        w.end_object();
+    }
+    crypto::wipe(tape_text);
+    w.end_array().begin_array("no_card");
+    for (auto& n : no_card) w.field("", n);
+    w.end_array().end_object();
+    if (cmd == "net_tape" && !members.empty())
+        core.note("key tape " + tape_id + " sealed to " + std::to_string(members.size() - no_card.size()) + " station(s)");
     return w.str();
 }
 
@@ -826,7 +1075,7 @@ std::string ApiServer::handle(Core& core, const std::string& line) {
     }
 
     // Codress keys (keys.h). Key bytes never leave the core.
-    if (cmd == "key_import" || cmd == "keys_list" || cmd == "key_zeroize") {
+    if (cmd == "key_import" || cmd == "keys_list" || cmd == "key_zeroize" || cmd == "key_open") {
         keys::Keyring* kr = core.keyring();
         if (!kr) return error_reply("this station has no keyring");
         std::string err;
@@ -842,6 +1091,40 @@ std::string ApiServer::handle(Core& core, const std::string& line) {
                 .field("ok", true)
                 .field("net", r.net)
                 .field("tape", r.tape)
+                .field("added", r.added)
+                .field("already", r.already)
+                .field("expired", r.expired)
+                .end_object();
+            return w.str();
+        }
+        if (cmd == "key_open") {
+            // A sealed key tape (station.h), from a stored message or pasted text.
+            if (!core.identity()) return error_reply("this station has no keys of its own to open a sealed tape with");
+            std::string text = req["text"];
+            if (!req["id"].empty()) {
+                auto m = core.get(req["id"]);
+                if (!m) return error_reply("no message with that id");
+                text = m->body;
+            }
+            std::string tape;
+            station::SealedHead h;
+            if (!station::open_tape(text, *core.identity(), [&](const std::string& c) { return core.card_for(c); }, tape,
+                                    h, &err))
+                return error_reply("sealed key tape not opened: " + err);
+            keys::ImportResult r;
+            bool ok = kr->import_tape(tape, r, &err);
+            crypto::wipe(tape);
+            if (!ok) return error_reply("the sealed tape opened but did not load: " + err);
+            bool checked = core.card_verified(h.from);
+            core.note("sealed key tape " + r.tape + " for " + r.net + " from " + h.from + " opened and loaded: " +
+                      std::to_string(r.added) + " key(s) added");
+            JsonWriter w;
+            w.begin_object()
+                .field("ok", true)
+                .field("net", r.net)
+                .field("tape", r.tape)
+                .field("from", h.from)
+                .field("from_checked", checked)
                 .field("added", r.added)
                 .field("already", r.already)
                 .field("expired", r.expired)
@@ -871,11 +1154,13 @@ std::string ApiServer::handle(Core& core, const std::string& line) {
         return w.str();
     }
 
+    if (auto r = station_cmd(core, cmd, req)) return *r;
+
     if (auto r = handle_ops(core, cmd, req)) return *r;
 
     return error_reply(
         "unknown cmd; use status, send, list, get, queue, log, send_acp127, send_acp126, send_chat, parse_acp127, "
-        "parse_traffic, compose_templates, compose_form, compose_check, compose_send, compose_advise, key_import, keys_list, key_zeroize, or the book's calls (docs/api.md): book_*, net_*, sched_*, duty_*, log_add, station_log, report_monthly");
+        "parse_traffic, compose_templates, compose_form, compose_check, compose_send, compose_advise, key_import, keys_list, key_zeroize, key_open, station_card, station_backup, station_restore, card_import, cards_list, card_check, card_send, net_tape, tape_seal, or the book's calls (docs/api.md): book_*, net_*, sched_*, duty_*, log_add, station_log, report_monthly");
 }
 
 }  // namespace pna

@@ -144,6 +144,23 @@ bool bytes_of(const std::string& g, std::string& out) {
 
 }  // namespace
 
+std::vector<std::string> to_groups(const std::string& bytes) {
+    std::vector<std::string> g;
+    for (size_t i = 0; i + kGroupBytes <= bytes.size(); i += kGroupBytes)
+        g.push_back(group_of(reinterpret_cast<const unsigned char*>(bytes.data()) + i));
+    return g;
+}
+
+bool from_groups(const std::vector<std::string>& groups, std::string& bytes, std::string* error) {
+    bytes.clear();
+    for (size_t i = 0; i < groups.size(); ++i)
+        if (!bytes_of(groups[i], bytes)) {
+            crypto::wipe(bytes);
+            return fail(error, "group " + std::to_string(i + 1) + " is garbled (" + groups[i] + ")");
+        }
+    return true;
+}
+
 std::string indicator_of(const std::string& text) {
     Lines L = split(text);
     size_t i = find_fl5(L);

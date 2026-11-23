@@ -4,6 +4,7 @@
 
 #include "frame.h"
 #include "keys.h"
+#include "station.h"
 #include "link_monitor.h"
 #include "ops.h"
 #include "modem.h"
@@ -82,6 +83,27 @@ public:
     std::optional<std::pair<std::string, std::string>> clear(const std::string& id);
     // Writes a line to the station's event log (key loads and zeroizes).
     void note(const std::string& text);
+
+    // The station's own keypair (station.h). Set before start(); none: no
+    // signing, no cards, no sealed tapes.
+    void set_identity(std::shared_ptr<station::Identity> id, std::string path) {
+        id_ = std::move(id);
+        id_path_ = std::move(path);
+    }
+    const station::Identity* identity() const { return id_.get(); }
+    // Replaces the keypair (a restore from backup) and saves it.
+    bool replace_identity(const station::Identity& id, std::string* error);
+    // Cards of other stations. card_for() gives this station's own card too.
+    std::optional<station::Card> card_for(const std::string& call);
+    // Adds a card. A station already held with other keys is refused unless
+    // replace is set (a new card for a rebuilt station); then it must be
+    // checked again. *what is "added", "same" or "replaced".
+    bool add_card(const std::string& text, const std::string& source, bool replace, station::Card& card,
+                  std::string& what, std::string* error);
+    std::vector<Store::CardRow> cards();
+    // The operator read the fingerprint back with the station by voice.
+    bool verify_card(const std::string& call, const std::string& fingerprint, std::string* error);
+    bool card_verified(const std::string& call);
     std::vector<Message> list(int limit);
     std::optional<Message> get(const std::string& id);
     std::vector<Message> queue(int limit);
@@ -114,6 +136,8 @@ private:
     std::shared_ptr<LinkMonitor> link_;
     std::shared_ptr<Ops> ops_;
     std::shared_ptr<keys::Keyring> keys_;
+    std::shared_ptr<station::Identity> id_;
+    std::string id_path_;
     std::set<std::string> told_waiting_;  // messages already logged as waiting for a link
     std::string told_clock_;              // the clock source last logged
     std::chrono::steady_clock::time_point next_sched_{};  // when to look at net schedules again

@@ -8,6 +8,7 @@
 #include "compose.h"
 #include "config.h"
 #include "core.h"
+#include "station.h"
 #include "greybeard_modem.h"
 #include "link_monitor.h"
 #include "ops.h"
@@ -99,6 +100,20 @@ bool start_station(Station& s, CoreConfig cfg, std::unique_ptr<ModemDriver> mode
         std::string err;
         if (!kr->load(&err)) log_line(name, "codress keys not loaded (" + err + "): import the key tape again");
         s.core->set_keyring(kr);
+        // The station's own keypair (station.h): made here the first time.
+        auto id = std::make_shared<station::Identity>();
+        bool exists = false;
+        std::string ip = kp + ".id";
+        if (!station::load_identity(ip, *id, &exists, &err)) {
+            log_line(name, "station keys not loaded (" + err + ")");
+        } else if (!exists || id->station != name) {
+            if (exists) log_line(name, "station keys in " + ip + " are for " + id->station + ", not " + name + ": left alone");
+            else if (station::make_identity(name, static_cast<int64_t>(std::time(nullptr)), *id, &err) &&
+                     station::save_identity(ip, *id, &err))
+                log_line(name, "station keys made: fingerprint " + station::fingerprint(station::card_of(*id)));
+            else log_line(name, "station keys not made (" + err + ")");
+        }
+        if (!id->station.empty() && id->station == name) s.core->set_identity(id, ip);
     }
     s.core->on_log([name](const std::string& t) { log_line(name, t); });
     s.core->start();

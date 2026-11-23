@@ -8,6 +8,11 @@
 //   appliance-cli [--port 4100] keys import FILE     load a key tape (from its USB stick)
 //   appliance-cli [--port 4100] keys list            the codress keys held (never the keys themselves)
 //   appliance-cli [--port 4100] keys zeroize IND|TAPE
+//   appliance-cli [--port 4100] keys open FILE|ID    load a key tape sealed to this station
+//   appliance-cli [--port 4100] station card         this station's card and fingerprint
+//   appliance-cli [--port 4100] cards import FILE|ID another station's card
+//   appliance-cli [--port 4100] cards list
+//   appliance-cli [--port 4100] cards check CALL "FINGERPRINT"   after reading it back by voice
 //
 // "api" sends any call in docs/api.md: appliance-cli api net_callup who=all.
 // A value with spaces goes in quotes; \n in a value is a new line.
@@ -35,7 +40,9 @@ int main(int argc, char** argv) {
     if (i >= argc) {
         std::cerr << "usage: appliance-cli [--port N] status | send --to B [--prec R] TEXT | list [N] | get ID\n"
                      "                    | api CMD [key=value ...] | keys import FILE | keys list\n"
-                     "                    | keys zeroize IND|TAPE\n";
+                     "                    | keys zeroize IND|TAPE | keys open FILE|ID\n"
+                     "                    | station card | cards import FILE|ID [--replace] | cards list\n"
+                     "                    | cards check CALL FINGERPRINT\n";
         return 2;
     }
     std::string cmd = argv[i++];
@@ -97,8 +104,45 @@ int main(int argc, char** argv) {
         } else if (sub == "zeroize" && i < argc) {
             w = JsonWriter();
             w.begin_object().field("cmd", "key_zeroize").field("which", std::string(argv[i]));
+        } else if (sub == "open" && i < argc) {
+            w = JsonWriter();
+            w.begin_object().field("cmd", "key_open");
+            std::ifstream f(argv[i], std::ios::binary);
+            if (f) {
+                std::ostringstream ss;
+                ss << f.rdbuf();
+                w.field("text", ss.str());
+            } else {
+                w.field("id", std::string(argv[i]));
+            }
         } else {
-            std::cerr << "keys import FILE | keys list | keys zeroize IND|TAPE\n";
+            std::cerr << "keys import FILE | keys list | keys zeroize IND|TAPE | keys open FILE|ID\n";
+            return 2;
+        }
+    } else if (cmd == "station") {
+        w = JsonWriter();
+        w.begin_object().field("cmd", "station_card");
+    } else if (cmd == "cards") {
+        std::string sub = i < argc ? argv[i++] : "";
+        w = JsonWriter();
+        if (sub == "import" && i < argc) {
+            w.begin_object().field("cmd", "card_import");
+            std::ifstream f(argv[i], std::ios::binary);
+            if (f) {
+                std::ostringstream ss;
+                ss << f.rdbuf();
+                w.field("text", ss.str()).field("source", std::string("file ") + argv[i]);
+            } else {
+                w.field("id", std::string(argv[i]));
+            }
+            if (i + 1 < argc && std::string(argv[i + 1]) == "--replace") w.field("replace", "Y");
+        } else if (sub == "list") {
+            w.begin_object().field("cmd", "cards_list");
+        } else if (sub == "check" && i + 1 < argc) {
+            w.begin_object().field("cmd", "card_check").field("station", std::string(argv[i])).field(
+                "fingerprint", std::string(argv[i + 1]));
+        } else {
+            std::cerr << "cards import FILE|ID [--replace] | cards list | cards check CALL FINGERPRINT\n";
             return 2;
         }
     } else if (cmd == "list" && i < argc) {

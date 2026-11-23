@@ -66,7 +66,7 @@ With the station book on, `status` also has `on_duty`, `net` (the open net) and
 ```
 {"ok":true,
  "procedures":[{"id":"16L_P2P_FULL","title":"16L station to station, full","summary":"...","available":true}, ...,
-               {"id":"ACP127_CODRESS",...,"available":false,"why_not":"Codress needs the MARS cipher, ..."}],
+               {"id":"ACP127_CODRESS",...,"available":false,"why_not":"Codress needs a key: no key for today is loaded ..."}],
  "templates":[{"id":"GENADMIN_SIMPLE","title":"General admin message","summary":"...",
                "procedure":"16L_P2P_FULL","prec":"R","procedures":["16L_P2P_FULL", ...]}, ...]}
 ```
@@ -170,6 +170,12 @@ serial are always the same number) and the message is queued:
 
 A collective queues one copy per station: `ids` and `to_targets` line up, and
 `id` is the first. A station the core refuses is listed in `refused`.
+
+Every message except chat carries the MSC digest and is signed with this
+station's key; `"sign":"N"` sends it unsigned, and `signed` in the reply says
+which. Codress (`ACP127_CODRESS`) takes `key`, one of the indicators
+`compose_form` offers, and each copy is enciphered under it; `codress_key` in
+the reply names the key used.
 
 ## compose_advise
 
@@ -337,3 +343,64 @@ Returns `id`, `net`, `called` and `message`, and logs the call-up.
 A message counts as an exercise when one of its lines starts with EXERCISE. The
 report's layout is the appliance's own; MARS's monthly report form wasn't
 available to copy.
+
+## Keys, cards and signatures
+
+docs/crypto.md explains each of these. Key and passphrase text is wiped from
+memory after use and never written to the log.
+
+### What parse_traffic adds
+
+- `digest`: `pass`, `fail` or `none`. On `fail`, `possibly_garbled` is true and
+  `repeat_request` holds a ready SVC request: `template`, `to_station`, `refs`
+  and `svc_text`, for `compose_form`/`compose_send`.
+- `signature`: `good`, `bad`, `unknown` (no card held for the signer) or
+  `none`; `signer`, and `signer_checked` (that card was checked by voice).
+- For codress: `codress` is true, `codress_key` is the indicator, and
+  `deciphered` says whether this station read it. When it did, the fields
+  describe the inner message, `inner_digest` is its digest check, and the
+  outer digest stays in `digest`. When it didn't, `why_not_deciphered` says
+  why.
+
+### Net keys
+
+- `key_import {text}`: loads a key tape. Returns `net`, `tape`, `added`,
+  `already` and `expired`.
+- `key_open {id | text}`: opens a sealed key tape (from a stored message or
+  pasted text) and loads it. Returns the same as `key_import`, plus `from` (the
+  keymaster) and `from_checked`.
+- `keys_list`: `keys`, each with `indicator`, `net`, `tape`, `from`, `until`
+  and `state`.
+- `key_zeroize {which}`: wipes one key (`QXR01`) or a whole tape (`QXR`).
+  Returns `zeroized`, the count.
+
+### This station's keys
+
+- `station_card`: `station`, `fingerprint` and `card`, the text to hand out.
+- `station_backup {passphrase}`: `backup`, the station keys enciphered with the
+  passphrase (12 characters or more).
+- `station_restore {text, passphrase}`: puts a backup back. It must be this
+  station's. Returns `fingerprint`.
+
+### Other stations' cards
+
+- `card_import {text | id, source, replace}`: loads a card from text or a
+  stored message. Returns `station`, `fingerprint`, `result` (`added`, `same`
+  or `replaced`), `checked` and `next`. A different card for a station already
+  held is refused unless `replace` is `Y`.
+- `cards_list`: this station and its `fingerprint`, and `cards`, each with
+  `station`, `fingerprint`, `checked`, `source` and `added`.
+- `card_check {station, fingerprint}`: marks a card checked when the
+  fingerprint read back by voice matches. Case and spaces don't matter.
+- `card_send {to}`: sends this station's card as a plain message. Returns `id`.
+
+### Keymaster
+
+- `net_tape {net, start, days, period_hours, members, send}`: makes a tape for
+  `net` (`start` is YYYYMMDD or YYYYMMDDHHMM UTC, default today 0000Z; 31 days
+  of 24-hour keys by default), loads it here, and seals a copy to each station
+  in `members` (calls or station-book names, spaces or commas). Returns `net`,
+  `tape`, `sealed` (each with `station`, `checked` and `text`, plus `id` when
+  `send` is `Y`) and `no_card` (members whose card isn't held).
+- `tape_seal {text, to}`: seals a tape made with `pna-keymaster` to one
+  station. Returns the same shape.
