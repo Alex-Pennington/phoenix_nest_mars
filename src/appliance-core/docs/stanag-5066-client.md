@@ -1,18 +1,27 @@
 # Design note: the engine as a STANAG 5066 client
 
 Status: design only. Nothing here is built. It waits on greybeard-ale saying
-where STANAG 5066 lives on the appliance.
+where STANAG 5066 lives on the appliance and who drives the modem's 110D
+Appendix A interface.
 
 ## The requirement
 
 Alex, Nov 23 2026: "make sure were meeting these requirements STANAG 5066 ARQ,
 110D Appendix A, single-channel 3G ALE".
 
-All three are on the radio side, so they are greybeard-ale's scope: the
-MIL-STD-188-110D Appendix A waveforms, single-channel 3G ALE to set up the
-link, and a STANAG 5066 node (the data link with ARQ) above the modem. This
-note covers only what the message engine changes so that it hands messages to
-that 5066 node, rather than writing a burst for the modem itself.
+Alex settled what "110D Appendix A" means the same day: it is the LAN
+interface between the modem and its data terminal equipment (DTE), as on
+Steve's roadmap, not the Appendix D waveforms. So the three requirements
+split like this:
+
+- **greybeard-ale's scope:** the waveforms, single-channel 3G ALE to set up
+  the link, the modem's side of the Appendix A LAN interface, and a STANAG
+  5066 node (the data link with ARQ).
+- **Ours:** the message engine as the terminal. It hands messages to the 5066
+  node, or drives the modem over Appendix A where there's no 5066 node in
+  between, rather than writing a burst WAV for the modem itself.
+
+This note covers the engine's side of both.
 
 ## Today
 
@@ -72,6 +81,34 @@ delivery, a piece either arrives in order or the whole send is rejected.
 Joining is therefore a counter and a buffer, with no retransmission logic of
 our own.
 
+## 110D Appendix A: the engine as the modem's terminal
+
+Appendix A is the modem's LAN control and data interface. In MSC terms, the
+engine takes the place MSC's terminal takes, and greybeard-ale's modem offers
+the interface. Where it fits:
+
+- **Under 5066.** Whatever runs the 5066 node is the modem's Appendix A
+  client, and the engine talks SIS to the node, as above. This is the usual
+  stack, and if greybeard-ale's node owns the modem link, the engine never
+  speaks Appendix A itself.
+- **Without 5066.** For one-shot bursts (broadcasts, a net's call-up, or a
+  station with no 5066 node), a second driver, `Appendix A modem`, would send
+  a frame straight to the modem over Appendix A, set the data rate and
+  interleave from the message's precedence and the link quality, and read
+  received data and modem status back. It replaces today's burst-WAV
+  hand-off and is a `ModemDriver` like the others, so nothing above it
+  changes.
+
+Appendix A is also the one place where another station's terminal, such as
+an updated MSC or another team's tool, could plug into the same modem. That
+plugging in is local to the box. Between stations, interop is still over the
+air only.
+
+Before either driver is written, we need from greybeard-ale whether their
+5066 node owns the Appendix A link, and the modem's Appendix A address and
+port. I haven't read the Appendix A text for this note. Its message set gets
+checked against the standard before any code. Nothing is built for it.
+
 ## What stays the same
 
 - **Message-level ACKs.** 5066's client delivery confirm means the far 5066
@@ -106,6 +143,8 @@ the engine adds a reader for that format, as it did for the ACP 127 forms.
    them.
 5. How 3G ALE link set-up and teardown show up to a client, if at all. We
    expect them not to: the node brings the link up when it has traffic.
+6. Whether their 5066 node is the modem's only Appendix A client, or the
+   engine may also drive the modem over Appendix A for bursts outside 5066.
 
 ## Tests, when built
 
