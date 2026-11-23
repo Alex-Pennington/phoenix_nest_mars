@@ -44,6 +44,10 @@ void write_link(JsonWriter& w, const CoreStatus& s) {
         .field("clock_note", clock_note(l, static_cast<long long>(std::time(nullptr))))
         .field("hold_window", l.hold_window)
         .field("links_reported", l.links_reported)
+        .field("links_note", l.socket.empty() ? std::string()
+                             : !l.reachable ? std::string("no link data: greybeard-ale's scanner isn't answering")
+                             : !l.links_reported ? std::string("no link data from greybeard-ale yet")
+                             : std::string())
         .begin_array("stations");
     for (auto& st : l.links)
         w.begin_object().field("station", st.station).field("state", st.state).field("since", st.since)

@@ -10,8 +10,8 @@
 // Per-station link state: greybeard-ale has no link control yet (its stage 6),
 // so ale-scan's status has no such field today. The core reads, when present,
 //   "links": [{"station": "AAR4XY", "state": "linked", "since": UNIX}, ...]
-// (or one such object as "link"). That shape is the core's proposal to
-// greybeard-ale, not its interface; tools/stub_ale_scan.py answers with it.
+// (or one such object as "link"). greybeard-ale agreed this shape and leaves
+// the field out until its link controller exists; tools/stub_ale_scan.py answers with it.
 // Until a station is reported linked, link_up() is false for it.
 #pragma once
 

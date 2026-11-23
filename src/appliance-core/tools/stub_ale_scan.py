@@ -5,8 +5,8 @@ The real one is ale-scan --control PATH (greybeard-ale src/control_socket.h):
 one text command per line, one JSON line back. This stand-in answers "status"
 in ale-scan's shape, minus its channel list (it has no channels and no
 frequencies), plus the per-station "links" field that the core reads.
-greybeard-ale has no link control yet; "links" is the core's proposal to it,
-not greybeard-ale's interface.
+greybeard-ale has no link control yet; "links" is the shape greybeard-ale agreed;
+ale-scan leaves it out until its link controller exists.
 
 Stand-in only, to drive a test by hand or from a script:
     link STATION STATE      set a station's link: linked, calling, down, ...

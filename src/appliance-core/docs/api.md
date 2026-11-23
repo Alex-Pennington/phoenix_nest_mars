@@ -48,10 +48,11 @@ themselves.
   words ("set by WWV 17 min ago", or "not set by WWV yet: times come from this
   computer's clock"). The log says when the clock source changes. The core never
   shows ale-scan's channel list.
-- `stations`: per-station links, when the source reports them. ale-scan does not
-  yet (greybeard-ale's link control is still to come), so today `links_reported`
-  is false and the list is empty. The `links` field the core reads is a proposal
-  to greybeard-ale; `tools/stub_ale_scan.py` answers with it.
+- `stations`: per-station links from ale-scan's `links` field
+  (`[{"station","state","since"}]`, state linked, calling or down), agreed with
+  greybeard-ale. ale-scan leaves the field out until its link controller exists;
+  then `links_reported` is false, the list is empty, and `links_note` says "no
+  link data from greybeard-ale yet". `tools/stub_ale_scan.py` sends the field.
 
 ## compose_templates
 
