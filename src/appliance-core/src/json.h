@@ -46,6 +46,7 @@ public:
     JsonWriter& field(const std::string& key, long long v);
     JsonWriter& field(const std::string& key, int v) { return field(key, static_cast<long long>(v)); }
     JsonWriter& field(const std::string& key, bool v);
+    JsonWriter& field_null(const std::string& key);
     const std::string& str() const { return s_; }
 
 private:

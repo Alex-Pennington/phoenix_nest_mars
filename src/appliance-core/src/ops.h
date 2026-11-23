@@ -12,6 +12,7 @@
 
 #include <cstdint>
 #include <functional>
+#include <map>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -91,6 +92,39 @@ struct MonthlyReport {
     std::string text;    // plain report, upper case, lines of 69 or fewer
 };
 
+// A net that meets on a schedule. Times are UTC.
+//   days: DAILY, WEEKDAYS, WEEKENDS, or a comma list of MON..SUN, each with
+//         an optional week of the month in front: 1SAT is the first Saturday,
+//         LSUN the last Sunday. "TUE,THU" or "1SAT,3SAT".
+struct NetSchedule {
+    std::string name;       // the key; the net opens under this name
+    std::string days;       // as above, kept in capitals with commas
+    int start = 0;          // minutes after 0000Z (written HHMM)
+    int minutes = 60;       // how long the net runs
+    std::vector<std::string> roster;  // book names or calls; resolved when it opens
+    bool exercise = false;
+    std::string ncs;        // net control; empty: this station
+    std::string note;
+    bool auto_open = false; // the appliance opens it at the start time
+    int64_t last_start = 0; // the occurrence last opened
+    std::string last_net;   // the net it opened as
+};
+
+// One sitting of a scheduled net.
+struct NetSitting {
+    NetSchedule sched;
+    int64_t start = 0, end = 0;
+    std::string state;      // "upcoming", "due" (started, not opened) or "open"
+    std::string net;        // the open net's id when state is "open"
+};
+
+// "1900" -> 1140. False unless HHMM with HH 00-23 and MM 00-59.
+bool parse_hhmm(const std::string& s, int* minutes);
+// Puts days in the canonical form; false with *error when it can't.
+bool parse_days(const std::string& s, std::string* canon, std::string* error);
+// The first sitting of `days` at `start` (minutes) that starts at or after t.
+int64_t next_start(const std::string& days, int start, int64_t t);
+
 // True if a message body is marked as an exercise: a line that starts with
 // EXERCISE (MARS practice is "EXERCISE EXERCISE EXERCISE" top and bottom).
 bool is_exercise_body(const std::string& body);
@@ -143,6 +177,25 @@ public:
     // records it as checked in by radio, once.
     void heard(const std::string& station);
 
+    // Net schedules.
+    bool sched_put(NetSchedule s, std::string* error);
+    bool sched_remove(const std::string& name);
+    std::optional<NetSchedule> sched_get(const std::string& name);
+    std::vector<NetSchedule> sched_list();
+    // The sitting that matters now for one schedule: the one under way when
+    // it hasn't been closed, else the next.
+    std::optional<NetSitting> sched_sitting(const std::string& name);
+    // Every schedule's sitting, soonest first.
+    std::vector<NetSitting> sched_upcoming(int limit);
+    // Opens the scheduled net now with its roster, net control and exercise
+    // mark. Opened within 30 minutes of a sitting's start (or during it), it
+    // counts as that sitting.
+    std::string sched_open(const std::string& name, std::string* error);
+    // Called by the core every half minute: opens due nets set to open
+    // themselves, and returns what to tell the operator (each once): a net
+    // that starts in 15 minutes, one that is due and not opened.
+    std::vector<std::string> sched_tick();
+
     // Operator duty and turnover.
     bool duty_on(const std::string& op, const std::string& note, std::string* error);
     bool duty_off(const std::string& turnover, std::string* error);
@@ -160,6 +213,8 @@ public:
 private:
     void exec(const char* sql);
     std::optional<Net> load_net(const std::string& id);
+    std::optional<NetSitting> sitting_of(const NetSchedule& s, int64_t now);
+    std::map<std::string, int64_t> told_;  // schedule name + what was said -> sitting start
     std::string canonical(const std::string& station);
     std::string station_;
     std::function<int64_t()> clock_;

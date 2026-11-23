@@ -221,6 +221,20 @@ std::string send_chat(Core& core, std::map<std::string, std::string>& req) {
 compose::Context compose_ctx(Core& core) {
     compose::Context c;
     c.station = core.station();
+    if (Ops* ops = core.ops()) {
+        c.lookup = [ops](const std::string& name) -> std::optional<compose::BookHit> {
+            auto e = ops->book_find(name);
+            if (!e) return std::nullopt;
+            compose::BookHit h;
+            h.name = e->name;
+            h.kind = e->kind;
+            h.ri = e->ri;
+            Resolved why;
+            h.calls = ops->send_targets(e->name, &why);
+            h.unknown = why.unknown;
+            return h;
+        };
+    }
     return c;
 }
 
@@ -312,7 +326,12 @@ std::string compose_check(Core& core, std::map<std::string, std::string>& req) {
     JsonWriter w;
     w.begin_object().field("ok", true).field("ready", r.ready).field("procedure", r.procedure);
     write_issues(w, r.issues);
-    if (r.ready) w.field("preview", r.message).field("to_station", r.to_station).field("prec", std::string(1, r.prec));
+    if (r.ready) {
+        w.field("preview", r.message).field("to_station", r.to_station).field("prec", std::string(1, r.prec));
+        w.begin_array("to_targets");
+        for (auto& t : r.to_targets) w.field("", t);
+        w.end_array();
+    }
     w.end_object();
     return w.str();
 }
@@ -331,7 +350,7 @@ std::string compose_send(Core& core, std::map<std::string, std::string>& req) {
         w.end_object();
         return w.str();
     }
-    if (r.to_station.empty()) return error_reply("no station to send to");
+    if (r.to_targets.empty()) return error_reply("no station to send to");
     compose::Serials s;
     if (!r.channel_counter.empty()) s.channel_serial = static_cast<int>(core.next_counter(r.channel_counter, 999));
     if (!r.serial_counter.empty()) {
@@ -341,11 +360,31 @@ std::string compose_send(Core& core, std::map<std::string, std::string>& req) {
     }
     r = compose::check(d, ctx, s);
     if (!r.ready) return error_reply("the message changed while it was being sent; check it again");
+    // One copy for each station: a collective from the station book fans out.
     std::string err;
-    std::string id = core.submit(r.to_station, r.prec, r.message, &err);
-    if (id.empty()) return error_reply(err);
+    std::vector<std::string> ids, refused;
+    for (auto& t : r.to_targets) {
+        std::string e, id = core.submit(t, r.prec, r.message, &e);
+        if (!id.empty()) {
+            ids.push_back(id);
+        } else {
+            refused.push_back(t + ": " + e);
+            err = e;
+        }
+    }
+    if (ids.empty()) return error_reply(err);
     JsonWriter w;
-    w.begin_object().field("ok", true).field("id", id).field("procedure", r.procedure).field("message", r.message);
+    w.begin_object().field("ok", true).field("id", ids[0]).field("procedure", r.procedure).field("message", r.message);
+    w.begin_array("ids");
+    for (auto& i : ids) w.field("", i);
+    w.end_array().begin_array("to_targets");
+    for (auto& t : r.to_targets) w.field("", t);
+    w.end_array();
+    if (!refused.empty()) {
+        w.begin_array("refused");
+        for (auto& x : refused) w.field("", x);
+        w.end_array();
+    }
     write_issues(w, r.issues);
     w.end_object();
     return w.str();
@@ -586,6 +625,20 @@ std::string ApiServer::handle(Core& core, const std::string& line) {
             auto d = ops->duty_current();
             std::string net = ops->current_net();
             w.field("on_duty", d ? d->op : std::string()).field("net", net);
+            // The scheduled net that matters now: one due or open first, else the next.
+            auto next = ops->sched_upcoming(1);
+            if (next.empty()) {
+                w.field_null("next_net");
+            } else {
+                auto& n = next[0];
+                w.begin_object("next_net")
+                    .field("name", n.sched.name)
+                    .field("state", n.state)
+                    .field("start", static_cast<long long>(n.start))
+                    .field("end", static_cast<long long>(n.end))
+                    .field("net", n.net)
+                    .end_object();
+            }
         }
         w.end_object();
         return w.str();

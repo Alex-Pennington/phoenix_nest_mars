@@ -47,6 +47,7 @@ std::string Core::submit(const std::string& to, char prec, const std::string& bo
     };
     if (!valid_station(to)) return fail("station must be 1-16 characters of A-Z, 0-9 or '-'");
     if (to == cfg_.station) return fail("that is this station");
+    if (is_broadcast(cfg_.station)) return fail("this station can't be called ALL: ALL is the broadcast address");
     if (!valid_prec(prec)) return fail("precedence must be Z, O, P or R");
     if (body.empty()) return fail("message is empty");
     if (body.size() > kMaxBody) return fail("message is longer than " + std::to_string(kMaxBody) + " bytes");
@@ -87,12 +88,13 @@ CoreStatus Core::status() {
         s.link = link_->state();
         if (cfg_.link_gate)
             for (auto& m : store_.queue(1000))
-                if (m.state == "queued" && !link_->link_up(m.dst)) ++s.held_for_link;
+                if (m.state == "queued" && !is_broadcast(m.dst) && !link_->link_up(m.dst)) ++s.held_for_link;
     }
     return s;
 }
 
 bool Core::waits_for_link(const std::string& station) const {
+    if (is_broadcast(station)) return false;
     return cfg_.link_gate && (!link_ || !link_->link_up(station));
 }
 
@@ -127,6 +129,11 @@ void Core::tick() {
             log("", c == "wwv" ? "clock set by WWV" : "clock not set by WWV: times come from this computer's clock");
             told_clock_ = c;
         }
+    }
+    if (ops_ && std::chrono::steady_clock::now() >= next_sched_) {
+        // Scheduled nets: open the ones set to open themselves, say the rest once.
+        next_sched_ = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+        for (auto& line : ops_->sched_tick()) log("", line);
     }
     if (on_air_ || !modem_->ready() || modem_->busy()) return;
 
@@ -189,7 +196,8 @@ void Core::handle_tx_done(bool ok, const std::string& err) {
     }
     if (ok) {
         store_.set_state(f.id, "sent");
-        log(f.id, cfg_.send_acks ? "sent, waiting for ack" : "sent");
+        if (is_broadcast(f.dst)) log(f.id, "sent to all stations, no ack expected");
+        else log(f.id, cfg_.send_acks ? "sent, waiting for ack" : "sent");
         return;
     }
     auto m = store_.get(f.id);
@@ -209,8 +217,13 @@ void Core::handle_rx(const std::string& bytes) {
     for (const Frame& f : parser_.feed(bytes)) {
         // Any frame from a station puts it on frequency: open nets check it in.
         if (ops_ && !f.src.empty()) ops_->heard(f.src);
-        if (f.dst != cfg_.station) {
+        const bool to_all = is_broadcast(f.dst);
+        if (f.dst != cfg_.station && !to_all) {
             log(f.id, "heard traffic for " + f.dst + ", not for us");
+            continue;
+        }
+        if (to_all && f.type == FrameType::Ack) {
+            log(f.id, "heard an ack to ALL from " + f.src + ", ignored");
             continue;
         }
         if (f.type == FrameType::Ack) {
@@ -226,7 +239,8 @@ void Core::handle_rx(const std::string& bytes) {
             continue;
         }
         if (store_.exists(f.id)) {
-            log(f.id, "duplicate from " + f.src + ", acking again");
+            log(f.id, to_all ? "heard the broadcast from " + f.src + " again"
+                             : "duplicate from " + f.src + ", acking again");
         } else {
             Message m;
             m.id = f.id;
@@ -238,9 +252,11 @@ void Core::handle_rx(const std::string& bytes) {
             m.state = "received";
             m.created_at = m.updated_at = now_utc();
             store_.insert(m);
-            log(f.id, std::string("received ") + prec_name(f.prec) + " from " + f.src);
+            log(f.id, std::string("received ") + prec_name(f.prec) + " from " + f.src +
+                          (to_all ? " to all stations" : ""));
         }
-        if (cfg_.send_acks) {
+        // Nobody acks a broadcast: every station on the net would answer at once.
+        if (cfg_.send_acks && !to_all) {
             Frame a;
             a.type = FrameType::Ack;
             a.id = f.id;

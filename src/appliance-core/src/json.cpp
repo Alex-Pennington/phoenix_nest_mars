@@ -270,4 +270,10 @@ JsonWriter& JsonWriter::field(const std::string& k, bool v) {
     return *this;
 }
 
+JsonWriter& JsonWriter::field_null(const std::string& k) {
+    key(k);
+    s_ += "null";
+    return *this;
+}
+
 }  // namespace pna

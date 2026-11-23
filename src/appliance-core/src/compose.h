@@ -20,8 +20,10 @@
 #pragma once
 
 #include <ctime>
+#include <functional>
 #include <map>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -72,10 +74,24 @@ const std::vector<Template>& templates();
 const Procedure* find_procedure(const std::string& id);
 const Template* find_template(const std::string& id);
 
+// What the station book (ops.h) says a name stands for.
+struct BookHit {
+    std::string name;                 // the book's name for it
+    std::string kind;                 // "station" or "collective"
+    std::string ri;                   // its routing indicator, if the book has one
+    std::vector<std::string> calls;   // the calls it sends to over the air
+    std::vector<std::string> unknown; // collective members the book doesn't have
+};
+
 // What the defaults are filled from.
 struct Context {
     std::string station;    // this station's call (the core's station name)
     std::time_t now = 0;    // UTC; 0 means the clock
+    // The station book, when there is one. With it, the operator may write a
+    // book name (a tactical call, a PLA, a collective) where the station to
+    // send to goes, and a plain name with no routing indicator on a TO, INFO
+    // or FM line: check() fills in the call and the routing indicator.
+    std::function<std::optional<BookHit>(const std::string&)> lookup;
 };
 
 // The fields of a template in a procedure (envelope first, then content).
@@ -113,7 +129,10 @@ struct Result {
     std::vector<Issue> issues;
     std::string procedure;           // the procedure used
     char prec = 'R';                 // for the queue
-    std::string to_station;          // over the air
+    std::string to_station;          // over the air: what the operator wrote, or the first addressee
+    // The calls the message goes to over the air: one, or a collective's
+    // stations from the book (one copy each). ALL is the broadcast address.
+    std::vector<std::string> to_targets;
     std::string message;             // VZCZC to NNNN, or the chat line
     // The core counters the serials come from, so the sender can take them:
     std::string channel_counter;     // "acp127.channel.MMM" (wraps at 999); "" for bare VZCZC or chat

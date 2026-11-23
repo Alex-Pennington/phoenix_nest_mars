@@ -31,6 +31,11 @@ themselves.
 
 `advisor` names the helper plugged in with `--advisor`, or is empty.
 
+With the station book on, `status` also has `on_duty`, `net` (the open net) and
+`next_net`, the scheduled net that matters now (see Net schedules), or null:
+
+    "next_net":{"name":"TUESDAY NET","state":"upcoming","start":1795654800,"end":1795658400,"net":""}
+
 `link` is greybeard-ale's link state, read from ale-scan's control socket
 (`--link-socket`):
 
@@ -127,7 +132,21 @@ and can be offered as a one-tap fill. Following only the errors' examples
 makes every template ready (tests/test_compose.cpp).
 
 When there are no errors, the reply has `"ready":true`, `"preview"` (the
-whole message as it will go, serials shown as 1), `"to_station"` and `"prec"`.
+whole message as it will go, serials shown as 1), `"to_station"`, `"to_targets"`
+(the calls it goes to over the air) and `"prec"`.
+
+With the station book, compose understands its names:
+
+- `to_station` may be a book name: a tactical name goes to its station's call,
+  and a collective sends one copy to each of its stations. When `to_station`
+  is empty, the first of the routing indicators or called stations is looked
+  up the same way, so CALLS IRONSIDE goes to the call the book gives
+  IRONSIDE. A tip says where it goes; a collective member the book doesn't have
+  gets a warning and goes as written.
+- CALLS NET (or ALL), with no `to_station`, is the whole net: one broadcast to
+  `ALL`, which every station takes and none acks.
+- A TO, INFO or FM line with a plain name and no routing indicator gets the
+  book's RI for that name (IRONSIDE becomes RXXXB/IRONSIDE), with a tip.
 
 What the checks catch, in plain words: empty required fields; bad
 date-time groups and times; call signs and RIs in lower case or malformed; a
@@ -147,7 +166,10 @@ Same request as `compose_check`. Refused with the issues while any error
 stands. Otherwise the serials are taken (the station serial and the MSGID
 serial are always the same number) and the message is queued:
 
-`{"ok":true,"id":"AAR4XX-17","procedure":"16L_P2P_ABBR","message":"VZCZC\r\r\n...NNNN","issues":[...]}`
+`{"ok":true,"id":"AAR4XX-17","ids":["AAR4XX-17"],"to_targets":["AAR4XY"],"procedure":"16L_P2P_ABBR","message":"VZCZC\r\r\n...NNNN","issues":[...]}`
+
+A collective queues one copy per station: `ids` and `to_targets` line up, and
+`id` is the first. A station the core refuses is listed in `refused`.
 
 ## compose_advise
 
@@ -228,7 +250,8 @@ Times are UTC unix seconds.
 
 `send` uses the book: a station name goes to its call, and a collective sends
 one copy to each member, returned as `ids`. A name the book doesn't have goes as
-written.
+written. `send` to `ALL` is a broadcast: every station takes it, none acks it,
+and it is marked sent once it is on the air. No station may be called ALL.
 
 ### Nets
 
@@ -247,6 +270,45 @@ written.
 frame from a station (a message, an ACK or traffic for someone else), every open
 net checks that station in with `via: "radio"`. A station that checked out
 isn't put back in by radio. `status` adds `net`, the open net's id.
+
+### Net schedules
+
+- `sched_put` `{name, days, time, minutes, roster, exercise, ncs, note,
+  auto_open}`: add or replace a schedule. `time` is the start in UTC as HHMM.
+  `minutes` is how long the net runs (default 60). `days` is DAILY, WEEKDAYS,
+  WEEKENDS or a list like `TUE,THU`; put 1 to 5 or L in front of a day for that
+  week of the month (`1SAT` the first Saturday, `LSUN` the last Sunday).
+- `sched_list` returns `schedules`, each with its current sitting: `state` is
+  `upcoming`, `due` (started and not opened) or `open`, with `start`, `end`
+  and `net`.
+- `sched_next {limit}` returns `sittings`: due and open ones first, then the
+  next to start.
+- `sched_open {name}` opens the net now with the schedule's roster, net control
+  and exercise mark. Opened up to 30 minutes early, or during the sitting, it
+  counts as that sitting.
+- `sched_remove {name}`.
+
+The core looks at the schedules every 30 seconds. It logs, once each, a net
+that starts in 15 minutes and one that is due and not open. A schedule with
+`auto_open` opens itself at the start time. The operator opens the others.
+
+### Net call-up
+
+`net_callup` `{net, who, text, prec, unclas, channel}`: one
+ACP 126 SIMPLE message from this station to `ALL`, the broadcast address. Every
+station that hears it takes it and none acks it, and the sender marks it sent
+once it is on the air. `who` is `missing` (default: roster stations not yet
+checked in) or `all`. The called stations go on the call line when they fit
+in 69 characters, else the call line is NET. The text is the appliance's own
+wording:
+
+    NET TUESDAY NET IS OPEN. NET CONTROL IS NCS-A.
+    NOT YET CHECKED IN: STA-C STA-D
+    CHECK IN WITH NET CONTROL.
+
+An exercise net puts EXERCISE EXERCISE EXERCISE first and last. `text` adds a
+line. No UNCLAS line unless `unclas` is true, as in the samples' net roster.
+Returns `id`, `net`, `called` and `message`, and logs the call-up.
 
 ### Duty and the station log
 

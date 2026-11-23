@@ -1,6 +1,8 @@
 #include "api_ops.h"
 
+#include "acp126.h"
 #include "core.h"
+#include "frame.h"
 #include "json.h"
 #include "ops.h"
 
@@ -91,13 +93,57 @@ bool to_int(const std::string& s, long long* v) {
     }
 }
 
+std::string hhmm(int m) {
+    char b[24];
+    std::snprintf(b, sizeof b, "%02d%02d", m / 60, m % 60);
+    return b;
+}
+
+void write_sched(JsonWriter& w, const NetSchedule& s, const std::optional<NetSitting>& st) {
+    w.begin_object()
+        .field("name", s.name)
+        .field("days", s.days)
+        .field("time", hhmm(s.start))
+        .field("minutes", s.minutes);
+    strings(w, "roster", s.roster);
+    w.field("exercise", s.exercise).field("ncs", s.ncs).field("note", s.note).field("auto_open", s.auto_open);
+    if (st)
+        w.field("state", st->state)
+            .field("start", static_cast<long long>(st->start))
+            .field("end", static_cast<long long>(st->end))
+            .field("net", st->net);
+    else
+        w.field("state", "none");
+    w.end_object();
+}
+
+// The call-up text: our own plain wording, in capitals, a line each.
+std::string callup_text(const Net& n, const std::vector<std::string>& called, bool listed_missing,
+                        const std::string& extra) {
+    std::vector<std::string> L;
+    if (n.exercise) L.push_back("EXERCISE EXERCISE EXERCISE");
+    L.push_back("NET " + n.name + " IS OPEN. NET CONTROL IS " + n.ncs + ".");
+    if (listed_missing && !called.empty()) {
+        std::string line = "NOT YET CHECKED IN:";
+        for (auto& c : called) line += " " + c;
+        L.push_back(line);
+    }
+    L.push_back("CHECK IN WITH NET CONTROL.");
+    if (!book_key(extra).empty()) L.push_back(book_key(extra));
+    if (n.exercise) L.push_back("EXERCISE EXERCISE EXERCISE");
+    std::string out;
+    for (size_t i = 0; i < L.size(); ++i) out += (i ? "\n" : "") + L[i];
+    return out;
+}
+
 }  // namespace
 
 std::optional<std::string> handle_ops(Core& core, const std::string& cmd, std::map<std::string, std::string>& req) {
     static const char* kCmds[] = {"book_put", "book_remove", "book_get", "book_list", "book_import", "book_export",
                                   "book_resolve", "net_open", "net_checkin", "net_checkout", "net_close", "net_status",
                                   "net_list", "duty_on", "duty_off", "duty_status", "log_add", "station_log",
-                                  "report_monthly"};
+                                  "report_monthly", "sched_put", "sched_remove", "sched_list", "sched_next",
+                                  "sched_open", "net_callup"};
     bool ours = false;
     for (auto c : kCmds)
         if (cmd == c) ours = true;
@@ -295,6 +341,105 @@ std::optional<std::string> handle_ops(Core& core, const std::string& cmd, std::m
             .field("beadwindows", r.beadwindows)
             .field("text", r.text)
             .end_object();
+        return w.str();
+    }
+
+    if (cmd == "sched_put") {
+        NetSchedule sc;
+        sc.name = req["name"];
+        sc.days = req["days"];
+        if (!parse_hhmm(req["time"], &sc.start)) return err_reply("time: write the start as HHMM in UTC, like 1900");
+        long long minutes = 60;
+        if (!req["minutes"].empty() && !to_int(req["minutes"], &minutes)) return err_reply("minutes must be a number");
+        sc.minutes = static_cast<int>(minutes);
+        sc.roster = list_of(req["roster"], ',');
+        sc.exercise = truthy(req["exercise"]);
+        sc.ncs = req["ncs"];
+        sc.note = req["note"];
+        sc.auto_open = truthy(req["auto_open"]);
+        if (!ops->sched_put(sc, &err)) return err_reply(err);
+        auto saved = ops->sched_get(sc.name);
+        JsonWriter w;
+        w.begin_object().field("ok", true).begin_array("schedules");
+        if (saved) write_sched(w, *saved, ops->sched_sitting(saved->name));
+        w.end_array().end_object();
+        return w.str();
+    }
+    if (cmd == "sched_remove")
+        return ops->sched_remove(req["name"]) ? ok_reply() : err_reply("no schedule by that name");
+    if (cmd == "sched_list") {
+        JsonWriter w;
+        w.begin_object().field("ok", true).begin_array("schedules");
+        for (auto& sc : ops->sched_list()) write_sched(w, sc, ops->sched_sitting(sc.name));
+        w.end_array().end_object();
+        return w.str();
+    }
+    if (cmd == "sched_next") {
+        long long limit = 5;
+        if (!req["limit"].empty() && !to_int(req["limit"], &limit)) return err_reply("limit must be a number");
+        JsonWriter w;
+        w.begin_object().field("ok", true).begin_array("sittings");
+        for (auto& st : ops->sched_upcoming(static_cast<int>(limit < 1 || limit > 100 ? 5 : limit)))
+            write_sched(w, st.sched, st);
+        w.end_array().end_object();
+        return w.str();
+    }
+    if (cmd == "sched_open") {
+        std::string id = ops->sched_open(req["name"], &err);
+        if (id.empty()) return err_reply(err);
+        auto n = ops->net_get(id);
+        JsonWriter out;
+        out.begin_object().field("ok", true).field("id", id).begin_array("net");
+        if (n) write_net(out, *n, false);
+        out.end_array().end_object();
+        return out.str();
+    }
+
+    // net_callup: one ACP 126 SIMPLE call-up from this station to every
+    // station listening (the broadcast address ALL; nobody acks it). It calls
+    // the roster stations not yet checked in ("who":"missing", the default),
+    // or the whole roster ("who":"all").
+    if (cmd == "net_callup") {
+        std::string id = req["net"].empty() ? ops->current_net() : book_key(req["net"]);
+        auto n = id.empty() ? std::nullopt : ops->net_get(id);
+        if (!n) return err_reply(req["net"].empty() ? "no net is open, or more than one is: say which" : "no such net");
+        if (n->closed_at) return err_reply(n->id + " is closed");
+        std::string who = req["who"].empty() ? "missing" : req["who"];
+        if (who != "missing" && who != "all") return err_reply("who must be missing or all");
+        std::vector<std::string> called = who == "all" ? n->roster : n->missing();
+        if (who == "missing" && called.empty())
+            return err_reply(n->roster.empty() ? n->id + " has no roster: send who all to call the whole net"
+                                               : "every station on the roster has checked in");
+        std::string prec = req["prec"].empty() ? "R" : req["prec"];
+        if (prec.size() != 1 || !valid_prec(prec[0])) return err_reply("precedence must be Z, O, P or R");
+
+        acp126::Message m;
+        m.station = core.station();
+        m.prec = prec[0];
+        m.channel = book_key(req["channel"]);
+        m.unclas_line = truthy(req["unclas"]);
+        // Call the stations by name when they fit on the call line, else the NET.
+        std::string line;
+        for (auto& c : called) line += (line.empty() ? "" : " ") + c;
+        if (!called.empty() && line.size() + 4 + m.station.size() + 7 <= 69) m.calls = called;
+        else m.calls = {"NET"};
+        m.text = callup_text(*n, called, who == "missing", req["text"]);
+        if (acp126::build(m, &err).empty()) return err_reply(err);
+        if (!m.channel.empty())
+            m.channel_serial = static_cast<int>(core.next_counter("acp127.channel." + m.channel, 999));
+        m.serial = static_cast<int>(core.next_counter("acp126.nr." + m.station, 999));
+        std::string text = acp126::build(m, &err);
+        if (text.empty()) return err_reply(err);
+        std::string msg = core.submit(kBroadcast, m.prec, text, &err);
+        if (msg.empty()) return err_reply(err);
+        ops->log_add("net",
+                     "call-up sent on " + n->id + " to " +
+                         (who == "all" ? "the whole roster" : std::to_string(called.size()) + " not checked in"),
+                     n->id, n->exercise);
+        JsonWriter w;
+        w.begin_object().field("ok", true).field("id", msg).field("net", n->id).field("to_station", kBroadcast);
+        strings(w, "called", called);
+        w.field("message", text).end_object();
         return w.str();
     }
     return err_reply("unknown command");

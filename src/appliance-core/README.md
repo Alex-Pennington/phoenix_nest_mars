@@ -98,6 +98,14 @@ the air during a net is checked in automatically. Sending to a collective's name
 sends one copy to each member. The calls are in docs/api.md under "The station
 book"; tests/test_ops.cpp runs an exercise net from open to monthly report.
 
+Nets can meet on a schedule (weekly, or the first Saturday of the month, in
+UTC). The station says when one starts in 15 minutes and when one is due, and
+can open it itself. A net call-up goes to every station at once as one
+broadcast to ALL, which nobody acks, calling the stations not yet checked in.
+Compose takes book names too: a tactical name goes to its station, a
+collective gets one copy per station, and a plain name on a TO line gets its
+routing indicator. tests/test_sched.cpp covers all three.
+
 ## Two stations with no modem at all
 
     appliance-core --loopback-pair A,B --db-dir ./data --api-port 4100

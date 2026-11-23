@@ -1434,7 +1434,38 @@ Result check(const Draft& d, const Context& ctx, const Serials& serials) {
             c.add(kv.first, "warning", "\"" + kv.first + "\" isn't a field of this form and was left out.",
                   "Check the field name against the form.");
 
-    for (auto& f : fields) check_field(c, f, val[f.key], *pi);
+    // The station book: a plain name with no routing indicator on an
+    // address line gets the book's RI, and a book name may stand where the
+    // station to send to goes.
+    std::optional<BookHit> to_hit;
+    if (ctx.lookup) {
+        for (auto& f : fields) {
+            if (f.kind != "address" && f.kind != "addresses") continue;
+            std::vector<std::string> out, filled;
+            for (auto& l : lines_of(val[f.key])) {
+                std::string t = trim(l);
+                if (!t.empty() && t.find('/') == std::string::npos) {
+                    auto h = ctx.lookup(t);
+                    if (h && !h->ri.empty()) {
+                        out.push_back(h->ri + "/" + t);
+                        filled.push_back(t);
+                        continue;
+                    }
+                }
+                out.push_back(l);
+            }
+            if (filled.empty()) continue;
+            val[f.key] = join(out, "\n");
+            c.add(f.key, "tip",
+                  f.label + ": the routing indicator for " + join(filled, ", ") + " came from the station book.",
+                  "Nothing to do.");
+        }
+        if (!trim(val["to_station"]).empty()) to_hit = ctx.lookup(trim(val["to_station"]));
+    }
+    for (auto& f : fields) {
+        if (f.key == "to_station" && to_hit) continue;  // a book name, checked below
+        check_field(c, f, val[f.key], *pi);
+    }
     if (upcased)
         c.add("", "tip", "Lower-case letters were changed to capitals: " + pi->p.title + " carries capitals only.",
               "Nothing to do.");
@@ -1534,13 +1565,41 @@ Result check(const Draft& d, const Context& ctx, const Serials& serials) {
         }
     }
 
-    std::string to_station = val["to_station"];
+    std::string to_station = trim(val["to_station"]);
     if (to_station.empty()) {
         auto w = words(val.count("routing") ? val["routing"] : val.count("calls") ? val["calls"] : val["call"]);
-        if (!w.empty()) to_station = w[0];
+        if (!w.empty()) {
+            to_station = w[0];
+            if (ctx.lookup) to_hit = ctx.lookup(to_station);
+        }
     }
     r.to_station = to_station;
     r.prec = prec;
+    if (to_hit) {
+        r.to_targets = to_hit->calls;
+        if (r.to_targets.empty()) {
+            c.add("to_station", "error",
+                  "The station book has " + to_hit->name + " but no station in it to send to.",
+                  "Add stations to " + to_hit->name + " in the station book, or write a call sign.");
+        } else if (!(r.to_targets.size() == 1 && r.to_targets[0] == upper(to_station))) {
+            c.add("to_station", "tip",
+                  to_hit->kind == "collective"
+                      ? "From the station book: " + to_hit->name + " goes to " + std::to_string(r.to_targets.size()) +
+                            " stations, one copy each: " + join(r.to_targets, ", ") + "."
+                      : "From the station book: " + to_hit->name + " is sent to " + r.to_targets[0] + ".",
+                  "Nothing to do.");
+        }
+        if (!to_hit->unknown.empty())
+            c.add("to_station", "warning",
+                  to_hit->name + " lists " + join(to_hit->unknown, ", ") +
+                      ", which the station book doesn't have: the copy goes to that name as written.",
+                  "Check the spelling, or add it to the station book with its call.");
+    } else if (upper(to_station) == "NET" || upper(to_station) == "ALL") {
+        // Calling the whole net: one broadcast that every station takes and none acks.
+        r.to_targets = {"ALL"};
+    } else if (!to_station.empty()) {
+        r.to_targets = {to_station};
+    }
 
     if (c.errors()) {
         r.issues = c.issues;

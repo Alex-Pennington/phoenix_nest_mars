@@ -212,6 +212,10 @@ Ops::Ops(std::string station, const std::string& db_path) : station_(book_key(st
         "CREATE TABLE IF NOT EXISTS oplog (id INTEGER PRIMARY KEY AUTOINCREMENT, at INTEGER, kind TEXT,"
         " text TEXT, net TEXT, exercise INTEGER)");
     exec("CREATE TABLE IF NOT EXISTS ops_meta (key TEXT PRIMARY KEY, value INTEGER NOT NULL)");
+    exec(
+        "CREATE TABLE IF NOT EXISTS schedules (name TEXT PRIMARY KEY, days TEXT, start INTEGER, minutes INTEGER,"
+        " roster TEXT, exercise INTEGER, ncs TEXT, note TEXT, auto_open INTEGER, last_start INTEGER DEFAULT 0,"
+        " last_net TEXT DEFAULT '')");
 }
 
 Ops::~Ops() { sqlite3_close(db_); }
@@ -619,6 +623,329 @@ void Ops::heard(const std::string& station) {
         if (s.step()) continue;  // already in, or checked out: radio doesn't undo a check-out
         net_checkin(id, st, "radio", 0, "", nullptr);
     }
+}
+
+
+// ---- net schedules ----
+
+namespace {
+
+const char* kDays[7] = {"SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"};
+
+struct DayRule {
+    int wday = 0;  // 0 Sunday
+    int nth = 0;   // 0 every week, 1-5 that week of the month, -1 the last
+};
+
+std::vector<DayRule> day_rules(const std::string& canon) {
+    std::vector<DayRule> out;
+    for (auto& tok : split(canon, ",")) {
+        DayRule r;
+        std::string d = tok;
+        if (d.size() == 4) {
+            r.nth = d[0] == 'L' ? -1 : d[0] - '0';
+            d = d.substr(1);
+        }
+        r.wday = -1;
+        for (int i = 0; i < 7; ++i)
+            if (d == kDays[i]) r.wday = i;
+        if (r.wday >= 0) out.push_back(r);  // anything else isn't a day: no rule
+    }
+    return out;
+}
+
+bool day_matches(const std::vector<DayRule>& rules, int64_t day) {
+    std::time_t t = static_cast<std::time_t>(day * 86400);
+    std::tm u{};
+    gmtime_r(&t, &u);
+    std::time_t next_week = t + 7 * 86400;
+    std::tm n{};
+    gmtime_r(&next_week, &n);
+    for (auto& r : rules) {
+        if (u.tm_wday != r.wday) continue;
+        if (r.nth == 0) return true;
+        if (r.nth > 0 && (u.tm_mday - 1) / 7 + 1 == r.nth) return true;
+        if (r.nth < 0 && n.tm_mon != u.tm_mon) return true;
+    }
+    return false;
+}
+
+int64_t floor_day(int64_t t) { return t >= 0 ? t / 86400 : (t - 86399) / 86400; }
+
+}  // namespace
+
+bool parse_hhmm(const std::string& s, int* minutes) {
+    std::string t = book_key(s);
+    if (!t.empty() && t.back() == 'Z') t.pop_back();
+    if (t.size() != 4 || !std::all_of(t.begin(), t.end(), [](char c) { return std::isdigit(static_cast<unsigned char>(c)); }))
+        return false;
+    int h = std::stoi(t.substr(0, 2)), m = std::stoi(t.substr(2));
+    if (h > 23 || m > 59) return false;
+    *minutes = h * 60 + m;
+    return true;
+}
+
+bool parse_days(const std::string& s, std::string* canon, std::string* error) {
+    std::vector<std::string> out;
+    for (auto tok : split(s, ", ")) {
+        if (tok == "DAILY") {
+            for (auto d : kDays) out.push_back(d);
+            continue;
+        }
+        if (tok == "WEEKDAYS") {
+            for (int i = 1; i <= 5; ++i) out.push_back(kDays[i]);
+            continue;
+        }
+        if (tok == "WEEKENDS") {
+            out.push_back("SAT");
+            out.push_back("SUN");
+            continue;
+        }
+        static const char* kFull[7] = {"SUNDAY", "MONDAY", "TUESDAY", "WEDNESDAY", "THURSDAY", "FRIDAY", "SATURDAY"};
+        auto day_of = [](const std::string& x) -> std::string {
+            for (int i = 0; i < 7; ++i)
+                if (x == kDays[i] || x == kFull[i]) return kDays[i];  // MONDAY -> MON
+            return "";
+        };
+        std::string prefix, d = day_of(tok);
+        if (d.empty() && tok.size() > 3 && (tok[0] == 'L' || (tok[0] >= '1' && tok[0] <= '5'))) {
+            prefix = tok.substr(0, 1);
+            d = day_of(tok.substr(1));
+        }
+        bool ok = !d.empty();
+        if (!ok) {
+            if (error)
+                *error = "days: \"" + tok +
+                         "\" isn't a day. Write MON to SUN, DAILY, WEEKDAYS or WEEKENDS; put 1 to 5 or L in front "
+                         "for that week of the month (1SAT, LSUN)";
+            return false;
+        }
+        out.push_back(prefix + d);
+    }
+    if (out.empty()) {
+        if (error) *error = "days: say which days the net meets, like TUE,THU or DAILY";
+        return false;
+    }
+    std::vector<std::string> uniq;
+    for (auto& d : out)
+        if (std::find(uniq.begin(), uniq.end(), d) == uniq.end()) uniq.push_back(d);
+    *canon = join(uniq, ',');
+    return true;
+}
+
+int64_t next_start(const std::string& days, int start, int64_t t) {
+    auto rules = day_rules(days);
+    if (rules.empty()) return 0;
+    for (int64_t day = floor_day(t) - 1, end = day + 400; day <= end; ++day) {
+        int64_t at = day * 86400 + start * 60;
+        if (at >= t && day_matches(rules, day)) return at;
+    }
+    return 0;
+}
+
+static const char* kSchedCols = "name, days, start, minutes, roster, exercise, ncs, note, auto_open, last_start, last_net";
+
+static NetSchedule row_sched(Stmt& q) {
+    NetSchedule s;
+    s.name = q.text(0);
+    s.days = q.text(1);
+    s.start = static_cast<int>(q.i64(2));
+    s.minutes = static_cast<int>(q.i64(3));
+    s.roster = split(q.text(4), "\n");
+    s.exercise = q.i64(5) != 0;
+    s.ncs = q.text(6);
+    s.note = q.text(7);
+    s.auto_open = q.i64(8) != 0;
+    s.last_start = q.i64(9);
+    s.last_net = q.text(10);
+    return s;
+}
+
+bool Ops::sched_put(NetSchedule s, std::string* error) {
+    std::lock_guard<std::recursive_mutex> g(mu_);
+    auto fail = [&](const std::string& e) {
+        if (error) *error = e;
+        return false;
+    };
+    s.name = book_key(s.name);
+    if (s.name.empty()) return fail("name: give the net a name");
+    if (s.name.size() > 64 || !chars_ok(s.name, " -/.")) return fail("name: up to 64 capital letters, digits, spaces and - / .");
+    std::string canon;
+    if (!parse_days(s.days, &canon, error)) return false;
+    s.days = canon;
+    if (s.start < 0 || s.start >= 24 * 60) return fail("time: write the start as HHMM in UTC, like 1900");
+    if (s.minutes < 5 || s.minutes > 24 * 60) return fail("minutes: a net runs 5 to 1440 minutes");
+    if (s.note.size() > 80) return fail("note: keep it to 80 characters");
+    for (auto& r : s.roster) r = book_key(r);
+    auto old = sched_get(s.name);
+    Stmt(db_,
+         "INSERT OR REPLACE INTO schedules(name, days, start, minutes, roster, exercise, ncs, note, auto_open,"
+         " last_start, last_net) VALUES(?,?,?,?,?,?,?,?,?,?,?)")
+        .bind(1, s.name)
+        .bind(2, s.days)
+        .bind(3, static_cast<int64_t>(s.start))
+        .bind(4, static_cast<int64_t>(s.minutes))
+        .bind(5, join(s.roster, '\n'))
+        .bind(6, static_cast<int64_t>(s.exercise))
+        .bind(7, book_key(s.ncs))
+        .bind(8, s.note)
+        .bind(9, static_cast<int64_t>(s.auto_open))
+        .bind(10, old ? old->last_start : 0)
+        .bind(11, old ? old->last_net : std::string())
+        .step();
+    return true;
+}
+
+bool Ops::sched_remove(const std::string& name) {
+    std::lock_guard<std::recursive_mutex> g(mu_);
+    Stmt q(db_, "DELETE FROM schedules WHERE name = ?");
+    q.bind(1, book_key(name));
+    q.step();
+    return sqlite3_changes(db_) > 0;
+}
+
+std::optional<NetSchedule> Ops::sched_get(const std::string& name) {
+    std::lock_guard<std::recursive_mutex> g(mu_);
+    Stmt q(db_, (std::string("SELECT ") + kSchedCols + " FROM schedules WHERE name = ?").c_str());
+    q.bind(1, book_key(name));
+    if (!q.step()) return std::nullopt;
+    return row_sched(q);
+}
+
+std::vector<NetSchedule> Ops::sched_list() {
+    std::lock_guard<std::recursive_mutex> g(mu_);
+    Stmt q(db_, (std::string("SELECT ") + kSchedCols + " FROM schedules ORDER BY name").c_str());
+    std::vector<NetSchedule> out;
+    while (q.step()) out.push_back(row_sched(q));
+    return out;
+}
+
+std::optional<NetSitting> Ops::sitting_of(const NetSchedule& s, int64_t now) {
+    // The sitting under way, if any: it started less than `minutes` ago.
+    int64_t len = static_cast<int64_t>(s.minutes) * 60;
+    int64_t cur = next_start(s.days, s.start, now - len + 1);
+    NetSitting st;
+    st.sched = s;
+    if (cur && cur <= now) {
+        st.start = cur;
+        st.end = cur + len;
+        if (s.last_start != cur) {
+            st.state = "due";
+            return st;
+        }
+        auto n = load_net(s.last_net);
+        if (n && n->closed_at == 0) {
+            st.state = "open";
+            st.net = n->id;
+            return st;
+        }
+        // Opened and already closed: the next one matters now.
+        now = st.end;
+    }
+    int64_t next = next_start(s.days, s.start, now + 1);
+    if (!next) return std::nullopt;
+    st.start = next;
+    st.end = next + len;
+    st.state = "upcoming";
+    st.net.clear();
+    // Opened early, ahead of its start: it is under way.
+    if (s.last_start == next) {
+        auto n = load_net(s.last_net);
+        if (n && n->closed_at == 0) {
+            st.state = "open";
+            st.net = n->id;
+        }
+    }
+    return st;
+}
+
+std::optional<NetSitting> Ops::sched_sitting(const std::string& name) {
+    std::lock_guard<std::recursive_mutex> g(mu_);
+    auto s = sched_get(name);
+    if (!s) return std::nullopt;
+    return sitting_of(*s, now());
+}
+
+std::vector<NetSitting> Ops::sched_upcoming(int limit) {
+    std::lock_guard<std::recursive_mutex> g(mu_);
+    std::vector<NetSitting> out;
+    int64_t t = now();
+    for (auto& s : sched_list())
+        if (auto st = sitting_of(s, t)) out.push_back(*st);
+    std::stable_sort(out.begin(), out.end(), [](const NetSitting& a, const NetSitting& b) {
+        auto rank = [](const NetSitting& x) { return x.state == "upcoming" ? 1 : 0; };
+        if (rank(a) != rank(b)) return rank(a) < rank(b);
+        return a.start < b.start;
+    });
+    if (limit > 0 && static_cast<int>(out.size()) > limit) out.resize(limit);
+    return out;
+}
+
+std::string Ops::sched_open(const std::string& name, std::string* error) {
+    std::lock_guard<std::recursive_mutex> g(mu_);
+    auto s = sched_get(name);
+    if (!s) {
+        if (error) *error = "no schedule called " + book_key(name);
+        return "";
+    }
+    auto st = sitting_of(*s, now());
+    if (st && st->state == "open") {
+        if (error) *error = s->name + " is already open as " + st->net;
+        return "";
+    }
+    std::string note = "from schedule " + s->name + (s->note.empty() ? "" : ": " + s->note);
+    if (note.size() > 80) note = note.substr(0, 80);
+    std::string id = net_open(s->name, s->roster, s->exercise, s->ncs, note, error);
+    if (id.empty()) return "";
+    // Opened during a sitting or up to 30 minutes ahead of it: that sitting.
+    int64_t sitting = 0;
+    if (st && (st->state == "due" || st->start - now() <= 30 * 60)) sitting = st->start;
+    Stmt(db_, "UPDATE schedules SET last_start = ?, last_net = ? WHERE name = ?")
+        .bind(1, sitting ? sitting : s->last_start)
+        .bind(2, id)
+        .bind(3, s->name)
+        .step();
+    return id;
+}
+
+static std::string hhmmz(int64_t t) {
+    std::time_t tt = static_cast<std::time_t>(t);
+    std::tm u{};
+    gmtime_r(&tt, &u);
+    char b[16];
+    std::snprintf(b, sizeof b, "%02d%02dZ", u.tm_hour, u.tm_min);
+    return b;
+}
+
+std::vector<std::string> Ops::sched_tick() {
+    std::lock_guard<std::recursive_mutex> g(mu_);
+    std::vector<std::string> said;
+    int64_t t = now();
+    auto once = [&](const std::string& key, int64_t sitting) {
+        auto it = told_.find(key);
+        if (it != told_.end() && it->second == sitting) return false;
+        told_[key] = sitting;
+        return true;
+    };
+    for (auto& s : sched_list()) {
+        auto st = sitting_of(s, t);
+        if (!st) continue;
+        if (st->state == "due") {
+            if (s.auto_open) {
+                std::string err, id = sched_open(s.name, &err);
+                if (!id.empty())
+                    said.push_back("scheduled net " + s.name + " opened as " + id);
+                else if (once(s.name + "|fail", st->start))
+                    said.push_back("scheduled net " + s.name + " didn't open: " + err);
+            } else if (once(s.name + "|due", st->start)) {
+                said.push_back("scheduled net " + s.name + " was due at " + hhmmz(st->start) + " and isn't open");
+            }
+        } else if (st->state == "upcoming" && st->start - t <= 15 * 60 && once(s.name + "|soon", st->start)) {
+            said.push_back("scheduled net " + s.name + " starts at " + hhmmz(st->start) +
+                           (s.auto_open ? " and opens itself" : ""));
+        }
+    }
+    return said;
 }
 
 // ---- duty ----

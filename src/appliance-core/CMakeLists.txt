@@ -40,7 +40,7 @@ add_executable(appliance-cli tools/appliance_cli.cpp)
 target_link_libraries(appliance-cli PRIVATE pna_core)
 
 enable_testing()
-foreach(t test_frame test_core test_greybeard test_acp127 test_received test_templates test_compose test_link test_ops)
+foreach(t test_frame test_core test_greybeard test_acp127 test_received test_templates test_compose test_link test_ops test_sched)
   add_executable(${t} tests/${t}.cpp)
   target_link_libraries(${t} PRIVATE pna_core)
   target_compile_definitions(${t} PRIVATE PNA_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")

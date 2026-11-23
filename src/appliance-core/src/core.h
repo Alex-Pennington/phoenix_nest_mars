@@ -9,6 +9,7 @@
 #include "store.h"
 
 #include <atomic>
+#include <chrono>
 #include <deque>
 #include <functional>
 #include <memory>
@@ -64,7 +65,8 @@ public:
     CoreStatus status();
     // greybeard-ale's link state (see link_monitor.h). Set before start().
     void set_link_monitor(std::shared_ptr<LinkMonitor> m) { link_ = std::move(m); }
-    // Whether a message to `station` would wait for a link now.
+    // Whether a message to `station` would wait for a link now. A broadcast
+    // (ALL) never waits: it goes out for whoever is listening.
     bool waits_for_link(const std::string& station) const;
     // The station book (ops.h): nets hear stations through it. Set before start().
     void set_ops(std::shared_ptr<Ops> ops) { ops_ = std::move(ops); }
@@ -99,8 +101,9 @@ private:
     std::function<void(const std::string&)> log_fn_;
     std::shared_ptr<LinkMonitor> link_;
     std::shared_ptr<Ops> ops_;
-    std::set<std::string> told_waiting_;
-    std::string told_clock_;              // the clock source last logged  // messages already logged as waiting for a link
+    std::set<std::string> told_waiting_;  // messages already logged as waiting for a link
+    std::string told_clock_;              // the clock source last logged
+    std::chrono::steady_clock::time_point next_sched_{};  // when to look at net schedules again
 };
 
 }  // namespace pna

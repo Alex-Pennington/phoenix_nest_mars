@@ -42,6 +42,10 @@ uint32_t crc32(const void* data, size_t len, uint32_t seed = 0);
 bool valid_station(const std::string& s);
 // True for Z, O, P, R.
 bool valid_prec(char p);
+// The broadcast address: every station that hears a frame sent to it takes
+// it, and none acks it, so the sender marks it sent once it is on the air.
+constexpr const char* kBroadcast = "ALL";
+inline bool is_broadcast(const std::string& dst) { return dst == kBroadcast; }
 // Lower number goes first: Z=0, O=1, P=2, R=3.
 int prec_rank(char p);
 const char* prec_name(char p);
