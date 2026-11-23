@@ -348,7 +348,8 @@ int main() {
     }
     {
         StubNet net;
-        StubNode na(net, 1, 1024), nb(net, 2, 1024);
+        // 2048: what greybeard-ale's node advertises in S_BIND_ACCEPTED.
+        StubNode na(net, 1, 2048), nb(net, 2, 2048);
         net.nodes = {&na, &nb};
 
         auto make = [&](uint16_t port) {
@@ -369,12 +370,12 @@ int main() {
         b.start();
 
         CHECK(wait_for([&] { return pa->ready() && na.bound_on(3) && nb.bound_on(3); }));
-        CHECK(pa->mtu() == 1024 && pa->peers() == 2);
+        CHECK(pa->mtu() == 2048 && pa->peers() == 2);
         {
             std::lock_guard<std::mutex> g(na.mu);
             CHECK(na.binds.size() == 1 && na.binds[0].sap == 3 && na.binds[0].service.tx_mode == s5066::kArq);
         }
-        CHECK(pa->describe().find("SAP 3, MTU 1024") != std::string::npos);
+        CHECK(pa->describe().find("SAP 3, MTU 2048") != std::string::npos);
 
         // A message and its ACK, both through 5066.
         std::string err;
@@ -390,7 +391,7 @@ int main() {
                   na.requests[0].service.tx_mode == s5066::kArq);
         }
 
-        // A 4 KB message goes as four pieces and arrives whole.
+        // A 4 KB message goes as two pieces, each within the node's MTU, and arrives whole.
         std::string big;
         for (int i = 0; i < 100; ++i) big += "LINE " + std::to_string(i) + " OF A LONG MESSAGE FOR THE NET\n";
         size_t before;
@@ -404,8 +405,8 @@ int main() {
         CHECK(b.get(bid) && b.get(bid)->body == big);
         {
             std::lock_guard<std::mutex> g(na.mu);
-            CHECK(big.size() > 3 * 1024 && na.requests.size() - before == 4);
-            for (size_t i = before; i < na.requests.size(); ++i) CHECK(na.requests[i].data.size() <= 1024);
+            CHECK(big.size() > 3 * 1024 && na.requests.size() - before == 2);
+            for (size_t i = before; i < na.requests.size(); ++i) CHECK(na.requests[i].data.size() <= 2048);
         }
 
         // The node refuses once: the core retries and it goes.

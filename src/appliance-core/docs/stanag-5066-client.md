@@ -139,10 +139,8 @@ engine never speaks Appendix A itself. greybeard-ale's orchestrator confirmed
 that is the normal stack.
 
 A second driver that drives the modem over Appendix A directly, for bursts
-outside 5066 or a box with no node, is not built. It waits on the modem's
-Appendix A interface, which greybeard-ale is building in
-pennington_m110a_demod, and on reading the Appendix A message set from the
-standard.
+outside 5066 or a box with no node, is built: `link = appa`, described in
+docs/appendix-a-driver.md.
 
 ## Interop
 
@@ -163,8 +161,8 @@ and the engine adds a reader for that format.
 - Pieces: split, joined with two sources interleaved, a lost middle piece
   counted, too many pieces refused.
 - Two cores through a stand-in node (two "nodes" in the test, joined by a
-  stand-in network, MTU 1024): a message and its ACK; a 4 KB message as four
-  pieces; one refusal then a retry that goes; a call with no address failing;
+  stand-in network, MTU 2048 as the real node advertises): a message and its
+  ACK; a 4 KB message as two pieces; one refusal then a retry that goes; a call with no address failing;
   the peers file read again after a change; a broadcast; keep-alive; data
   flow off and on; the node dropping the connection and the client binding
   again; an unbind indication.
@@ -173,14 +171,30 @@ and the engine adds a reader for that format.
 The stand-in has no ARQ and no radio. Interop with greybeard-ale's real node
 comes once it exists: audio files first, then the dummy load.
 
-## Still to settle with greybeard-ale
+## Agreed with greybeard-ale (Nov 23 2026)
 
-1. The node's MTU, and whether it accepts client delivery confirmation if we
-   switch to it. The default is node confirmation.
-2. Their numbering of node addresses, so the peers file uses the same.
-3. Whether the address size field should be 7 (what we send) or the node's
-   own address length.
-4. Rank 0 is fine if the engine is the node's only client on SAP 3.
-5. Their core lockdown limits which settings the box's settings file may set.
-   The six new settings (`link`, `s5066-*`) need adding to that list before a
-   station can turn 5066 on from the settings file.
+Their orchestrator confirmed these for the real node, and the client matches:
+
+| Item | The node | The client |
+|---|---|---|
+| Transport | TCP 127.0.0.1:5066, several clients at once | connects to 127.0.0.1, port setting |
+| Framing | Annex A: 0x90 0xEB, version 0x00, 2-byte size, one primitive | the same |
+| MTU | 2048, sent in S_BIND_ACCEPTED; a bigger U_PDU is rejected | reads it from the reply and cuts pieces to fit |
+| Rank | 0 to 15 accepted | 0 |
+| SAP | 3 (HMTP), ARQ in the service type | the same |
+| Own address | from the node's settings | never set by the client |
+| Rebinding a bound SAP | refused | binds once per connection; binds again only after the connection drops |
+
+Still to settle:
+
+1. The address field. The node calls it a 4-byte field holding a 29-bit
+   address, and the exact coding of the size bits is being pinned down on
+   their side. The client sends 3 size bits (7), the group bit, then 28 bits,
+   as Wireshark reads it. Their docs/s5066-node.md will settle it.
+2. The time to live. The node calls it a 3-byte field. The client sends 4 bits
+   of repeats then 20 bits of time to live in those 3 bytes, as Wireshark reads
+   it. The same document will settle it.
+3. Their core lockdown limits which settings the box's settings file may set.
+   The new settings (`link`, `s5066-*`, `appa-port`) need adding to that list
+   before a station can turn these on from the settings file. That ask has
+   gone to the image owner.

@@ -41,8 +41,9 @@ outbox =
 # ---- Or: through the STANAG 5066 node ----
 
 # burst sends through gale-tx as above. s5066 hands traffic to the 5066 node
-# on this computer instead (docs/stanag-5066-client.md); tx-cmd, tx-mode and
-# captures are then not used.
+# on this computer instead (docs/stanag-5066-client.md), and appa (below)
+# drives the modem directly. With either, tx-cmd, tx-mode and captures are
+# not used.
 link = burst
 
 # The peers file: one "CALL ADDRESS" per line, e.g. STA-B 0.0.0.2. Needed
@@ -55,6 +56,13 @@ s5066-port = 5066
 s5066-sap = 3
 s5066-ttl = 600
 s5066-confirm = node
+
+# ---- Or: straight to the modem over 110D Appendix A ----
+
+# link = appa makes this box the modem's DTE on its Appendix A TCP data
+# socket (docs/appendix-a-driver.md), for a box with no 5066 node. The
+# waveform is set on the modem, not here.
+appa-port = 3000
 
 # ---- Links (optional) ----
 

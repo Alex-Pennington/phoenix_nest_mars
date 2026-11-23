@@ -15,6 +15,7 @@
 #include "loopback_modem.h"
 #include "s5066.h"
 #include "s5066_client.h"
+#include "appa_modem.h"
 
 #include <csignal>
 #include <filesystem>
@@ -70,6 +71,10 @@ void usage() {
         "  --s5066-sap N         SAP to bind, 0-15 (default 3, HMTP; same on every box)\n"
         "  --s5066-ttl SEC       time to live per send (default 600)\n"
         "  --s5066-confirm WHAT  node or client delivery confirmation (default node)\n\n"
+        "One station, straight to the modem over 110D Appendix A (no 5066 node):\n"
+        "  --station NAME        this station's call\n"
+        "  --link appa           be the modem's DTE on its Appendix A TCP data socket\n"
+        "  --appa-port N         the modem's data socket on 127.0.0.1 (default 3000)\n\n"
         "Two stations in one process, no modem:\n"
         "  --loopback-pair A,B   stations A and B wired back to back\n"
         "  --db-dir DIR          where their stores go (default .)\n"
@@ -171,6 +176,7 @@ int main(int argc, char** argv) {
     bool link_gate = false;
     std::string link_kind = "burst";
     S5066Config s5066;
+    AppaConfig appa;
 
     bool check_only = false;
     std::string config_path;
@@ -221,6 +227,7 @@ int main(int argc, char** argv) {
             else if (a == "--link-gate") link_gate = true;
             else if (a == "--link") link_kind = next();
             else if (a == "--s5066-peers") s5066.peers_file = next();
+            else if (a == "--appa-port") appa.port = static_cast<uint16_t>(std::stoi(next()));
             else if (a == "--s5066-port") s5066.port = static_cast<uint16_t>(std::stoi(next()));
             else if (a == "--s5066-sap") {
                 int v = std::stoi(next());
@@ -249,8 +256,8 @@ int main(int argc, char** argv) {
         }
     }
 
-    if (link_kind != "burst" && link_kind != "s5066") {
-        std::cerr << "--link: burst or s5066\n";
+    if (link_kind != "burst" && link_kind != "s5066" && link_kind != "appa") {
+        std::cerr << "--link: burst, s5066 or appa\n";
         return 2;
     }
     if (link_gate && link_socket.empty()) {
@@ -292,6 +299,10 @@ int main(int argc, char** argv) {
                 else if (!s5066::read_peers(s5066.peers_file, peers, &perr)) problems.push_back("s5066-peers: " + perr);
                 else std::cout << "  5066 peers     " << peers.size() << " stations in " << s5066.peers_file << "\n";
                 notes.push_back("the 5066 node is looked for at start and every few seconds after; it needn't be up now");
+            } else if (link_kind == "appa") {
+                std::cout << "  link           110D Appendix A modem at 127.0.0.1:" << appa.port
+                          << " (the waveform is the modem's setting)\n";
+                notes.push_back("the modem is looked for at start and every few seconds after; it needn't be up now");
             } else {
                 std::cout << "  modem          greybeard-ale, gale-tx mode " << (tx_mode.empty() ? "(not set)" : tx_mode)
                           << "\n";
@@ -372,6 +383,8 @@ int main(int argc, char** argv) {
                     return 2;
                 }
                 modem = std::make_unique<S5066Client>(s5066);
+            } else if (link_kind == "appa") {
+                modem = std::make_unique<AppaModem>(appa);
             } else {
                 if (tx_mode.empty() || captures.empty()) {
                     std::cerr << "--station needs --tx-mode and --captures (try --help)\n";
