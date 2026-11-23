@@ -344,6 +344,22 @@ A message counts as an exercise when one of its lines starts with EXERCISE. The
 report's layout is the appliance's own; MARS's monthly report form wasn't
 available to copy.
 
+## Station files: rosters, address books, frequency cards, net schedules
+
+- `mars_import {data | text, kind, source}`: reads a member roster, address
+  book, frequency card or net schedule. `data` is the file in base64 (a
+  `.xlsx` or text), or `text` is a text table. `kind` is `auto` (the default),
+  `roster`, `book`, `freq` or `schedule`. Returns `imported` and `sheets`,
+  each with `sheet`, `kind`, `header_row`, `rows`, `imported`, `names`,
+  `left_out`, `problems` and, for schedules, `frequencies_withheld`. What each
+  file should look like is in docs/formats.md. Personal details are never
+  imported, and frequencies go only to the channel plan's file.
+- `channels_list`: the channel plan as `channels`, each with `name` (the
+  designator), `mode`, `use` and `source`. Never a frequency.
+- `channel_remove {name}`: takes a channel out of the plan.
+- `sched_put` also takes `channel`, a designator, and `sched_list` returns it.
+  A frequency there is refused.
+
 ## Keys, cards and signatures
 
 docs/crypto.md explains each of these. Key and passphrase text is wiped from

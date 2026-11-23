@@ -5,6 +5,9 @@
 #include "frame.h"
 #include "json.h"
 #include "ops.h"
+#include "channels.h"
+#include "mars_import.h"
+#include "table.h"
 
 #include <cstdio>
 #include <ctime>
@@ -107,6 +110,7 @@ void write_sched(JsonWriter& w, const NetSchedule& s, const std::optional<NetSit
         .field("minutes", s.minutes);
     strings(w, "roster", s.roster);
     w.field("exercise", s.exercise).field("ncs", s.ncs).field("note", s.note).field("auto_open", s.auto_open);
+    w.field("channel", s.channel);
     if (st)
         w.field("state", st->state)
             .field("start", static_cast<long long>(st->start))
@@ -143,7 +147,7 @@ std::optional<std::string> handle_ops(Core& core, const std::string& cmd, std::m
                                   "book_resolve", "net_open", "net_checkin", "net_checkout", "net_close", "net_status",
                                   "net_list", "duty_on", "duty_off", "duty_status", "log_add", "station_log",
                                   "report_monthly", "sched_put", "sched_remove", "sched_list", "sched_next",
-                                  "sched_open", "net_callup"};
+                                  "sched_open", "net_callup", "mars_import", "channels_list", "channel_remove"};
     bool ours = false;
     for (auto c : kCmds)
         if (cmd == c) ours = true;
@@ -194,6 +198,53 @@ std::optional<std::string> handle_ops(Core& core, const std::string& cmd, std::m
         w.end_object();
         return w.str();
     }
+    if (cmd == "mars_import") {
+        // A roster, address book, frequency card or net schedule: data is the
+        // file in base64 (a spreadsheet or text), or text is the text itself.
+        std::string bytes = req["text"];
+        if (!req["data"].empty() && !base64_decode(req["data"], bytes)) return err_reply("data isn't base64");
+        if (bytes.empty()) return err_reply("give the file as data (base64) or text");
+        if (bytes.size() > (16u << 20)) return err_reply("the file is over 16 MB");
+        auto res = marsio::import_file(*ops, bytes, req["kind"], req["source"], &err);
+        if (res.empty()) return err_reply(err.empty() ? "nothing in the file to read" : err);
+        int total = 0;
+        JsonWriter w;
+        w.begin_object().begin_array("sheets");
+        for (auto& r : res) {
+            total += r.imported;
+            w.begin_object()
+                .field("sheet", r.sheet)
+                .field("kind", r.kind)
+                .field("header_row", r.header_row)
+                .field("rows", r.rows)
+                .field("imported", r.imported);
+            strings(w, "names", r.names);
+            strings(w, "left_out", r.left_out);
+            strings(w, "problems", r.problems);
+            if (r.frequencies_withheld)
+                w.field("frequencies_withheld", r.frequencies_withheld)
+                    .field("note", "some rows gave a frequency the channel plan doesn't hold; load the frequency "
+                                   "card first, or give the channel's designator");
+            w.end_object();
+        }
+        w.end_array().field("ok", total > 0).field("imported", total);
+        if (total == 0) w.field("error", "nothing was imported");
+        w.end_object();
+        core.note("import" + (req["source"].empty() ? std::string() : " from " + req["source"]) + ": " +
+                  std::to_string(total) + " entries");
+        return w.str();
+    }
+    if (cmd == "channels_list") {
+        // Designators only. Frequencies stay in the plan's file.
+        JsonWriter w;
+        w.begin_object().field("ok", true).begin_array("channels");
+        for (auto& c : ops->channels().list())
+            w.begin_object().field("name", c.name).field("mode", c.mode).field("use", c.use).field("source", c.source).end_object();
+        w.end_array().end_object();
+        return w.str();
+    }
+    if (cmd == "channel_remove")
+        return ops->channels().remove(req["name"]) ? ok_reply() : err_reply("no such channel in the plan");
     if (cmd == "book_export") {
         JsonWriter w;
         w.begin_object().field("ok", true).field("csv", ops->book_export()).end_object();
@@ -348,6 +399,7 @@ std::optional<std::string> handle_ops(Core& core, const std::string& cmd, std::m
         NetSchedule sc;
         sc.name = req["name"];
         sc.days = req["days"];
+        sc.channel = req["channel"];
         if (!parse_hhmm(req["time"], &sc.start)) return err_reply("time: write the start as HHMM in UTC, like 1900");
         long long minutes = 60;
         if (!req["minutes"].empty() && !to_int(req["minutes"], &minutes)) return err_reply("minutes must be a number");

@@ -125,6 +125,8 @@ bool valid_datetime(const std::string& s) {
     return mo >= 1 && mo <= 12 && valid_ddhhmm(s.substr(6, 6));
 }
 
+}  // namespace
+
 // ---------------------------------------------------------------- frequencies
 
 // True when s holds something shaped like a radio frequency: a number with a
@@ -165,6 +167,8 @@ bool looks_like_frequency(const std::string& raw) {
     }
     return false;
 }
+
+namespace {
 
 // ---------------------------------------------------------------- fields
 

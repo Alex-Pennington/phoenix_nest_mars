@@ -38,8 +38,8 @@ Open `~/.config/phoenix-nest-mars/appliance.conf` and fill in three settings:
 - `tx-cmd`: the full path to gale-tx. The installer fills it in when gale-tx
   is on your PATH.
 
-Leave channel plans and frequencies out of this file: the appliance never
-needs them. Then check the file:
+Leave channel plans and frequencies out of this file. A frequency card is
+loaded with `appliance-cli import` (section 5b) and kept in its own file. Then check the file:
 
     appliance-core --config ~/.config/phoenix-nest-mars/appliance.conf --check
 
@@ -125,6 +125,21 @@ and handouts and building a net from nothing.
 **On a bad day,** with your box wiped: restore your station backup (or start
 fresh), load your old handout, even a stale one, and run `appliance-cli rally`.
 It says what to do next.
+
+## 5b. Your station's files
+
+Load the roster, address book, frequency card and net schedule you were given,
+spreadsheet or text, one at a time:
+
+    appliance-cli import region-roster.xlsx
+    appliance-cli import frequency-card.csv
+    appliance-cli import net-schedule.xlsx
+
+Load the frequency card before the schedule. The reply says what each file
+was taken for, how many entries went in, and any row it couldn't use.
+Personal details in a roster are left out. Frequencies are kept in their own
+file, and everything else names channels by designator. docs/formats.md says
+what each file should look like.
 
 ## 6. Backups
 

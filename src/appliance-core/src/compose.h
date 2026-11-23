@@ -191,5 +191,9 @@ std::string advice_json(const AdviceRequest& req);
 // and example, or the template's summary, and the draft's issues.
 std::string builtin_advice(const AdviceRequest& req, const Context& ctx);
 
+// True when s holds something shaped like a radio frequency (compose.cpp).
+// Used to keep frequencies out of anything the appliance shows or sends.
+bool looks_like_frequency(const std::string& s);
+
 }  // namespace compose
 }  // namespace pna

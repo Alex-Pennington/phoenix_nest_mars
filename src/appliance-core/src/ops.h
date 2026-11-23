@@ -15,6 +15,7 @@
 #include <map>
 #include <mutex>
 #include <optional>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -108,6 +109,7 @@ struct NetSchedule {
     bool auto_open = false; // the appliance opens it at the start time
     int64_t last_start = 0; // the occurrence last opened
     std::string last_net;   // the net it opened as
+    std::string channel;    // the channel's designator, never a frequency
 };
 
 // One sitting of a scheduled net.
@@ -132,6 +134,8 @@ bool is_exercise_body(const std::string& body);
 // Upper case, spaces trimmed and runs of spaces made one.
 std::string book_key(const std::string& s);
 
+class ChannelPlan;
+
 class Ops {
 public:
     // station: our own call. db_path: the station's SQLite file.
@@ -144,6 +148,8 @@ public:
     void set_clock(std::function<int64_t()> now);
     int64_t now() const;
     const std::string& station() const { return station_; }
+    // The channel plan (channels.h), kept in its own file beside the database.
+    ChannelPlan& channels() { return *channels_; }
 
     // Address book.
     bool book_put(BookEntry e, std::string* error);
@@ -218,6 +224,7 @@ private:
     std::string canonical(const std::string& station);
     std::string station_;
     std::function<int64_t()> clock_;
+    std::unique_ptr<ChannelPlan> channels_;
     std::recursive_mutex mu_;
     sqlite3* db_ = nullptr;
 };

@@ -16,6 +16,9 @@
 //   appliance-cli [--port 4100] cards keymaster CALL [--off]   name (or unname) a checked card as keymaster
 //   appliance-cli [--port 4100] handout import FILE|ID [--replace]   load a member handout, stale or new
 //   appliance-cli [--port 4100] rally            what this box can do now, and the next step
+//   appliance-cli [--port 4100] import FILE [--kind roster|book|freq|schedule]
+//                                 a roster, address book, frequency card or net schedule (.xlsx or text)
+//   appliance-cli [--port 4100] channels         the channel plan, by designator (never frequencies)
 //
 // "api" sends any call in docs/api.md: appliance-cli api net_callup who=all.
 // A value with spaces goes in quotes; \n in a value is a new line.
@@ -33,6 +36,24 @@
 
 using namespace pna;
 
+static std::string base64(const std::string& in) {
+    static const char* k = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    std::string out;
+    uint32_t acc = 0;
+    int bits = 0;
+    for (unsigned char c : in) {
+        acc = (acc << 8) | c;
+        bits += 8;
+        while (bits >= 6) {
+            bits -= 6;
+            out += k[(acc >> bits) & 63];
+        }
+    }
+    if (bits) out += k[(acc << (6 - bits)) & 63];
+    while (out.size() % 4) out += '=';
+    return out;
+}
+
 int main(int argc, char** argv) {
     uint16_t port = 4100;
     int i = 1;
@@ -46,7 +67,8 @@ int main(int argc, char** argv) {
                      "                    | keys zeroize IND|TAPE | keys open FILE|ID\n"
                      "                    | station card | cards import FILE|ID [--replace] | cards list\n"
                      "                    | cards check CALL FINGERPRINT [--keymaster] | cards keymaster CALL [--off]\n"
-                     "                    | handout import FILE|ID [--replace] | rally\n";
+                     "                    | handout import FILE|ID [--replace] | rally\n"
+                     "                    | import FILE [--kind roster|book|freq|schedule] | channels\n";
         return 2;
     }
     std::string cmd = argv[i++];
@@ -175,6 +197,30 @@ int main(int argc, char** argv) {
             std::cerr << "handout import FILE|ID [--replace]\n";
             return 2;
         }
+    } else if (cmd == "import") {
+        if (i >= argc) {
+            std::cerr << "import FILE [--kind roster|book|freq|schedule]\n";
+            return 2;
+        }
+        std::ifstream f(argv[i], std::ios::binary);
+        if (!f) {
+            std::cerr << "cannot read " << argv[i] << "\n";
+            return 1;
+        }
+        std::ostringstream ss;
+        ss << f.rdbuf();
+        std::string path = argv[i++], kind = "auto";
+        if (i + 1 < argc && std::string(argv[i]) == "--kind") kind = argv[i + 1];
+        std::string name = path.substr(path.find_last_of('/') == std::string::npos ? 0 : path.find_last_of('/') + 1);
+        w = JsonWriter();
+        w.begin_object()
+            .field("cmd", "mars_import")
+            .field("data", base64(ss.str()))
+            .field("kind", kind)
+            .field("source", "file " + name);
+    } else if (cmd == "channels") {
+        w = JsonWriter();
+        w.begin_object().field("cmd", "channels_list");
     } else if (cmd == "rally") {
         w = JsonWriter();
         w.begin_object().field("cmd", "rally_status");

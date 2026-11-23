@@ -1,5 +1,7 @@
 #include "ops.h"
 
+#include "channels.h"
+
 #include "sqlite_stmt.h"
 
 #include <sqlite3.h>
@@ -216,6 +218,17 @@ Ops::Ops(std::string station, const std::string& db_path) : station_(book_key(st
         "CREATE TABLE IF NOT EXISTS schedules (name TEXT PRIMARY KEY, days TEXT, start INTEGER, minutes INTEGER,"
         " roster TEXT, exercise INTEGER, ncs TEXT, note TEXT, auto_open INTEGER, last_start INTEGER DEFAULT 0,"
         " last_net TEXT DEFAULT '')");
+    {
+        bool has = false;
+        Stmt q(db_, "PRAGMA table_info(schedules)");
+        while (q.step()) has = has || q.text(1) == "channel";
+        if (!has) exec("ALTER TABLE schedules ADD COLUMN channel TEXT DEFAULT ''");
+    }
+    std::string base = db_path;
+    if (base.size() > 3 && base.compare(base.size() - 3, 3, ".db") == 0) base.resize(base.size() - 3);
+    channels_ = std::make_unique<ChannelPlan>(base + ".channels");
+    std::string cerr;
+    channels_->load(&cerr);
 }
 
 Ops::~Ops() { sqlite3_close(db_); }
@@ -743,7 +756,8 @@ int64_t next_start(const std::string& days, int start, int64_t t) {
     return 0;
 }
 
-static const char* kSchedCols = "name, days, start, minutes, roster, exercise, ncs, note, auto_open, last_start, last_net";
+static const char* kSchedCols =
+    "name, days, start, minutes, roster, exercise, ncs, note, auto_open, last_start, last_net, channel";
 
 static NetSchedule row_sched(Stmt& q) {
     NetSchedule s;
@@ -758,6 +772,7 @@ static NetSchedule row_sched(Stmt& q) {
     s.auto_open = q.i64(8) != 0;
     s.last_start = q.i64(9);
     s.last_net = q.text(10);
+    s.channel = q.text(11);
     return s;
 }
 
@@ -776,11 +791,14 @@ bool Ops::sched_put(NetSchedule s, std::string* error) {
     if (s.start < 0 || s.start >= 24 * 60) return fail("time: write the start as HHMM in UTC, like 1900");
     if (s.minutes < 5 || s.minutes > 24 * 60) return fail("minutes: a net runs 5 to 1440 minutes");
     if (s.note.size() > 80) return fail("note: keep it to 80 characters");
+    s.channel = book_key(s.channel);
+    if (!s.channel.empty() && !valid_designator(s.channel))
+        return fail("channel: the channel's designator (CH01, P1), never a frequency");
     for (auto& r : s.roster) r = book_key(r);
     auto old = sched_get(s.name);
     Stmt(db_,
          "INSERT OR REPLACE INTO schedules(name, days, start, minutes, roster, exercise, ncs, note, auto_open,"
-         " last_start, last_net) VALUES(?,?,?,?,?,?,?,?,?,?,?)")
+         " last_start, last_net, channel) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)")
         .bind(1, s.name)
         .bind(2, s.days)
         .bind(3, static_cast<int64_t>(s.start))
@@ -792,6 +810,7 @@ bool Ops::sched_put(NetSchedule s, std::string* error) {
         .bind(9, static_cast<int64_t>(s.auto_open))
         .bind(10, old ? old->last_start : 0)
         .bind(11, old ? old->last_net : std::string())
+        .bind(12, s.channel)
         .step();
     return true;
 }
