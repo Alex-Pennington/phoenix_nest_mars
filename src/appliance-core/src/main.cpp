@@ -9,6 +9,7 @@
 #include "core.h"
 #include "greybeard_modem.h"
 #include "link_monitor.h"
+#include "ops.h"
 #include "loopback_modem.h"
 
 #include <csignal>
@@ -78,8 +79,11 @@ bool g_link_gate = false;
 
 bool start_station(Station& s, CoreConfig cfg, std::unique_ptr<ModemDriver> modem, uint16_t port) {
     std::string name = cfg.station;
+    std::string db = cfg.db_path;
     cfg.link_gate = g_link_gate;
     s.core = std::make_unique<Core>(std::move(cfg), std::move(modem));
+    // The station book (address book, nets, duty, log, reports) in the same file.
+    s.core->set_ops(std::make_shared<Ops>(name, db));
     if (g_link) s.core->set_link_monitor(g_link);
     s.core->on_log([name](const std::string& t) { log_line(name, t); });
     s.core->start();

@@ -1,5 +1,7 @@
 #include "api_server.h"
 
+#include "api_ops.h"
+
 #include "acp126.h"
 #include "acp127.h"
 #include "acp201.h"
@@ -580,6 +582,11 @@ std::string ApiServer::handle(Core& core, const std::string& line) {
         w.field("advisor", adv ? adv->name() : std::string());
         // Link state from greybeard-ale (link_monitor.h); "link": null with no source.
         write_link(w, s);
+        if (Ops* ops = core.ops()) {
+            auto d = ops->duty_current();
+            std::string net = ops->current_net();
+            w.field("on_duty", d ? d->op : std::string()).field("net", net);
+        }
         w.end_object();
         return w.str();
     }
@@ -587,11 +594,21 @@ std::string ApiServer::handle(Core& core, const std::string& line) {
     if (cmd == "send") {
         std::string prec = req.count("prec") ? req["prec"] : "R";
         if (prec.size() != 1) return error_reply("precedence must be Z, O, P or R");
+        // A name in the station book goes to the stations it stands for: a
+        // collective sends one copy to each.
+        std::vector<std::string> to = core.ops() ? core.ops()->send_targets(req["to"]) : std::vector<std::string>{};
+        if (to.empty()) to.push_back(req["to"]);
         std::string err;
-        std::string id = core.submit(req["to"], prec[0], req["body"], &err);
-        if (id.empty()) return error_reply(err);
+        std::vector<std::string> ids;
+        for (auto& t : to) {
+            std::string id = core.submit(t, prec[0], req["body"], &err);
+            if (id.empty()) return ids.empty() ? error_reply(err) : error_reply(err + " (sent to " + std::to_string(ids.size()) + " before this)");
+            ids.push_back(id);
+        }
         JsonWriter w;
-        w.begin_object().field("ok", true).field("id", id).end_object();
+        w.begin_object().field("ok", true).field("id", ids[0]).begin_array("ids");
+        for (auto& i : ids) w.field("", i);
+        w.end_array().end_object();
         return w.str();
     }
 
@@ -668,9 +685,11 @@ std::string ApiServer::handle(Core& core, const std::string& line) {
         return w.str();
     }
 
+    if (auto r = handle_ops(core, cmd, req)) return *r;
+
     return error_reply(
         "unknown cmd; use status, send, list, get, queue, log, send_acp127, send_acp126, send_chat, parse_acp127, "
-        "parse_traffic, compose_templates, compose_form, compose_check, compose_send or compose_advise");
+        "parse_traffic, compose_templates, compose_form, compose_check, compose_send compose_advise, or the book's calls (docs/api.md): book_*, net_*, duty_*, log_add, station_log, report_monthly");
 }
 
 }  // namespace pna

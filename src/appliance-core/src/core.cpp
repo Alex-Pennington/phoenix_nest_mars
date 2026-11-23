@@ -207,6 +207,8 @@ void Core::handle_tx_done(bool ok, const std::string& err) {
 void Core::handle_rx(const std::string& bytes) {
     std::lock_guard<std::mutex> g(mu_);
     for (const Frame& f : parser_.feed(bytes)) {
+        // Any frame from a station puts it on frequency: open nets check it in.
+        if (ops_ && !f.src.empty()) ops_->heard(f.src);
         if (f.dst != cfg_.station) {
             log(f.id, "heard traffic for " + f.dst + ", not for us");
             continue;

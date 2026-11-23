@@ -4,6 +4,7 @@
 
 #include "frame.h"
 #include "link_monitor.h"
+#include "ops.h"
 #include "modem.h"
 #include "store.h"
 
@@ -65,6 +66,9 @@ public:
     void set_link_monitor(std::shared_ptr<LinkMonitor> m) { link_ = std::move(m); }
     // Whether a message to `station` would wait for a link now.
     bool waits_for_link(const std::string& station) const;
+    // The station book (ops.h): nets hear stations through it. Set before start().
+    void set_ops(std::shared_ptr<Ops> ops) { ops_ = std::move(ops); }
+    Ops* ops() const { return ops_.get(); }
     std::vector<Message> list(int limit);
     std::optional<Message> get(const std::string& id);
     std::vector<Message> queue(int limit);
@@ -94,6 +98,7 @@ private:
     std::atomic<bool> running_{false};
     std::function<void(const std::string&)> log_fn_;
     std::shared_ptr<LinkMonitor> link_;
+    std::shared_ptr<Ops> ops_;
     std::set<std::string> told_waiting_;
     std::string told_clock_;              // the clock source last logged  // messages already logged as waiting for a link
 };

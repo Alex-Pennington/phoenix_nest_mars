@@ -89,6 +89,15 @@ on the real scanner today. To try the gate, use the stand-in:
     appliance-cli send --to B "HELLO"          # waits: no link to B
     echo "link B linked" | socat - UNIX-CONNECT:data/scan.sock    # now it goes
 
+## Nets, the address book and the monthly report
+
+Each station keeps a book in its own store, offline: an address book with
+collectives (import it from CSV), nets with a roster and check-ins, operator
+duty with turnover notes, a station log and a monthly report. A station heard on
+the air during a net is checked in automatically. Sending to a collective's name
+sends one copy to each member. The calls are in docs/api.md under "The station
+book"; tests/test_ops.cpp runs an exercise net from open to monthly report.
+
 ## Two stations with no modem at all
 
     appliance-core --loopback-pair A,B --db-dir ./data --api-port 4100

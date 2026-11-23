@@ -202,3 +202,76 @@ lines.
 `{"cmd":"list","limit":50}` and `{"cmd":"get","id":"AAR4XX-17"}` →
 `{"ok":true,"messages":[{"id","direction","from","to","prec","precedence","state","attempts",
 "created_at","updated_at","body","last_error"?}]}`
+
+## The station book: address book, nets, duty, log, monthly report
+
+All of it works offline and lives in the station's own SQLite file. Lists in a
+request are one string: `roster` is comma-separated, `members` semicolon-separated.
+Times are UTC unix seconds.
+
+### Address book
+
+- `book_put` `{name, kind, call, ri, ale, members, note}`: add or replace one
+  entry. `kind` is `station` (default) or `collective` (needs `members`). A
+  station's `call` defaults to its name. `note` is 80 characters at most. The
+  book has no field for a person's name, phone or address.
+- `book_import` `{csv, source}`: CSV with a header row using the columns name,
+  kind, call, ri, ale, members, note. Other columns are left out and listed in
+  `dropped_columns`. Rows that don't check out are listed in `errors` with their
+  line number. Returns `imported`, the number of rows taken.
+- `book_export` returns `csv` in the same layout. `book_list` returns `entries`.
+- `book_get {name}` finds an entry by its name, call, RI or ALE address.
+- `book_remove {name}` deletes one entry.
+- `book_resolve {to}`: `to` is one name or a comma list. It returns `stations`
+  (collectives expanded, each station once), `unknown` (names the book doesn't
+  have) and `loops` (collectives that contain themselves).
+
+`send` uses the book: a station name goes to its call, and a collective sends
+one copy to each member, returned as `ids`. A name the book doesn't have goes as
+written.
+
+### Nets
+
+- `net_open` `{name, roster, exercise, ncs, note}` returns `id` (NET-n) and the
+  net. `roster` can name collectives; they are expanded when the net opens.
+  `ncs` defaults to this station.
+- `net_checkin` `{net, station, traffic, remark}` checks a station in by hand.
+  `traffic` is how many messages it holds for the net.
+- `net_checkout {net, station}` checks a station out.
+- `net_close {net}` closes the net and returns it with its check-ins.
+- `net_status {net}` returns the net with `checkins`, `missing` (on the roster
+  but not heard) and `in_roster` for each check-in.
+- `net_list {limit}` lists nets, newest first.
+
+`net` can be left out while exactly one net is open. When the core hears any
+frame from a station (a message, an ACK or traffic for someone else), every open
+net checks that station in with `via: "radio"`. A station that checked out
+isn't put back in by radio. `status` adds `net`, the open net's id.
+
+### Duty and the station log
+
+- `duty_on {operator, note}` and `duty_off {turnover}`. One operator is on duty
+  at a time.
+- `duty_status` returns `on_duty`, `operator` and `since`, plus
+  `last_turnover`, the last note left for the next operator. `status` adds
+  `on_duty`.
+- `log_add {kind, text}`: `kind` is `note`, `comspot` or `beadwindow`. An entry
+  made during an exercise net is tagged as exercise.
+- `station_log` `{from, to, limit}` returns `entries`, oldest first. The core
+  adds its own entries for nets opening and closing, check-ins and check-outs,
+  duty on and off, and turnovers. Nothing is ever pruned.
+
+### Monthly report
+
+`report_monthly {month: "2026-11"}` (default: this month, UTC) returns:
+
+- `duty_tenths`: duty hours times ten.
+- `nets`, `nets_exercise`, `nets_as_ncs` and `checkins`.
+- `sent`, `sent_acked`, `sent_failed`, `received` and `exercise_messages`.
+- `comspots` and `beadwindows`.
+- `text`: the same report as plain upper-case lines of 69 characters or fewer,
+  ready to send as a message body.
+
+A message counts as an exercise when one of its lines starts with EXERCISE. The
+report's layout is the appliance's own; MARS's monthly report form wasn't
+available to copy.
