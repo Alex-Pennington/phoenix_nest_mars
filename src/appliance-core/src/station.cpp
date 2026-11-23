@@ -265,49 +265,97 @@ bool save_identity(const std::string& path, const Identity& id, std::string* err
     return ok;
 }
 
-bool backup(const Identity& id, const std::string& passphrase, std::string& out, std::string* error) {
+bool backup(const Identity& id, const std::vector<HeldCard>& held, int64_t saved, const std::string& passphrase,
+            std::string& out, std::string* error) {
     if (passphrase.size() < 12) return fail(error, "the passphrase must be 12 characters or more");
     std::string salt = crypto::random_bytes(16), nonce = crypto::random_bytes(12);
     std::string key = crypto::scrypt(passphrase, salt, 32);
     if (key.empty()) return fail(error, "scrypt failed");
     std::string plain = id.sign_priv + id.seal_priv;
-    std::string aad = "PNA BACKUP 1|" + id.station + "|" + keys::time_text(id.made);
+    for (auto& h : held) {
+        std::string src;
+        for (char c : h.source) src += (c == '\n' || c == '\r') ? ' ' : c;
+        std::string ct = card_text(h.card);
+        if (ct.empty()) continue;
+        plain += std::string("HELD ") + (h.checked ? "1" : "0") + " " + (h.keymaster ? "1" : "0") + " " + src + "\n" + ct;
+    }
+    std::string n = std::to_string(held.size());
+    std::string aad = "PNA BACKUP 2|" + id.station + "|" + keys::time_text(id.made) + "|" + keys::time_text(saved) + "|" + n;
     std::string sealed = crypto::aes256gcm_seal(key, nonce, aad, plain);
     crypto::wipe(key);
     crypto::wipe(plain);
     if (sealed.empty()) return fail(error, "the cipher failed");
     std::string h = HEX(sealed);
-    out = "PNA STATION BACKUP 1\nSTATION " + id.station + "\nMADE " + keys::time_text(id.made) + "\nSALT " + HEX(salt) +
-          "\nNONCE " + HEX(nonce) + "\n";
+    out = "PNA STATION BACKUP 2\nSTATION " + id.station + "\nMADE " + keys::time_text(id.made) + "\nSAVED " +
+          keys::time_text(saved) + "\nCARDS " + n + "\nSALT " + HEX(salt) + "\nNONCE " + HEX(nonce) + "\n";
     for (size_t i = 0; i < h.size(); i += 64) out += "DATA " + h.substr(i, 64) + "\n";
     out += "END\n";
     return true;
 }
 
-bool restore(const std::string& text, const std::string& passphrase, Identity& out, std::string* error) {
-    auto b = block(text, "PNA STATION BACKUP 1");
+bool restore(const std::string& text, const std::string& passphrase, Identity& out, std::vector<HeldCard>* held,
+             int64_t* saved, std::string* error) {
+    int version = 2;
+    auto b = block(text, "PNA STATION BACKUP 2");
+    if (b.empty()) {
+        version = 1;
+        b = block(text, "PNA STATION BACKUP 1");
+    }
     if (b.empty()) return fail(error, "no station backup in the text");
-    std::string salt, nonce, sealed;
+    std::string salt, nonce, sealed, aad;
+    int64_t when = 0;
     out = Identity{};
     out.station = get(b, "STATION");
     if (!valid_call(out.station) || !keys::parse_time(get(b, "MADE"), out.made) || !unhex(get(b, "SALT"), 16, salt) ||
         !unhex(get(b, "NONCE"), 12, nonce) || !crypto::from_hex(all(b, "DATA"), sealed))
         return fail(error, "the backup is damaged");
+    if (version == 1) {
+        aad = "PNA BACKUP 1|" + out.station + "|" + keys::time_text(out.made);
+    } else {
+        if (!keys::parse_time(get(b, "SAVED"), when) || get(b, "CARDS").empty())
+            return fail(error, "the backup is damaged");
+        aad = "PNA BACKUP 2|" + out.station + "|" + keys::time_text(out.made) + "|" + keys::time_text(when) + "|" +
+              get(b, "CARDS");
+    }
     std::string key = crypto::scrypt(passphrase, salt, 32), plain;
-    bool ok = !key.empty() &&
-              crypto::aes256gcm_open(key, nonce, "PNA BACKUP 1|" + out.station + "|" + keys::time_text(out.made), sealed,
-                                     plain) &&
-              plain.size() == 64;
+    bool ok = !key.empty() && crypto::aes256gcm_open(key, nonce, aad, sealed, plain) &&
+              (version == 1 ? plain.size() == 64 : plain.size() >= 64);
     crypto::wipe(key);
     if (!ok) {
         crypto::wipe(plain);
         return fail(error, "the passphrase is wrong, or the backup was changed");
     }
     out.sign_priv = plain.substr(0, 32);
-    out.seal_priv = plain.substr(32);
-    crypto::wipe(plain);
+    out.seal_priv = plain.substr(32, 32);
     out.sign_pub = crypto::ed25519_public(out.sign_priv);
     out.seal_pub = crypto::x25519_public(out.seal_priv);
+    std::string rest = plain.substr(64);
+    crypto::wipe(plain);
+    if (saved) *saved = when;
+    if (held) {
+        held->clear();
+        HeldCard cur;
+        bool in = false;
+        for (auto& l : lines_of(rest)) {
+            if (!in && starts(l, "HELD ") && l.size() >= 9) {
+                cur = HeldCard{};
+                cur.checked = l[5] == '1';
+                cur.keymaster = l[7] == '1';
+                cur.source = l.substr(9);
+                in = true;
+                continue;
+            }
+            if (in) {
+                cur.card += l + "\n";
+                if (l == "END") {
+                    held->push_back(cur);
+                    in = false;
+                }
+            }
+        }
+        if (version == 2 && std::to_string(held->size()) != get(b, "CARDS"))
+            return fail(error, "the backup's card list is damaged");
+    }
     return true;
 }
 
@@ -504,6 +552,161 @@ bool open_tape(const std::string& text, const Identity& me,
     plain.pop_back();
     tape_text = plain;
     crypto::wipe(plain);
+    return true;
+}
+
+namespace {
+
+const char* kHandoutHead = "PNA MEMBER HANDOUT 1";
+
+std::string handout_signed_text(const std::vector<std::string>& body) {
+    std::string t = "PNA HANDOUT 1|";
+    for (auto& l : body) t += l + "\n";
+    return t;
+}
+
+// Every block from `head` to END in the lines, as text.
+std::vector<std::string> blocks_in(const std::vector<std::string>& lines, const char* head) {
+    std::vector<std::string> out;
+    std::string cur;
+    bool in = false;
+    for (auto& l : lines) {
+        if (!in && l == head) {
+            in = true;
+            cur.clear();
+        }
+        if (in) {
+            cur += l + "\n";
+            if (l == "END") {
+                out.push_back(cur);
+                in = false;
+            }
+        }
+    }
+    return out;
+}
+
+}  // namespace
+
+std::string format_handout(const Handout& h, const Identity& issuer) {
+    std::vector<std::string> b = {kHandoutHead, "NET " + h.net, "FOR " + h.for_station,
+                                  "ISSUED " + keys::time_text(h.issued), "BY " + issuer.station};
+    if (!h.tape.empty()) {
+        b.push_back("TAPE " + h.tape + " " + keys::time_text(h.valid_from) + " " + keys::time_text(h.valid_until));
+        if (!h.first_key.empty()) b.push_back("CHECK " + h.first_key + " " + h.first_check);
+    }
+    for (auto& k : h.keymasters) b.push_back("KEYMASTER " + k.first + " " + k.second);
+    for (auto& m : h.members) b.push_back("MEMBER " + m.first + " " + m.second);
+    std::vector<std::string> steps;
+    if (!h.sealed.empty()) {
+        steps = {"LOAD THIS HANDOUT ON YOUR APPLIANCE (HANDOUT IMPORT).",
+                 "READ THE CHECK FOR " + h.first_key + " TO A KEYMASTER BY VOICE.",
+                 "MAKE A STATION BACKUP. KEEP IT OFF THE BOX WITH THIS HANDOUT."};
+    } else {
+        steps = {"START YOUR APPLIANCE. IT MAKES ITS STATION KEYS.",
+                 "LOAD THIS HANDOUT ON YOUR APPLIANCE (HANDOUT IMPORT).",
+                 "SEND YOUR CARD TO A KEYMASTER ABOVE AND READ THEM YOUR",
+                 "FINGERPRINT BY VOICE. THE KEYMASTER SENDS YOUR KEY TAPE.",
+                 "MAKE A STATION BACKUP. KEEP IT OFF THE BOX WITH THIS HANDOUT."};
+    }
+    steps.push_back("BAD DAY: RESTORE YOUR BACKUP (OR START FRESH), LOAD THIS");
+    steps.push_back("HANDOUT AGAIN, THEN ASK ANY KEYMASTER ABOVE FOR A NEW TAPE.");
+    steps.push_back("STALE IS FINE: THE CARDS ABOVE STAY GOOD AFTER THE TAPE ENDS.");
+    for (size_t i = 0; i < steps.size(); ++i) b.push_back("STEP " + std::to_string(i + 1) + " " + steps[i]);
+    for (auto& c : h.cards)
+        for (auto& l : lines_of(card_text(c)))
+            if (!l.empty()) b.push_back(l);
+    if (!h.sealed.empty())
+        for (auto& l : lines_of(upper(h.sealed)))
+            if (!simplified(l).empty()) b.push_back(simplified(l));
+    std::string sig = HEX(crypto::ed25519_sign(issuer.sign_priv, handout_signed_text(b)));
+    std::string out;
+    for (auto& l : b) out += l + "\n";
+    out += "SIG " + sig.substr(0, 64) + "\nSIG " + sig.substr(64) + "\nEND HANDOUT\n";
+    return out;
+}
+
+bool parse_handout(const std::string& text, Handout& out, std::string* error) {
+    out = Handout{};
+    std::vector<std::string> L;
+    bool in = false, ended = false;
+    for (auto& raw : lines_of(upper(text))) {
+        std::string l = simplified(raw);
+        if (!in) {
+            if (l == kHandoutHead) {
+                in = true;
+                L.push_back(l);
+            }
+            continue;
+        }
+        if (l.empty()) continue;
+        if (l == "END HANDOUT") {
+            ended = true;
+            break;
+        }
+        L.push_back(l);
+    }
+    if (!in) return fail(error, "no member handout in the text (it starts PNA MEMBER HANDOUT 1)");
+    if (!ended || L.size() < 8 || !starts(L[L.size() - 1], "SIG ") || !starts(L[L.size() - 2], "SIG "))
+        return fail(error, "the handout is cut off or damaged");
+    std::string sig;
+    if (!unhex(L[L.size() - 2].substr(4) + L[L.size() - 1].substr(4), 64, sig))
+        return fail(error, "the handout's signature is damaged");
+    std::vector<std::string> body(L.begin(), L.end() - 2);
+    // The fields at the top, before the first card or sealed tape.
+    for (auto& l : body) {
+        if (l == "PNA STATION CARD 1" || l == "PNA SEALED TAPE 1") break;
+        auto w = words(l);
+        if (w.empty()) continue;
+        if (w[0] == "NET") out.net = l.substr(4);
+        else if (w[0] == "FOR" && w.size() == 2) out.for_station = w[1];
+        else if (w[0] == "BY" && w.size() == 2) out.by = w[1];
+        else if (w[0] == "ISSUED" && w.size() == 2) keys::parse_time(w[1], out.issued);
+        else if (w[0] == "TAPE" && w.size() == 4) {
+            out.tape = w[1];
+            keys::parse_time(w[2], out.valid_from);
+            keys::parse_time(w[3], out.valid_until);
+        } else if (w[0] == "CHECK" && w.size() == 3) {
+            out.first_key = w[1];
+            out.first_check = w[2];
+        } else if ((w[0] == "KEYMASTER" || w[0] == "MEMBER") && w.size() == 6) {
+            auto e = std::make_pair(w[1], w[2] + " " + w[3] + " " + w[4] + " " + w[5]);
+            (w[0] == "KEYMASTER" ? out.keymasters : out.members).push_back(e);
+        }
+    }
+    if (out.net.empty() || !valid_call(out.for_station) || !valid_call(out.by) || out.issued == 0 ||
+        out.keymasters.empty() || out.keymasters[0].first != out.by)
+        return fail(error, "the handout's heading is damaged");
+    // Cards: each must self-sign and match its line's fingerprint.
+    std::optional<Card> issuer;
+    for (auto& ct : blocks_in(body, "PNA STATION CARD 1")) {
+        Card c;
+        if (!parse_card(ct, c, error)) return false;
+        std::string fp = fingerprint(c), want;
+        for (auto& k : out.keymasters)
+            if (k.first == c.station) want = k.second;
+        for (auto& m : out.members)
+            if (m.first == c.station) want = m.second;
+        if (want.empty()) return fail(error, "the handout carries a card for " + c.station + ", who isn't listed in it");
+        if (want != fp) return fail(error, "the card for " + c.station + " doesn't match its fingerprint in the handout");
+        if (c.station == out.by) issuer = c;
+        out.cards.push_back(ct);
+    }
+    for (auto& k : out.keymasters) {
+        bool has = false;
+        for (auto& ct : out.cards) has = has || card_text(ct).find("STATION " + k.first + "\n") != std::string::npos;
+        if (!has) return fail(error, "the handout lists keymaster " + k.first + " without its card");
+    }
+    if (!issuer || !crypto::ed25519_verify(issuer->sign_pub, handout_signed_text(body), sig))
+        return fail(error, "the handout's signature does not check against " + out.by +
+                               "'s card in it: it was changed or damaged");
+    auto sealed = blocks_in(body, "PNA SEALED TAPE 1");
+    if (!sealed.empty()) {
+        out.sealed = sealed[0];
+        SealedHead sh;
+        if (!sealed_head(out.sealed, sh) || sh.to != out.for_station || sh.from != out.by)
+            return fail(error, "the sealed tape in the handout isn't " + out.by + "'s tape for " + out.for_station);
+    }
     return true;
 }
 

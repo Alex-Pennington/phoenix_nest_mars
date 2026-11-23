@@ -26,7 +26,8 @@ home-made algorithm.
 | Station card | The public half, to hand out by USB or over the air | Text, self-signed, with a fingerprint you can read aloud |
 | Signature | Proves who sent a message and that nobody changed it | Ed25519 |
 | Sealed tape | Sends a net's key tape to one station only | X25519, HKDF-SHA256, AES-256-GCM, signed with Ed25519 |
-| Backup | Lets a rebuilt box keep its station keys | scrypt, AES-256-GCM |
+| Backup | Lets a rebuilt box keep its station keys and the cards it held | scrypt, AES-256-GCM |
+| Handout | A member's paper or stick to join a net, and to rally from on a bad day | Text, signed by the keymaster with Ed25519 |
 
 ## The digest
 
@@ -160,8 +161,12 @@ The receiving station runs `keys open ID` (or `keys open FILE`). A sealed tape
 opens only:
 
 - at the station it was sealed to,
-- with the keymaster's card already held,
+- with the keymaster's card already held, checked by voice and named a
+  keymaster (from a handout, or `cards check CALL FP --keymaster`),
 - with every group and the keymaster's signature intact.
+
+A station that holds a card but hasn't named it keymaster won't take tapes
+from it. That stops any member whose card you checked from handing you keys.
 
 The groups on the air are cipher. The key tape is never in the clear.
 
@@ -180,15 +185,93 @@ If everything has to be rebuilt, leadership needs only the appliances:
 It then does it a second time from empty folders, and checks that nothing from
 the first net opens in the second.
 
+## Member handouts
+
+A handout is what a keymaster gives each member to join a net, on paper or a
+stick. `net_tape` makes one per member with `handouts=Y`. It holds no secret in
+the clear:
+
+    PNA MEMBER HANDOUT 1
+    NET PRACTICE NET
+    FOR STA-B
+    ISSUED 202611230000Z
+    BY NCS-A
+    TAPE QXR 202611230000Z 202612240000Z
+    CHECK QXR01 4HNP
+    KEYMASTER NCS-A K7QM 2XRD 9FTA HW3C
+    KEYMASTER ALT-K ...
+    MEMBER STA-B ...
+    MEMBER STA-C ...
+    STEP 1 LOAD THIS HANDOUT ON YOUR APPLIANCE (HANDOUT IMPORT).
+    STEP 2 READ THE CHECK FOR QXR01 TO A KEYMASTER BY VOICE.
+    STEP 3 MAKE A STATION BACKUP. KEEP IT OFF THE BOX WITH THIS HANDOUT.
+    STEP 4 BAD DAY: RESTORE YOUR BACKUP (OR START FRESH), LOAD THIS ...
+    (each keymaster's card)
+    (the tape, sealed to this member only)
+    SIG ...
+    SIG ...
+    END HANDOUT
+
+- **KEYMASTER lines** name who may issue this net's tapes: the keymaster first,
+  then any alternates (`net_tape keymasters="ALT-K"`). Their cards are in the
+  handout, so a member who loads it holds them checked and named, with no
+  separate voice check.
+- **CHECK** is a 4-character check value for the first key (from SHA-256 of
+  the key, not the key). Read it to the keymaster by voice to confirm the tape
+  loaded. `keys list` shows the check for every key.
+- **The sealed tape** opens only on the box it was sealed to. A member with no
+  card at the keymaster yet gets a handout with no tape, and steps that say to
+  send the card.
+- An **alternate's handout** carries every member's card too, so the
+  alternate can issue tapes if the keymaster is lost.
+- The keymaster signs the whole handout. A handout that was changed, or is for
+  another station, is refused.
+
+The layout is ours for now. Once leadership's member handout style is in hand
+(with every key blanked), the handout follows its order and wording. The
+contents stay the same.
+
+## BAD_DAY: rallying from stale material
+
+The drill: every box is wiped, and members bring back what they kept, which
+may be weeks old. A stale handout still works, because the cards in it don't
+expire; only its tape does.
+
+1. **Restore.** A member with a backup restores it: the station keys and every
+   card it held come back, with their checked and keymaster marks. Net keys are
+   never in a backup. A member without one starts fresh, and the box makes new
+   keys.
+2. **Load the old handout** (`handout import FILE`). The keymasters come back,
+   checked and named. Its tape has ended, or was sealed to the old keys, and
+   the reply says which.
+3. **Signed plain traffic works at once.** It needs no tape, and the keymaster
+   can check every signature.
+4. **New card, if the keys are new.** The member sends its card. The keymaster
+   reads the fingerprint back by voice, then loads it with `--replace`.
+5. **New tape.** Any keymaster on the handout runs `net_tape`. With the
+   keymaster lost, the alternate restores its own backup and does the same.
+6. `rally` shows, at each step, what the box holds and what to do next.
+
+`test_badday` runs the whole drill. A normal day builds a net of NCS-A, its
+alternate ALT-K, STA-B and STA-C, with handouts and backups (STA-C never makes
+one). 45 days later every box is wiped. NCS-A and STA-B restore. STA-C rallies
+from its stale handout and a new card. NCS-A issues a new tape, STA-B opens it
+over the air and STA-C from its new handout, and codress works again. Then
+NCS-A is lost: ALT-K restores, finds its own old tape ended, and issues the
+next tape. A station that never named ALT-K keymaster refuses that tape.
+
 ## Backups
 
     appliance-cli api station_backup passphrase="..."
 
-This returns the station keys enciphered with a passphrase of 12 characters
-or more (scrypt, N=2^15, r=8, p=1, then AES-256-GCM). Keep it off the box.
-`station_restore` puts it back on a rebuilt box for the same station, and the
-card and fingerprint stay the same. Without a backup, make new keys and send
-the new card. The voice check catches anyone pretending to be the station.
+This returns the station keys and every card the station holds, with their
+checked and keymaster marks, enciphered with a passphrase of 12 characters or
+more (scrypt, N=2^15, r=8, p=1, then AES-256-GCM). It is dated, and net keys
+are never in it. Keep it off the box with your handout. `station_restore`
+puts it back on a rebuilt box for the same station: the card and fingerprint
+stay the same, and the reply gives the backup's age. Older backups with the
+station keys only still restore. Without a backup, make new keys and send the
+new card. The voice check catches anyone pretending to be the station.
 
 ## Limits to know
 

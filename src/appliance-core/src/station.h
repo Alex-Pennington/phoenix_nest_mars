@@ -28,6 +28,8 @@
 #include <functional>
 #include <optional>
 #include <string>
+#include <utility>
+#include <vector>
 
 namespace pna {
 namespace station {
@@ -55,9 +57,27 @@ bool make_identity(const std::string& station, int64_t now, Identity& out, std::
 bool load_identity(const std::string& path, Identity& out, bool* exists, std::string* error);
 bool save_identity(const std::string& path, const Identity& id, std::string* error);
 
-// Encrypted backup of an identity under a passphrase (12 characters or more).
-bool backup(const Identity& id, const std::string& passphrase, std::string& out, std::string* error);
-bool restore(const std::string& text, const std::string& passphrase, Identity& out, std::string* error);
+// Encrypted backup under a passphrase (12 characters or more): the identity
+// and the cards this station holds, with how each was trusted, so that a box
+// rebuilt from a stale backup knows its keymasters and members again
+// (version 2). Net keys are never in a backup: a rallying station gets fresh
+// ones from a keymaster. restore() reads version 1 (identity only) too.
+struct HeldCard {
+    std::string card;    // the card's text
+    bool checked = false;
+    bool keymaster = false;
+    std::string source;
+};
+bool backup(const Identity& id, const std::vector<HeldCard>& held, int64_t saved, const std::string& passphrase,
+            std::string& out, std::string* error);
+bool restore(const std::string& text, const std::string& passphrase, Identity& out, std::vector<HeldCard>* held,
+             int64_t* saved, std::string* error);
+inline bool backup(const Identity& id, const std::string& passphrase, std::string& out, std::string* error) {
+    return backup(id, {}, 0, passphrase, out, error);
+}
+inline bool restore(const std::string& text, const std::string& passphrase, Identity& out, std::string* error) {
+    return restore(text, passphrase, out, nullptr, nullptr, error);
+}
 
 Card card_of(const Identity& id);
 std::string format_card(const Identity& id);  // signed by the identity
@@ -90,6 +110,28 @@ bool sealed_head(const std::string& text, SealedHead& out);
 bool open_tape(const std::string& text, const Identity& me,
                const std::function<std::optional<Card>(const std::string&)>& card_for, std::string& tape_text,
                SealedHead& head, std::string* error);
+
+// Member handouts (docs/crypto.md). A keymaster gives each member of a net
+// one handout, on paper or a USB stick. It holds no secret in the clear: the
+// keymasters' cards, the members' fingerprints, the net's key tape sealed to
+// that member (when the keymaster holds the member's card), and the steps.
+// An alternate keymaster's handout also carries every member's card, so it
+// can issue tapes if the keymaster is lost. The issuing keymaster signs the
+// whole handout. A stale handout still works on a BAD_DAY: its cards and
+// fingerprints stay good long after its tape has expired.
+struct Handout {
+    std::string net, for_station, by, tape;
+    int64_t issued = 0, valid_from = 0, valid_until = 0;
+    std::string first_key, first_check;  // the tape's first key and its check value
+    std::vector<std::pair<std::string, std::string>> keymasters;  // call, fingerprint; the issuer first
+    std::vector<std::pair<std::string, std::string>> members;     // call, fingerprint
+    std::vector<std::string> cards;  // card texts: every keymaster's, and every member's in an alternate's handout
+    std::string sealed;              // the sealed tape block, or ""
+};
+std::string format_handout(const Handout& h, const Identity& issuer);
+// Checks the layout, every card's self-signature and fingerprint, and the
+// issuer's signature against the issuer's card inside. False with *error.
+bool parse_handout(const std::string& text, Handout& out, std::string* error);
 
 }  // namespace station
 }  // namespace pna

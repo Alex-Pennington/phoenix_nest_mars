@@ -367,8 +367,9 @@ memory after use and never written to the log.
 - `key_import {text}`: loads a key tape. Returns `net`, `tape`, `added`,
   `already` and `expired`.
 - `key_open {id | text}`: opens a sealed key tape (from a stored message or
-  pasted text) and loads it. Returns the same as `key_import`, plus `from` (the
-  keymaster) and `from_checked`.
+  pasted text) and loads it, if its sender is named a keymaster here. Returns
+  the same as `key_import`, plus `from` (the keymaster) and `from_checked`.
+- `keys_list` also gives each key's `check`, to read by voice.
 - `keys_list`: `keys`, each with `indicator`, `net`, `tape`, `from`, `until`
   and `state`.
 - `key_zeroize {which}`: wipes one key (`QXR01`) or a whole tape (`QXR`).
@@ -377,10 +378,15 @@ memory after use and never written to the log.
 ### This station's keys
 
 - `station_card`: `station`, `fingerprint` and `card`, the text to hand out.
-- `station_backup {passphrase}`: `backup`, the station keys enciphered with the
-  passphrase (12 characters or more).
+- `station_backup {passphrase}`: `backup`, the station keys and held cards
+  enciphered with the passphrase (12 characters or more), and `cards`, the
+  count.
 - `station_restore {text, passphrase}`: puts a backup back. It must be this
-  station's. Returns `fingerprint`.
+  station's. Returns `fingerprint`, `cards` (restored), `saved` and `age_days`
+  (for dated backups) and `refused`.
+- `rally_status`: for a box coming back on a bad day. `station`,
+  `fingerprint`, `keymasters` (each `station`, `fingerprint`), `cards`,
+  `keys_now` (each `indicator`, `net`, `check`) and `next`, the step to take.
 
 ### Other stations' cards
 
@@ -389,18 +395,31 @@ memory after use and never written to the log.
   or `replaced`), `checked` and `next`. A different card for a station already
   held is refused unless `replace` is `Y`.
 - `cards_list`: this station and its `fingerprint`, and `cards`, each with
-  `station`, `fingerprint`, `checked`, `source` and `added`.
-- `card_check {station, fingerprint}`: marks a card checked when the
-  fingerprint read back by voice matches. Case and spaces don't matter.
+  `station`, `fingerprint`, `checked`, `keymaster`, `source` and `added`.
+- `card_check {station, fingerprint, keymaster}`: marks a card checked when the
+  fingerprint read back by voice matches. Case and spaces don't matter. With
+  `keymaster=Y` it also names the station a keymaster.
+- `card_keymaster {station, keymaster}`: names a checked card a keymaster
+  (`keymaster=N` takes it back). Only a keymaster's sealed tapes open here.
+- `handout_import {text | id, replace}`: loads a member handout, new or stale.
+  It must be for this station and signed by its issuer. Its cards are held as
+  checked and its keymasters named; a different card for a station already
+  held needs `replace=Y`. Returns `net`, `by`, `issued`, `cards`, `stale`,
+  `keymasters`, `tape_opened` (with `added`, `already`, `expired` when it
+  opened), `next` when there's a step to take, and `refused`.
 - `card_send {to}`: sends this station's card as a plain message. Returns `id`.
 
 ### Keymaster
 
-- `net_tape {net, start, days, period_hours, members, send}`: makes a tape for
-  `net` (`start` is YYYYMMDD or YYYYMMDDHHMM UTC, default today 0000Z; 31 days
-  of 24-hour keys by default), loads it here, and seals a copy to each station
-  in `members` (calls or station-book names, spaces or commas). Returns `net`,
-  `tape`, `sealed` (each with `station`, `checked` and `text`, plus `id` when
-  `send` is `Y`) and `no_card` (members whose card isn't held).
+- `net_tape {net, start, days, period_hours, members, keymasters, send, handouts}`:
+  makes a tape for `net` (`start` is YYYYMMDD or YYYYMMDDHHMM UTC, default
+  today 0000Z; 31 days of 24-hour keys by default), loads it here, and seals a
+  copy to each station in `members` (calls or station-book names, spaces or
+  commas). `keymasters` names alternates: they get the tape too, and are named
+  keymasters on every handout. Returns `net`, `tape`, `sealed` (each with
+  `station`, `checked` and `text`, plus `id` when `send` is `Y`) and `no_card`
+  (members whose card isn't held). With `handouts=Y` it also returns
+  `handouts`, each with `station`, `has_tape`, `alternate` and `text`
+  (docs/crypto.md).
 - `tape_seal {text, to}`: seals a tape made with `pna-keymaster` to one
   station. Returns the same shape.

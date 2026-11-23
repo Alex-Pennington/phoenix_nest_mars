@@ -88,16 +88,19 @@ public:
 
     // Station cards (station.h) this station holds: other stations' public
     // keys, as their card text, with whether the operator checked the
-    // fingerprint with that station by voice.
+    // fingerprint with that station by voice, and whether that station is
+    // named as a keymaster here (only a keymaster's sealed key tapes open).
     struct CardRow {
         std::string station, card, fingerprint, source;
         bool verified = false;
+        bool keymaster = false;
         int64_t added = 0;
     };
     void put_card(const CardRow& c);
     std::optional<CardRow> card(const std::string& station);
     std::vector<CardRow> cards();
     void set_card_verified(const std::string& station, bool v);
+    void set_card_keymaster(const std::string& station, bool v);
 
 private:
     void exec(const char* sql);

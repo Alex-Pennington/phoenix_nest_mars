@@ -672,10 +672,141 @@ std::string send_block(Core& core, const std::string& to, const std::string& tex
 
 // Station keys (station.h): this station's card and backup, other stations'
 // cards, and key tapes sealed to them.
+// Calls in a list written with spaces or commas, in capitals.
+std::vector<std::string> call_list(const std::string& who) {
+    std::vector<std::string> named;
+    std::string cur;
+    for (char c : who + " ") {
+        if (c == ' ' || c == ',') {
+            if (!cur.empty()) named.push_back(cur);
+            cur.clear();
+        } else {
+            cur += static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+        }
+    }
+    return named;
+}
+
+// handout_import: a member handout (station.h), from a file or a stored
+// message. Its cards are held as checked (the handout came by hand), its
+// keymasters are named, and its sealed tape is opened when it is sealed to
+// this station's present keys. A stale handout still loads its cards.
+std::string handout_import(Core& core, const station::Identity& me, std::map<std::string, std::string>& req) {
+    std::string text = req["text"], err;
+    if (!req["id"].empty()) {
+        auto m = core.get(req["id"]);
+        if (!m) return error_reply("no message with that id");
+        text = m->body;
+    }
+    station::Handout h;
+    if (!station::parse_handout(text, h, &err)) return error_reply("handout not loaded: " + err);
+    if (h.for_station != me.station)
+        return error_reply("this handout is for " + h.for_station + ", not this station");
+    std::string source = "handout from " + h.by + " issued " + keys::time_text(h.issued);
+    std::vector<std::string> refused;
+    int loaded = 0;
+    for (auto& ct : h.cards) {
+        station::Card c;
+        if (!station::parse_card(ct, c, nullptr)) continue;
+        bool km = false;
+        for (auto& k : h.keymasters) km = km || k.first == c.station;
+        std::string what, e;
+        if (core.add_trusted_card(ct, source, km, req["replace"] == "Y", c, what, &e)) {
+            if (what != "own") ++loaded;
+        } else {
+            if (c.station == h.by) return error_reply("handout not loaded: " + e);
+            refused.push_back(e);
+        }
+    }
+    int64_t now = core.keyring() ? core.keyring()->now() : static_cast<int64_t>(std::time(nullptr));
+    JsonWriter w;
+    w.begin_object()
+        .field("ok", true)
+        .field("net", h.net)
+        .field("by", h.by)
+        .field("issued", keys::time_text(h.issued))
+        .field("cards", loaded)
+        .field("stale", h.valid_until > 0 && h.valid_until <= now);
+    w.begin_array("keymasters");
+    for (auto& k : h.keymasters) w.field("", k.first);
+    w.end_array();
+    bool opened = false;
+    std::string why;
+    keys::ImportResult r;
+    if (h.sealed.empty()) {
+        why = "this handout has no tape: send your card to a keymaster (card_send) and read the fingerprint by voice";
+    } else if (!core.keyring()) {
+        why = "this station has no keyring";
+    } else {
+        std::string tape;
+        station::SealedHead sh;
+        if (!station::open_tape(h.sealed, me, [&](const std::string& c) { return core.card_for(c); }, tape, sh, &err)) {
+            why = err.find("doesn't open with this station's key") != std::string::npos
+                      ? "the tape here was sealed to an older key of this station: send your card to a keymaster "
+                        "(card_send) for a new tape"
+                      : err;
+        } else {
+            opened = core.keyring()->import_tape(tape, r, &err);
+            crypto::wipe(tape);
+            if (!opened) why = err;
+            else
+                core.note("key tape " + r.tape + " from a handout by " + h.by + " loaded: " + std::to_string(r.added) +
+                          " key(s) added, " + std::to_string(r.expired) + " already ended");
+        }
+    }
+    w.field("tape_opened", opened);
+    if (opened) w.field("added", r.added).field("already", r.already).field("expired", r.expired);
+    if (opened && r.added == 0) why = "every key on this tape has ended: ask a keymaster for a new tape";
+    if (!why.empty()) w.field("next", why);
+    w.begin_array("refused");
+    for (auto& e : refused) w.field("", e);
+    w.end_array().end_object();
+    core.note("handout from " + h.by + " for " + h.net + " loaded: " + std::to_string(loaded) + " card(s)");
+    return w.str();
+}
+
+// rally_status: what this box can do now, and the next step, for a station
+// coming back on a BAD_DAY.
+std::string rally_status(Core& core, const station::Identity& me) {
+    JsonWriter w;
+    w.begin_object()
+        .field("ok", true)
+        .field("station", me.station)
+        .field("fingerprint", station::fingerprint(station::card_of(me)));
+    int cards = 0, keymasters = 0;
+    w.begin_array("keymasters");
+    for (auto& c : core.cards()) {
+        ++cards;
+        if (!c.keymaster) continue;
+        ++keymasters;
+        w.begin_object().field("station", c.station).field("fingerprint", c.fingerprint).end_object();
+    }
+    w.end_array().field("cards", cards);
+    std::string current;
+    w.begin_array("keys_now");
+    if (core.keyring())
+        for (auto& k : core.keyring()->for_sending()) {
+            if (current.empty()) current = k.indicator;
+            w.begin_object().field("indicator", k.indicator).field("net", k.net).field("check", k.check).end_object();
+        }
+    w.end_array();
+    std::string next;
+    if (keymasters == 0)
+        next = "Load your handout (handout_import), stale is fine, or check a keymaster's card by voice and run "
+               "card_check with keymaster=Y.";
+    else if (current.empty())
+        next = "No key for now. Send your card to a keymaster (card_send) and ask for a new tape. Signed plain "
+               "traffic works meanwhile.";
+    else
+        next = "Ready: key " + current + " is current. Read its check to the keymaster by voice.";
+    w.field("next", next).end_object();
+    return w.str();
+}
+
 std::optional<std::string> station_cmd(Core& core, const std::string& cmd, std::map<std::string, std::string>& req) {
     static const std::set<std::string> kCmds = {"station_card", "station_backup", "station_restore", "card_import",
                                                 "cards_list",   "card_check",     "card_send",       "net_tape",
-                                                "tape_seal"};
+                                                "tape_seal",    "card_keymaster", "handout_import",  "rally_status"};
     if (!kCmds.count(cmd)) return std::nullopt;
     const station::Identity* me = core.identity();
     if (!me && cmd != "station_restore" && cmd != "cards_list") return error_reply("this station has no keys of its own");
@@ -694,17 +825,22 @@ std::optional<std::string> station_cmd(Core& core, const std::string& cmd, std::
     }
     if (cmd == "station_backup") {
         std::string out;
-        bool ok = station::backup(*me, req["passphrase"], out, &err);
+        std::vector<station::HeldCard> held;
+        for (auto& c : core.cards()) held.push_back(station::HeldCard{c.card, c.verified, c.keymaster, c.source});
+        int64_t now = core.keyring() ? core.keyring()->now() : static_cast<int64_t>(std::time(nullptr));
+        bool ok = station::backup(*me, held, now, req["passphrase"], out, &err);
         crypto::wipe(req["passphrase"]);
         if (!ok) return error_reply(err);
-        core.note("an encrypted backup of the station keys was made");
+        core.note("an encrypted backup of the station keys and " + std::to_string(held.size()) + " held card(s) was made");
         JsonWriter w;
-        w.begin_object().field("ok", true).field("backup", out).end_object();
+        w.begin_object().field("ok", true).field("backup", out).field("cards", static_cast<int>(held.size())).end_object();
         return w.str();
     }
     if (cmd == "station_restore") {
         station::Identity id;
-        bool ok = station::restore(req["text"], req["passphrase"], id, &err);
+        std::vector<station::HeldCard> held;
+        int64_t saved = 0;
+        bool ok = station::restore(req["text"], req["passphrase"], id, &held, &saved, &err);
         crypto::wipe(req["passphrase"]);
         if (!ok) return error_reply(err);
         if (id.station != core.station()) {
@@ -715,8 +851,28 @@ std::optional<std::string> station_cmd(Core& core, const std::string& cmd, std::
         std::string fp = station::fingerprint(station::card_of(id));
         id.wipe();
         if (!ok) return error_reply(err);
+        // The cards it held, trusted as they were when the backup was made.
+        int restored = 0;
+        std::vector<std::string> refused;
+        for (auto& h : held) {
+            station::Card c;
+            std::string what, e;
+            bool good = h.checked ? core.add_trusted_card(h.card, "backup (" + h.source + ")", h.keymaster, false, c, what, &e)
+                                  : core.add_card(h.card, "backup (" + h.source + ")", false, c, what, &e);
+            if (good) {
+                ++restored;
+            } else {
+                refused.push_back(e);
+            }
+        }
+        int64_t now = core.keyring() ? core.keyring()->now() : static_cast<int64_t>(std::time(nullptr));
         JsonWriter w;
-        w.begin_object().field("ok", true).field("fingerprint", fp).end_object();
+        w.begin_object().field("ok", true).field("fingerprint", fp).field("cards", restored);
+        if (saved > 0)
+            w.field("saved", keys::time_text(saved)).field("age_days", static_cast<int>((now - saved) / 86400));
+        w.begin_array("refused");
+        for (auto& r : refused) w.field("", r);
+        w.end_array().end_object();
         return w.str();
     }
     if (cmd == "card_import") {
@@ -753,6 +909,7 @@ std::optional<std::string> station_cmd(Core& core, const std::string& cmd, std::
                 .field("station", c.station)
                 .field("fingerprint", c.fingerprint)
                 .field("checked", c.verified)
+                .field("keymaster", c.keymaster)
                 .field("source", c.source)
                 .field("added", static_cast<long long>(c.added))
                 .end_object();
@@ -761,10 +918,28 @@ std::optional<std::string> station_cmd(Core& core, const std::string& cmd, std::
     }
     if (cmd == "card_check") {
         if (!core.verify_card(req["station"], req["fingerprint"], &err)) return error_reply(err);
+        if (req["keymaster"] == "Y" && !core.set_card_keymaster(req["station"], true, &err)) return error_reply(err);
         JsonWriter w;
-        w.begin_object().field("ok", true).field("station", req["station"]).field("checked", true).end_object();
+        w.begin_object()
+            .field("ok", true)
+            .field("station", req["station"])
+            .field("checked", true)
+            .field("keymaster", core.card_keymaster(req["station"]))
+            .end_object();
         return w.str();
     }
+    if (cmd == "card_keymaster") {
+        if (!core.set_card_keymaster(req["station"], req["keymaster"] != "N", &err)) return error_reply(err);
+        JsonWriter w;
+        w.begin_object()
+            .field("ok", true)
+            .field("station", req["station"])
+            .field("keymaster", core.card_keymaster(req["station"]))
+            .end_object();
+        return w.str();
+    }
+    if (cmd == "handout_import") return handout_import(core, *me, req);
+    if (cmd == "rally_status") return rally_status(core, *me);
     if (cmd == "card_send") {
         std::string id = send_block(core, req["to"], station::format_card(*me), &err);
         if (id.empty()) return error_reply(err);
@@ -776,8 +951,9 @@ std::optional<std::string> station_cmd(Core& core, const std::string& cmd, std::
     // one copy to each member whose card it holds; send=Y queues each copy
     // to its station over the air.
     // tape_seal: seals a tape the operator has (from pna-keymaster) to one station.
-    std::string tape_text, net, tape_id;
-    std::vector<std::string> members;
+    std::string tape_text, net, tape_id, first_key, first_check;
+    int64_t valid_from = 0, valid_until = 0;
+    std::vector<std::string> members, alternates;
     if (cmd == "net_tape") {
         keys::Keyring* kr = core.keyring();
         if (!kr) return error_reply("this station has no keyring");
@@ -801,6 +977,10 @@ std::optional<std::string> station_cmd(Core& core, const std::string& cmd, std::
         keys::Tape t;
         if (!keys::make_tape(net, start, days, period, now, t, &err)) return error_reply(err);
         tape_text = keys::format_tape(t);
+        first_key = t.keys.front().indicator;
+        first_check = keys::key_check(first_key, t.keys.front().secret);
+        valid_from = t.keys.front().from;
+        valid_until = t.keys.back().until;
         for (auto& k : t.keys) crypto::wipe(k.secret);
         tape_id = t.tape;
         keys::ImportResult ir;
@@ -809,19 +989,14 @@ std::optional<std::string> station_cmd(Core& core, const std::string& cmd, std::
             return error_reply("the new tape did not load here: " + err);
         }
         core.note("key tape " + tape_id + " for " + net + " made here: " + std::to_string(ir.added) + " key(s) loaded");
-        std::string who = req["members"];
-        std::vector<std::string> named;
-        {
-            std::string cur;
-            for (char c : who + " ") {
-                if (c == ' ' || c == ',') {
-                    if (!cur.empty()) named.push_back(cur);
-                    cur.clear();
-                } else {
-                    cur += static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
-                }
+        std::vector<std::string> named = call_list(req["members"]);
+        // Alternate keymasters get the tape too, and a handout with every
+        // member's card so they can issue tapes if this station is lost.
+        for (auto& a : call_list(req["keymasters"]))
+            if (a != me->station) {
+                alternates.push_back(a);
+                if (std::find(named.begin(), named.end(), a) == named.end()) named.push_back(a);
             }
-        }
         // A name in the station book (a collective) stands for its stations.
         for (auto& n : named) {
             std::vector<std::string> t2 = core.ops() ? core.ops()->send_targets(n) : std::vector<std::string>{};
@@ -834,6 +1009,12 @@ std::optional<std::string> station_cmd(Core& core, const std::string& cmd, std::
         tape_text = req["text"];
         keys::Tape t;
         if (!keys::parse_tape(tape_text, t, &err)) return error_reply("not a key tape: " + err);
+        if (!t.keys.empty()) {
+            first_key = t.keys.front().indicator;
+            first_check = keys::key_check(first_key, t.keys.front().secret);
+            valid_from = t.keys.front().from;
+            valid_until = t.keys.back().until;
+        }
         for (auto& k : t.keys) crypto::wipe(k.secret);
         net = t.net;
         tape_id = t.tape;
@@ -842,6 +1023,7 @@ std::optional<std::string> station_cmd(Core& core, const std::string& cmd, std::
     JsonWriter w;
     w.begin_object().field("ok", true).field("net", net).field("tape", tape_id).begin_array("sealed");
     std::vector<std::string> no_card;
+    std::map<std::string, std::string> sealed_for;
     for (auto& m : members) {
         auto c = card_for(m);
         if (!c) {
@@ -853,6 +1035,7 @@ std::optional<std::string> station_cmd(Core& core, const std::string& cmd, std::
             no_card.push_back(m + " (" + err + ")");
             continue;
         }
+        sealed_for[m] = sealed;
         w.begin_object().field("station", m).field("checked", core.card_verified(m)).field("text", sealed);
         if (req["send"] == "Y") {
             std::string e, id = send_block(core, m, sealed, &e);
@@ -864,7 +1047,58 @@ std::optional<std::string> station_cmd(Core& core, const std::string& cmd, std::
     crypto::wipe(tape_text);
     w.end_array().begin_array("no_card");
     for (auto& n : no_card) w.field("", n);
-    w.end_array().end_object();
+    w.end_array();
+    if (req["handouts"] == "Y") {
+        // One handout per member: no secret in it, only cards, fingerprints,
+        // the tape sealed to that member and the steps.
+        station::Handout base;
+        base.net = net;
+        base.by = me->station;
+        base.issued = core.keyring() ? core.keyring()->now() : static_cast<int64_t>(std::time(nullptr));
+        base.tape = tape_id;
+        base.valid_from = valid_from;
+        base.valid_until = valid_until;
+        base.first_key = first_key;
+        base.first_check = first_check;
+        station::Card mine = station::card_of(*me);
+        base.keymasters.push_back({me->station, station::fingerprint(mine)});
+        base.cards.push_back(station::format_card(*me));
+        std::vector<std::string> member_cards;
+        for (auto& a : alternates) {
+            auto row = core.cards();
+            for (auto& r : row)
+                if (r.station == a) {
+                    base.keymasters.push_back({a, r.fingerprint});
+                    base.cards.push_back(r.card);
+                    if (r.verified) core.set_card_keymaster(a, true, nullptr);
+                }
+        }
+        for (auto& m : members)
+            for (auto& r : core.cards())
+                if (r.station == m) {
+                    base.members.push_back({m, r.fingerprint});
+                    member_cards.push_back(r.card);
+                }
+        w.begin_array("handouts");
+        for (auto& m : members) {
+            station::Handout h = base;
+            h.for_station = m;
+            auto it = sealed_for.find(m);
+            if (it != sealed_for.end()) h.sealed = it->second;
+            bool alt = std::find(alternates.begin(), alternates.end(), m) != alternates.end();
+            if (alt)
+                for (auto& c : member_cards)
+                    if (std::find(h.cards.begin(), h.cards.end(), c) == h.cards.end()) h.cards.push_back(c);
+            w.begin_object()
+                .field("station", m)
+                .field("has_tape", !h.sealed.empty())
+                .field("alternate", alt)
+                .field("text", station::format_handout(h, *me))
+                .end_object();
+        }
+        w.end_array();
+    }
+    w.end_object();
     if (cmd == "net_tape" && !members.empty())
         core.note("key tape " + tape_id + " sealed to " + std::to_string(members.size() - no_card.size()) + " station(s)");
     return w.str();
@@ -1108,6 +1342,10 @@ std::string ApiServer::handle(Core& core, const std::string& line) {
             }
             std::string tape;
             station::SealedHead h;
+            if (station::sealed_head(text, h) && core.card_for(h.from) && !core.card_keymaster(h.from))
+                return error_reply("sealed key tape not opened: " + h.from +
+                                   " isn't named as a keymaster on this station. Load a handout that lists it, or "
+                                   "check its fingerprint by voice and run card_check with keymaster=Y");
             if (!station::open_tape(text, *core.identity(), [&](const std::string& c) { return core.card_for(c); }, tape,
                                     h, &err))
                 return error_reply("sealed key tape not opened: " + err);
@@ -1149,6 +1387,7 @@ std::string ApiServer::handle(Core& core, const std::string& line) {
                 .field("from", keys::time_text(k.from))
                 .field("until", keys::time_text(k.until))
                 .field("state", k.state)
+                .field("check", k.check)
                 .end_object();
         w.end_array().end_object();
         return w.str();

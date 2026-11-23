@@ -393,12 +393,23 @@ bool Keyring::import_tape(const std::string& text, ImportResult& r, std::string*
     return true;
 }
 
+std::string key_check(const std::string& indicator, const std::string& secret) {
+    static const char* b32 = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+    std::string d;
+    crypto::from_hex(crypto::sha256_hex("PNA KEY CHECK 1|" + indicator + "|" + secret), d);
+    uint32_t v = (static_cast<uint32_t>(static_cast<unsigned char>(d[0])) << 16) |
+                 (static_cast<uint32_t>(static_cast<unsigned char>(d[1])) << 8) | static_cast<unsigned char>(d[2]);
+    std::string o;
+    for (int i = 3; i >= 0; --i) o += b32[(v >> (4 + 5 * i)) & 31];
+    return o;
+}
+
 std::vector<Info> Keyring::list() {
     const int64_t n = now();
     std::lock_guard<std::mutex> g(mu_);
     std::vector<Info> out;
     for (auto& k : keys_) {
-        Info i{k.indicator, k.net, k.tape, k.from, k.until, ""};
+        Info i{k.indicator, k.net, k.tape, k.from, k.until, "", key_check(k.indicator, k.secret)};
         i.state = n < k.from ? "next" : n < k.until ? "current" : "receive only";
         out.push_back(i);
     }

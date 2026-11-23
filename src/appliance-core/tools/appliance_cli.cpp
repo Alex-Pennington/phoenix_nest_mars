@@ -12,7 +12,10 @@
 //   appliance-cli [--port 4100] station card         this station's card and fingerprint
 //   appliance-cli [--port 4100] cards import FILE|ID another station's card
 //   appliance-cli [--port 4100] cards list
-//   appliance-cli [--port 4100] cards check CALL "FINGERPRINT"   after reading it back by voice
+//   appliance-cli [--port 4100] cards check CALL "FINGERPRINT" [--keymaster]   after reading it back by voice
+//   appliance-cli [--port 4100] cards keymaster CALL [--off]   name (or unname) a checked card as keymaster
+//   appliance-cli [--port 4100] handout import FILE|ID [--replace]   load a member handout, stale or new
+//   appliance-cli [--port 4100] rally            what this box can do now, and the next step
 //
 // "api" sends any call in docs/api.md: appliance-cli api net_callup who=all.
 // A value with spaces goes in quotes; \n in a value is a new line.
@@ -42,7 +45,8 @@ int main(int argc, char** argv) {
                      "                    | api CMD [key=value ...] | keys import FILE | keys list\n"
                      "                    | keys zeroize IND|TAPE | keys open FILE|ID\n"
                      "                    | station card | cards import FILE|ID [--replace] | cards list\n"
-                     "                    | cards check CALL FINGERPRINT\n";
+                     "                    | cards check CALL FINGERPRINT [--keymaster] | cards keymaster CALL [--off]\n"
+                     "                    | handout import FILE|ID [--replace] | rally\n";
         return 2;
     }
     std::string cmd = argv[i++];
@@ -141,10 +145,39 @@ int main(int argc, char** argv) {
         } else if (sub == "check" && i + 1 < argc) {
             w.begin_object().field("cmd", "card_check").field("station", std::string(argv[i])).field(
                 "fingerprint", std::string(argv[i + 1]));
+            if (i + 2 < argc && std::string(argv[i + 2]) == "--keymaster") w.field("keymaster", "Y");
+        } else if (sub == "keymaster" && i < argc) {
+            bool off = i + 1 < argc && std::string(argv[i + 1]) == "--off";
+            w.begin_object()
+                .field("cmd", "card_keymaster")
+                .field("station", std::string(argv[i]))
+                .field("keymaster", off ? "N" : "Y");
         } else {
-            std::cerr << "cards import FILE|ID [--replace] | cards list | cards check CALL FINGERPRINT\n";
+            std::cerr << "cards import FILE|ID [--replace] | cards list | cards check CALL FINGERPRINT [--keymaster]"
+                         " | cards keymaster CALL [--off]\n";
             return 2;
         }
+    } else if (cmd == "handout") {
+        std::string sub = i < argc ? argv[i++] : "";
+        w = JsonWriter();
+        if (sub == "import" && i < argc) {
+            w.begin_object().field("cmd", "handout_import");
+            std::ifstream f(argv[i], std::ios::binary);
+            if (f) {
+                std::ostringstream ss;
+                ss << f.rdbuf();
+                w.field("text", ss.str());
+            } else {
+                w.field("id", std::string(argv[i]));
+            }
+            if (i + 1 < argc && std::string(argv[i + 1]) == "--replace") w.field("replace", "Y");
+        } else {
+            std::cerr << "handout import FILE|ID [--replace]\n";
+            return 2;
+        }
+    } else if (cmd == "rally") {
+        w = JsonWriter();
+        w.begin_object().field("cmd", "rally_status");
     } else if (cmd == "list" && i < argc) {
         w.field("limit", std::stoi(argv[i]));
     } else if (cmd == "get" && i < argc) {

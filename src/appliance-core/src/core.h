@@ -104,6 +104,16 @@ public:
     // The operator read the fingerprint back with the station by voice.
     bool verify_card(const std::string& call, const std::string& fingerprint, std::string* error);
     bool card_verified(const std::string& call);
+    // Names a station as a keymaster (its sealed key tapes open here) or
+    // takes that away. Naming needs the card checked by voice first.
+    bool set_card_keymaster(const std::string& call, bool keymaster, std::string* error);
+    bool card_keymaster(const std::string& call);
+    // A card that arrived on a trusted path (a handout carried by hand, or
+    // this station's own backup): held as checked, keymaster as given. A
+    // different card already held for that station is refused unless
+    // replace is set. *what as add_card's.
+    bool add_trusted_card(const std::string& text, const std::string& source, bool keymaster, bool replace,
+                          station::Card& card, std::string& what, std::string* error);
     std::vector<Message> list(int limit);
     std::optional<Message> get(const std::string& id);
     std::vector<Message> queue(int limit);

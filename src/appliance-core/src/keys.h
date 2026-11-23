@@ -69,11 +69,17 @@ bool make_tape(const std::string& net, int64_t start, int count, int period_hour
 std::string format_tape(const Tape& t);
 bool parse_tape(const std::string& text, Tape& out, std::string* error);
 
+// A key's check value: four letters and figures (no I, O, 0 or 1) from
+// SHA-256 over the indicator and the key. Two stations read theirs to each
+// other to confirm they hold the same key; it gives away nothing usable.
+std::string key_check(const std::string& indicator, const std::string& secret);
+
 // What a station holds. Never shows the key itself.
 struct Info {
     std::string indicator, net, tape;
     int64_t from = 0, until = 0;
     std::string state;  // "current" (sends now), "next" (starts later), "receive only" (ended, still reads)
+    std::string check;  // key_check()
 };
 
 struct ImportResult {

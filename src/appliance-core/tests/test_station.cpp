@@ -353,8 +353,12 @@ static Round bootstrap(const fs::path& dir) {
     std::string spoken = C.fp;
     for (auto& ch : spoken) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
     CHECK(ok(call(*A.core, {{"cmd", "card_check"}, {"station", "STA-C"}, {"fingerprint", spoken}})));
+    // B checks A's card but doesn't yet name it keymaster; C names it in the same step.
     CHECK(ok(call(*B.core, {{"cmd", "card_check"}, {"station", "NCS-A"}, {"fingerprint", A.fp}})));
-    CHECK(ok(call(*C.core, {{"cmd", "card_check"}, {"station", "NCS-A"}, {"fingerprint", A.fp}})));
+    r = call(*C.core, {{"cmd", "card_check"}, {"station", "NCS-A"}, {"fingerprint", A.fp}, {"keymaster", "Y"}});
+    CHECK(ok(r) && yes(r, "keymaster"));
+    // Naming an unchecked card keymaster is refused.
+    CHECK(!ok(call(*A.core, {{"cmd", "card_keymaster"}, {"station", "STA-Z"}})));
     r = call(*A.core, {{"cmd", "cards_list"}});
     CHECK(ok(r) && r.get("cards")->arr.size() == 2 && yes(r.get("cards")->arr[0], "checked"));
     // A different card for a station already held is refused unless replaced on purpose.
@@ -393,6 +397,11 @@ static Round bootstrap(const fs::path& dir) {
     for (auto& e : B.core->events(0, 1000)) told = told || e.text.find("keys open " + b_id) != std::string::npos;
     CHECK(told);
     CHECK(!ok(call(*B.core, {{"cmd", "key_open"}, {"text", c_text}})));
+    // B hasn't named A keymaster yet, so even its own copy stays shut.
+    r = call(*B.core, {{"cmd", "key_open"}, {"id", b_id}});
+    CHECK(!ok(r) && str(r, "error").find("keymaster") != std::string::npos);
+    r = call(*B.core, {{"cmd", "card_keymaster"}, {"station", "NCS-A"}});
+    CHECK(ok(r) && yes(r, "keymaster"));
     r = call(*B.core, {{"cmd", "key_open"}, {"id", b_id}});
     CHECK(ok(r) && num(r, "added") == 7 && str(r, "from") == "NCS-A" && yes(r, "from_checked"));
     r = call(*C.core, {{"cmd", "key_open"}, {"text", c_text}});

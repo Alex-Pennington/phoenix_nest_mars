@@ -167,6 +167,61 @@ bool Core::card_verified(const std::string& call) {
     return row && row->verified;
 }
 
+bool Core::set_card_keymaster(const std::string& call, bool keymaster, std::string* error) {
+    std::lock_guard<std::mutex> g(mu_);
+    auto row = store_.card(call);
+    if (!row) {
+        if (error) *error = "no card for " + call;
+        return false;
+    }
+    if (keymaster && !row->verified) {
+        if (error) *error = "check " + call + "'s fingerprint by voice first (card_check), then name it a keymaster";
+        return false;
+    }
+    store_.set_card_keymaster(call, keymaster);
+    log("", call + (keymaster ? " named a keymaster: its sealed key tapes will open here"
+                              : " is no longer a keymaster here"));
+    return true;
+}
+
+bool Core::card_keymaster(const std::string& call) {
+    std::lock_guard<std::mutex> g(mu_);
+    auto row = store_.card(call);
+    return row && row->keymaster;
+}
+
+bool Core::add_trusted_card(const std::string& text, const std::string& source, bool keymaster, bool replace,
+                            station::Card& card, std::string& what, std::string* error) {
+    if (!station::parse_card(text, card, error)) return false;
+    std::lock_guard<std::mutex> g(mu_);
+    if (id_ && card.station == id_->station) {
+        what = "own";
+        return true;
+    }
+    std::string fp = station::fingerprint(card);
+    auto old = store_.card(card.station);
+    if (old && old->fingerprint != fp && !replace) {
+        if (error)
+            *error = "this station already holds a different card for " + card.station + " (" + old->fingerprint +
+                     "); the one here is " + fp + ". Check it with " + card.station + " by voice before replacing";
+        log("", "a different station card for " + card.station + " was refused (" + fp + ", from " + source + ")");
+        return false;
+    }
+    Store::CardRow r;
+    r.station = card.station;
+    r.card = station::card_text(text);
+    r.fingerprint = fp;
+    r.source = source;
+    r.added = old && old->fingerprint == fp ? old->added : now_utc();
+    r.verified = true;
+    r.keymaster = keymaster || (old && old->fingerprint == fp && old->keymaster);
+    store_.put_card(r);
+    what = !old ? "added" : old->fingerprint == fp ? "same" : "replaced";
+    log("", "station card for " + card.station + " " + what + " from " + source + ", fingerprint " + fp +
+                (r.keymaster ? ", keymaster" : ""));
+    return true;
+}
+
 void Core::note(const std::string& text) {
     std::lock_guard<std::mutex> g(mu_);
     log("", text);

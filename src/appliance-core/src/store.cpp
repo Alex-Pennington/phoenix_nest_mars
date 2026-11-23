@@ -63,7 +63,16 @@ Store::Store(const std::string& path) {
     exec("CREATE TABLE IF NOT EXISTS clear (id TEXT PRIMARY KEY, text BLOB NOT NULL, key TEXT NOT NULL)");
     exec(
         "CREATE TABLE IF NOT EXISTS cards (station TEXT PRIMARY KEY, card TEXT NOT NULL, fingerprint TEXT NOT NULL,"
-        " verified INTEGER NOT NULL DEFAULT 0, added INTEGER NOT NULL, source TEXT NOT NULL DEFAULT '')");
+        " verified INTEGER NOT NULL DEFAULT 0, added INTEGER NOT NULL, source TEXT NOT NULL DEFAULT '',"
+        " keymaster INTEGER NOT NULL DEFAULT 0)");
+    // Databases made before keymasters were marked: add the column.
+    {
+        bool has = false;
+        Stmt t(db_, "PRAGMA table_info(cards)");
+        while (t.step())
+            if (t.text(1) == "keymaster") has = true;
+        if (!has) exec("ALTER TABLE cards ADD COLUMN keymaster INTEGER NOT NULL DEFAULT 0");
+    }
     exec("CREATE INDEX IF NOT EXISTS messages_queue ON messages(direction, state, prec, created_at)");
 }
 
@@ -239,9 +248,11 @@ std::optional<std::pair<std::string, std::string>> Store::clear(const std::strin
 }
 
 void Store::put_card(const CardRow& c) {
-    Stmt s(db_, "INSERT OR REPLACE INTO cards(station, card, fingerprint, verified, added, source) VALUES(?,?,?,?,?,?)");
+    Stmt s(db_,
+           "INSERT OR REPLACE INTO cards(station, card, fingerprint, verified, added, source, keymaster)"
+           " VALUES(?,?,?,?,?,?,?)");
     s.bind(1, c.station).bind(2, c.card).bind(3, c.fingerprint).bind(4, static_cast<int64_t>(c.verified ? 1 : 0));
-    s.bind(5, c.added).bind(6, c.source);
+    s.bind(5, c.added).bind(6, c.source).bind(7, static_cast<int64_t>(c.keymaster ? 1 : 0));
     s.step();
 }
 
@@ -254,22 +265,29 @@ Store::CardRow card_row(Stmt& s) {
     c.verified = s.i64(3) != 0;
     c.added = s.i64(4);
     c.source = s.text(5);
+    c.keymaster = s.i64(6) != 0;
     return c;
 }
 }  // namespace
 
 std::optional<Store::CardRow> Store::card(const std::string& station) {
-    Stmt s(db_, "SELECT station, card, fingerprint, verified, added, source FROM cards WHERE station = ?");
+    Stmt s(db_, "SELECT station, card, fingerprint, verified, added, source, keymaster FROM cards WHERE station = ?");
     s.bind(1, station);
     if (!s.step()) return std::nullopt;
     return card_row(s);
 }
 
 std::vector<Store::CardRow> Store::cards() {
-    Stmt s(db_, "SELECT station, card, fingerprint, verified, added, source FROM cards ORDER BY station");
+    Stmt s(db_, "SELECT station, card, fingerprint, verified, added, source, keymaster FROM cards ORDER BY station");
     std::vector<CardRow> out;
     while (s.step()) out.push_back(card_row(s));
     return out;
+}
+
+void Store::set_card_keymaster(const std::string& station, bool v) {
+    Stmt s(db_, "UPDATE cards SET keymaster = ? WHERE station = ?");
+    s.bind(1, static_cast<int64_t>(v ? 1 : 0)).bind(2, station);
+    s.step();
 }
 
 void Store::set_card_verified(const std::string& station, bool v) {

@@ -111,6 +111,8 @@ or check signatures with another station:
 | Send your card to a station | `appliance-cli api card_send to=NCS-A` |
 | Load a card that came in, or from a stick | `appliance-cli cards import ID` or `cards import FILE` |
 | Mark a card checked, after reading the fingerprint back by voice | `appliance-cli cards check NCS-A "K7QM 2XRD 9FTA HW3C"` |
+| Load the handout your keymaster gave you | `appliance-cli handout import FILE` |
+| See what your box can do now, and the next step | `appliance-cli rally` |
 | Load a key tape from a stick | `appliance-cli keys import FILE` |
 | Open a sealed key tape that came in | `appliance-cli keys open ID` |
 | See your keys | `appliance-cli keys list` |
@@ -118,7 +120,11 @@ or check signatures with another station:
 
 When a key for today is loaded, the Messages panel offers codress, and every
 message you send is signed. Keymasters, see docs/crypto.md for making tapes
-and building a net from nothing.
+and handouts and building a net from nothing.
+
+**On a bad day,** with your box wiped: restore your station backup (or start
+fresh), load your old handout, even a stale one, and run `appliance-cli rally`.
+It says what to do next.
 
 ## 6. Backups
 
