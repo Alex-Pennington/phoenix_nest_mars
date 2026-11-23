@@ -1,0 +1,14 @@
+[Unit]
+Description=Phoenix Nest MARS appliance core
+Documentation=file://@DOCDIR@/quick-start.md
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=@BINDIR@/appliance-core --config %h/.config/phoenix-nest-mars/appliance.conf
+Restart=on-failure
+RestartSec=5
+# Its log: journalctl --user -u appliance-core
+
+[Install]
+WantedBy=default.target

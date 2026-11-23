@@ -8,6 +8,19 @@ interop with other stations is over the air only.
 
 Milestones 1 and 3: the headless core and the message engine.
 
+## Install it as the appliance
+
+    packaging/install.sh --enable
+
+Builds, tests and installs for your user (no root), writes a settings file to
+`~/.config/phoenix-nest-mars/appliance.conf`, and runs the core as the systemd
+user service `appliance-core`. `appliance-core --config FILE --check` says
+what would run and what to fix. docs/quick-start.md is the operator's guide:
+setup, practice with no radio, everyday commands, backups and removal.
+
+`appliance-cli api CMD key=value ...` sends any call in docs/api.md from the
+shell.
+
 ## Build and test
 
     cmake -S . -B build && cmake --build build && (cd build && ctest)

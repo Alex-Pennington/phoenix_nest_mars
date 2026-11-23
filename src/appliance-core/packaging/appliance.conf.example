@@ -1,0 +1,68 @@
+# Phoenix Nest MARS appliance: settings for appliance-core.
+#
+# One setting a line, key = value. Lines starting with # are notes. After an
+# edit, check the file, then restart the service:
+#
+#   appliance-core --config ~/.config/phoenix-nest-mars/appliance.conf --check
+#   systemctl --user restart appliance-core
+#
+# Keep channel plans and frequencies out of this file. The appliance never
+# needs them: greybeard-ale holds the radio side.
+
+# ---- This station ----
+
+# Your station's call: capital letters, digits and -. Required.
+station =
+
+# Where the messages, the station book, nets and logs are kept.
+db-dir = ~/.local/share/phoenix-nest-mars
+
+# The local API that gale-term's Messages panel and appliance-cli talk to.
+# It answers on this computer only (127.0.0.1).
+api-port = 4100
+
+# ---- The modem: greybeard-ale, on this computer ----
+
+# gale-tx, which turns a message into a burst WAV. Give the full path: the
+# service may not see your shell's PATH. The installer fills this in when it
+# finds gale-tx.
+tx-cmd = gale-tx
+
+# The 110A mode the bursts are sent in. 600S is the default; on fading paths
+# the slower modes hold up best.
+tx-mode = 600S
+
+# greybeard-ale's capture directory: the core reads decoded bursts from it.
+captures =
+
+# Where burst WAVs go for greybeard-ale's transmit stage. Blank: in db-dir.
+outbox =
+
+# ---- Links (optional) ----
+
+# ale-scan's control socket. With it, the status feed shows the scanner, the
+# clock source and which stations are linked.
+link-socket =
+
+# Hold each message until greybeard-ale reports a link to its station.
+link-gate = no
+
+# ---- Delivery ----
+
+# Answer each received message with an ACK.
+no-acks = no
+
+# How many times the modem may fail on one message before it is marked failed.
+max-attempts = 3
+
+# ---- Help while composing (optional) ----
+
+# A local program that explains fields and suggests wording. Blank: the
+# built-in guidance, which needs nothing else.
+advisor =
+
+# ---- Practice with no radio ----
+#
+# To try everything with no radio, comment out station above and set this
+# instead: two stations wired back to back, on api-port and the port after.
+# loopback-pair = NCS-A,STA-B

@@ -4,6 +4,10 @@
 //   appliance-cli [--port 4100] send --to B [--prec R] "message text"
 //   appliance-cli [--port 4100] list [N]
 //   appliance-cli [--port 4100] get ID
+//   appliance-cli [--port 4100] api CMD [key=value ...]
+//
+// "api" sends any call in docs/api.md: appliance-cli api net_callup who=all.
+// A value with spaces goes in quotes; \n in a value is a new line.
 //
 // Prints the core's JSON reply. Exit code 0 when the reply says ok.
 #include "../src/json.h"
@@ -22,13 +26,41 @@ int main(int argc, char** argv) {
         i += 2;
     }
     if (i >= argc) {
-        std::cerr << "usage: appliance-cli [--port N] status | send --to B [--prec R] TEXT | list [N] | get ID\n";
+        std::cerr << "usage: appliance-cli [--port N] status | send --to B [--prec R] TEXT | list [N] | get ID\n"
+                     "                    | api CMD [key=value ...]\n";
         return 2;
     }
     std::string cmd = argv[i++];
     JsonWriter w;
+    const bool via_api = cmd == "api";
+    if (via_api) {
+        if (i >= argc) {
+            std::cerr << "api needs a command, e.g. appliance-cli api net_status\n";
+            return 2;
+        }
+        cmd = argv[i++];
+    }
     w.begin_object().field("cmd", cmd);
-    if (cmd == "send") {
+    if (via_api) {
+        for (; i < argc; ++i) {
+            std::string a = argv[i];
+            size_t eq = a.find('=');
+            if (eq == std::string::npos || eq == 0) {
+                std::cerr << "write each setting as key=value, not \"" << a << "\"\n";
+                return 2;
+            }
+            std::string v, raw = a.substr(eq + 1);
+            for (size_t k = 0; k < raw.size(); ++k) {
+                if (raw[k] == '\\' && k + 1 < raw.size() && raw[k + 1] == 'n') {
+                    v += '\n';
+                    ++k;
+                } else {
+                    v += raw[k];
+                }
+            }
+            w.field(a.substr(0, eq), v);
+        }
+    } else if (cmd == "send") {
         std::string to, prec = "R", body;
         for (; i < argc; ++i) {
             std::string a = argv[i];

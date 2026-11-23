@@ -6,6 +6,7 @@
 // See README.md for every option.
 #include "api_server.h"
 #include "compose.h"
+#include "config.h"
 #include "core.h"
 #include "greybeard_modem.h"
 #include "link_monitor.h"
@@ -13,6 +14,8 @@
 #include "loopback_modem.h"
 
 #include <csignal>
+#include <filesystem>
+#include <unistd.h>
 #include <chrono>
 #include <cstdlib>
 #include <ctime>
@@ -41,7 +44,11 @@ void log_line(const std::string& station, const std::string& text) {
 
 void usage() {
     std::cout <<
-        "appliance-core: headless MARS station core (milestone 1)\n\n"
+        "appliance-core: headless MARS station core\n\n"
+        "  --config FILE         read settings from FILE first (key = value, the long\n"
+        "                        options below without the dashes); options given\n"
+        "                        on the command line win\n"
+        "  --check               check the settings, say what would run, and stop\n\n"
         "One station, greybeard-ale as the modem (separate programs, files only):\n"
         "  --station NAME        this station's call (A-Z 0-9 -)\n"
         "  --tx-mode MODE        gale-tx --mode, e.g. 600S (required)\n"
@@ -96,6 +103,23 @@ bool start_station(Station& s, CoreConfig cfg, std::unique_ptr<ModemDriver> mode
     return true;
 }
 
+// A program named on its own is looked for on PATH, as the service will.
+std::string find_program(const std::string& prog) {
+    if (prog.find('/') != std::string::npos) return ::access(prog.c_str(), X_OK) == 0 ? prog : "";
+    const char* path = std::getenv("PATH");
+    std::string p = path ? path : "";
+    size_t start = 0;
+    while (start <= p.size()) {
+        size_t end = p.find(':', start);
+        std::string dir = p.substr(start, end == std::string::npos ? std::string::npos : end - start);
+        std::string full = (dir.empty() ? "." : dir) + "/" + prog;
+        if (::access(full.c_str(), X_OK) == 0) return full;
+        if (end == std::string::npos) break;
+        start = end + 1;
+    }
+    return "";
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -112,20 +136,37 @@ int main(int argc, char** argv) {
     int link_poll_ms = 2000;
     bool link_gate = false;
 
-    for (int i = 1; i < argc; ++i) {
-        std::string a = argv[i];
+    bool check_only = false;
+    std::string config_path;
+    // The config file's settings come first, so the command line wins.
+    std::vector<std::string> args;
+    for (int i = 1; i < argc; ++i)
+        if (std::string(argv[i]) == "--config" && i + 1 < argc) config_path = argv[i + 1];
+    if (!config_path.empty()) {
+        std::string err;
+        if (!read_config(config_path, &args, &err)) {
+            std::cerr << "config: " << err << "\n";
+            return 2;
+        }
+    }
+    for (int i = 1; i < argc; ++i) args.push_back(argv[i]);
+
+    for (size_t i = 0; i < args.size(); ++i) {
+        std::string a = args[i];
         auto next = [&]() -> std::string {
-            if (i + 1 >= argc) {
+            if (i + 1 >= args.size()) {
                 std::cerr << a << " needs a value\n";
                 std::exit(2);
             }
-            return argv[++i];
+            return args[++i];
         };
         try {
             if (a == "--help" || a == "-h") {
                 usage();
                 return 0;
-            } else if (a == "--api-port") api_port = static_cast<uint16_t>(std::stoi(next()));
+            } else if (a == "--config") next();
+            else if (a == "--check") check_only = true;
+            else if (a == "--api-port") api_port = static_cast<uint16_t>(std::stoi(next()));
             else if (a == "--loopback-pair") pair = next();
             else if (a == "--station") station = next();
             else if (a == "--tx-mode") tx_mode = next();
@@ -170,12 +211,67 @@ int main(int argc, char** argv) {
         return 2;
     }
 
+    if (check_only) {
+        // Say what would run and what stands in the way, then stop.
+        namespace fs = std::filesystem;
+        std::vector<std::string> problems, notes;
+        std::cout << "appliance-core settings" << (config_path.empty() ? "" : " from " + config_path) << "\n";
+        if (!pair.empty()) {
+            std::cout << "  practice pair  " << pair << " on the loopback modem, no radio\n"
+                      << "  API            127.0.0.1:" << api_port << " and " << api_port + 1 << "\n";
+        } else if (!station.empty()) {
+            if (!valid_station(station) || is_broadcast(station))
+                problems.push_back("station \"" + station + "\": use A-Z, digits and -, at most 16, not ALL");
+            std::cout << "  station        " << station << "\n"
+                      << "  modem          greybeard-ale, gale-tx mode " << (tx_mode.empty() ? "(not set)" : tx_mode)
+                      << "\n";
+            if (tx_mode.empty()) problems.push_back("tx-mode isn't set (the gale-tx mode, like 600S)");
+            std::string tx = find_program(tx_prog);
+            std::cout << "  gale-tx        " << (tx.empty() ? tx_prog + " (not found)" : tx) << "\n";
+            if (tx.empty())
+                problems.push_back("tx-cmd: " + tx_prog + " isn't found; give its full path, as the service " +
+                                   "may not have your PATH");
+            std::cout << "  captures       " << (captures.empty() ? "(not set)" : captures) << "\n";
+            std::error_code ec;
+            if (captures.empty()) problems.push_back("captures isn't set (greybeard-ale's capture directory)");
+            else if (!fs::is_directory(captures, ec)) problems.push_back("captures: " + captures + " isn't a directory");
+            std::cout << "  API            127.0.0.1:" << api_port << "\n";
+        } else {
+            problems.push_back("set station (this station's call), or loopback-pair to practise with no radio");
+        }
+        std::error_code ec;
+        std::cout << "  data           " << db_dir << "\n";
+        if (fs::exists(db_dir, ec)) {
+            if (!fs::is_directory(db_dir, ec)) problems.push_back("db-dir: " + db_dir + " isn't a directory");
+            else if (::access(db_dir.c_str(), W_OK) != 0) problems.push_back("db-dir: " + db_dir + " can't be written");
+        } else {
+            notes.push_back("db-dir " + db_dir + " doesn't exist yet; it is made at the first start");
+        }
+        if (!link_socket.empty()) {
+            std::cout << "  link state     " << link_socket << (link_gate ? ", messages wait for a link" : "") << "\n";
+            if (!fs::exists(link_socket, ec))
+                notes.push_back("the link socket isn't there yet: start greybeard-ale's ale-scan with --control");
+        } else {
+            std::cout << "  link state     not read (no link-socket)\n";
+        }
+        if (!advisor_prog.empty()) {
+            std::string adv = find_program(advisor_prog);
+            std::cout << "  advisor        " << (adv.empty() ? advisor_prog + " (not found)" : adv) << "\n";
+            if (adv.empty()) problems.push_back("advisor: " + advisor_prog + " isn't found");
+        }
+        for (auto& n : notes) std::cout << "note: " << n << "\n";
+        for (auto& p : problems) std::cout << "problem: " << p << "\n";
+        std::cout << (problems.empty() ? "ready to run\n" : "fix the problems above, then check again\n");
+        return problems.empty() ? 0 : 1;
+    }
+
     std::signal(SIGINT, on_signal);
     std::signal(SIGTERM, on_signal);
 
     std::vector<Station> stations;
 
     try {
+        std::filesystem::create_directories(db_dir);
         if (!pair.empty()) {
             size_t comma = pair.find(',');
             std::string a = pair.substr(0, comma), b = comma == std::string::npos ? "" : pair.substr(comma + 1);

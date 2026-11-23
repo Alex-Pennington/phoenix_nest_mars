@@ -742,7 +742,7 @@ std::string ApiServer::handle(Core& core, const std::string& line) {
 
     return error_reply(
         "unknown cmd; use status, send, list, get, queue, log, send_acp127, send_acp126, send_chat, parse_acp127, "
-        "parse_traffic, compose_templates, compose_form, compose_check, compose_send compose_advise, or the book's calls (docs/api.md): book_*, net_*, duty_*, log_add, station_log, report_monthly");
+        "parse_traffic, compose_templates, compose_form, compose_check, compose_send, compose_advise, or the book's calls (docs/api.md): book_*, net_*, sched_*, duty_*, log_add, station_log, report_monthly");
 }
 
 }  // namespace pna
