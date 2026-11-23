@@ -38,6 +38,24 @@ captures =
 # Where burst WAVs go for greybeard-ale's transmit stage. Blank: in db-dir.
 outbox =
 
+# ---- Or: through the STANAG 5066 node ----
+
+# burst sends through gale-tx as above. s5066 hands traffic to the 5066 node
+# on this computer instead (docs/stanag-5066-client.md); tx-cmd, tx-mode and
+# captures are then not used.
+link = burst
+
+# The peers file: one "CALL ADDRESS" per line, e.g. STA-B 0.0.0.2. Needed
+# with link = s5066. Read again whenever it changes.
+s5066-peers =
+
+# The node's SIS port, the SAP every appliance in the net binds, the time to
+# live per send in seconds, and node or client delivery confirmation.
+s5066-port = 5066
+s5066-sap = 3
+s5066-ttl = 600
+s5066-confirm = node
+
 # ---- Links (optional) ----
 
 # ale-scan's control socket. With it, the status feed shows the scanner, the

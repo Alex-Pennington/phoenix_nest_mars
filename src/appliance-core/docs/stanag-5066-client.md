@@ -1,166 +1,186 @@
-# Design note: the engine as a STANAG 5066 client
+# The engine as a STANAG 5066 client
 
-Status: design only. Nothing here is built. It waits on greybeard-ale saying
-where STANAG 5066 lives on the appliance and who drives the modem's 110D
-Appendix A interface.
+Status: the client is built and tested against a stand-in node
+(`tests/test_s5066.cpp`). It has not met greybeard-ale's real 5066 node yet,
+because that node isn't built. Until it is, stations keep sending through
+gale-tx (`link = burst`, the default).
 
 ## The requirement
 
 Alex, Nov 23 2026: "make sure were meeting these requirements STANAG 5066 ARQ,
 110D Appendix A, single-channel 3G ALE".
 
-Alex settled what "110D Appendix A" means the same day: it is the LAN
-interface between the modem and its data terminal equipment (DTE), as on
-Steve's roadmap, not the Appendix D waveforms. So the three requirements
-split like this:
+The work splits like this:
 
-- **greybeard-ale's scope:** the waveforms, single-channel 3G ALE to set up
-  the link, the modem's side of the Appendix A LAN interface, and a STANAG
-  5066 node (the data link with ARQ).
-- **Ours:** the message engine as the terminal. It hands messages to the 5066
-  node, or drives the modem over Appendix A where there's no 5066 node in
-  between, rather than writing a burst WAV for the modem itself.
+- **greybeard-ale's scope:** the waveforms, single-channel 3G ALE, the modem's
+  side of the 110D Appendix A LAN interface, and the STANAG 5066 node (the
+  data link with ARQ). Their integration plan calls the engine's link to the
+  node "interface 7".
+- **Ours:** the message engine as a 5066 client. It hands each frame to the
+  node and takes received frames from it.
 
-This note covers the engine's side of both.
+## Turning it on
 
-## Today
+```
+appliance-core --station STA-A --link s5066 --s5066-peers /path/peers
+```
 
-- The core talks to a modem only through `ModemDriver` (`src/modem.h`):
-  `send(bytes)`, then `on_tx_done`, with received bytes arriving through
-  `on_rx`.
-- `GreybeardModem` turns each PNA1 frame (`src/frame.h`) into a burst WAV in
-  an outbox, and reads frames back from greybeard-ale's captures.
-- Reliability is ours. Every message frame gets an ACK frame from the far
-  core once the message is stored. If no ACK comes, the queue retries by
-  precedence and marks the message failed after the set number of tries.
+| Setting | Default | What it does |
+|---|---|---|
+| `link` | `burst` | `s5066` sends through the 5066 node; `burst` keeps gale-tx |
+| `s5066-peers` | none, required | the peers file: one `CALL ADDRESS` per line |
+| `s5066-port` | 5066 | the node's SIS port on 127.0.0.1 |
+| `s5066-sap` | 3 | the SAP to bind; every appliance in a net uses the same |
+| `s5066-ttl` | 600 | time to live per send, in seconds |
+| `s5066-confirm` | `node` | `node` or `client` delivery confirmation |
 
-## With STANAG 5066
+The peers file maps calls to 5066 node addresses. Addresses are written like
+`0.0.1.2`, with the first part 0 to 15 (28 bits). `#` starts a comment. The
+file is read again whenever it changes, so a new station needs no restart.
 
-A new driver, `S5066Client`, implements `ModemDriver`, so nothing above the
-driver needs to know about 5066.
+```
+# made-up stations
+NCS-A  0.0.0.1
+STA-B  0.0.0.2
+```
 
-**The client interface.** The engine uses the Subnetwork Interface Sublayer
-(SIS) client protocol of STANAG 5066 Annex A, over TCP to the 5066 node on the
-same box. The well-known port is 5066. The engine always connects to
-127.0.0.1, so nothing leaves the box except over the air.
+`--check` reads the peers file and says how many stations it holds. The node
+need not be up at start: the client tries again every 3 seconds and logs when
+it binds.
 
-1. On start, it sends `S_BIND_REQUEST` with our SAP and a service type of
-   ARQ, in-order delivery and client delivery confirm. `ready()` is true once
-   `S_BIND_ACCEPTED` comes back. On `S_BIND_REJECTED`, or a dropped
-   connection, the driver logs the reason and tries again every few seconds.
-2. `send()` becomes one `S_UNIDATA_REQUEST` (or a few: see the size limit
-   below) to the far station's 5066 node address and our SAP. It sets ARQ
-   mode, the priority mapped from the message's precedence (Z highest, then O,
-   P, R), and a time to live taken from the queue's retry time.
-3. `S_UNIDATA_REQUEST_CONFIRM` calls `on_tx_done(true)`.
-   `S_UNIDATA_REQUEST_REJECTED`, or the time to live running out, calls
-   `on_tx_done(false)` with the reason. The queue then retries as it does
-   today.
-4. `S_UNIDATA_INDICATION` delivers the bytes to `on_rx`, unchanged. The frame
-   reader is the same one the modem path uses.
+## How it works
 
-**The SAP.** STANAG 5066 Annex F assigns SAP numbers to its standard clients
-(e.g. character stream, mail, file transfer, IP). Our engine is none of
-those: it is its own message client, so it binds its own SAP. I haven't
-checked the Annex F table itself. Before we pick a number, we check that
-table for an unassigned or local-use SAP and agree it with greybeard-ale. It
-goes in the settings file as `s5066-sap`, and every appliance in a net must
-use the same one.
+`S5066Client` (`src/s5066_client.h`) is a `ModemDriver`, so nothing above it
+changed. It reads the frame's own header for where the frame goes (`dst`) and
+how urgent it is (`prec`).
 
-**Addresses.** 5066 sends to a node address, not a call. Each station in the
-address book gets a `s5066_address` field, and the driver looks up the frame's
-`dst`. A station with no address can't be sent to over 5066, and compose says
-so. The `ModemDriver` interface gains a `send_to(dst, prec, bytes)`. The
-loopback and burst drivers just ignore `dst` and `prec`.
+1. **Bind.** On connect it sends `S_BIND_REQUEST` on SAP 3, rank 0, ARQ, in
+   order, with the delivery confirmation set. `S_BIND_ACCEPTED` gives the
+   node's MTU, and the driver is ready. `S_BIND_REJECTED`,
+   `S_UNBIND_INDICATION` or a dropped connection logs the reason and starts
+   over.
+2. **Send.** One `S_UNIDATA_REQUEST` per piece (below) to the far station's
+   address, ARQ, in order, with the priority from the precedence and the
+   time to live from the settings.
+3. **Result.** When every piece is confirmed (`S_UNIDATA_REQUEST_CONFIRM`), the
+   send is done. A reject (`S_UNIDATA_REQUEST_REJECTED`) fails it with the
+   node's reason, and the queue retries as it always has. So does no confirm
+   within the time to live plus 30 seconds.
+4. **Receive.** `S_UNIDATA_INDICATION` on our SAP goes to the frame reader,
+   after the pieces are joined.
+5. **Flow and keep-alive.** `S_DATAFLOW_OFF` holds sends until
+   `S_DATAFLOW_ON`. `S_KEEP_ALIVE` is answered with `S_KEEP_ALIVE`.
+   `S_SUBNET_AVAILABILITY` is logged.
 
-**The size limit.** The 5066 node caps one U_PDU. Wikipedia gives 2048 bytes
-for ARQ; the exact figure comes from the node's bind reply. Our frames can
-reach 8 KB, so the driver splits a frame into numbered pieces, and the far
-driver joins them before handing them to `on_rx`. With ARQ and in-order
-delivery, a piece either arrives in order or the whole send is rejected.
-Joining is therefore a counter and a buffer, with no retransmission logic of
-our own.
+| Precedence | 5066 priority (0-15, higher first) |
+|---|---|
+| Z FLASH | 15 |
+| O IMMEDIATE | 10 |
+| P PRIORITY | 5 |
+| R ROUTINE | 0 |
 
-## 110D Appendix A: the engine as the modem's terminal
+**To ALL.** A frame to `ALL` goes non-ARQ to the all-stations address
+(15.255.255.255), no confirmation, 2 repeats. It counts as sent once the node
+has it, as a broadcast does today.
 
-Appendix A is the modem's LAN control and data interface. In MSC terms, the
-engine takes the place MSC's terminal takes, and greybeard-ale's modem offers
-the interface. Where it fits:
+**No address.** A frame to a call that isn't in the peers file fails with "no
+5066 address for CALL in the peers file", and the queue treats it as any other
+failed send.
 
-- **Under 5066.** Whatever runs the 5066 node is the modem's Appendix A
-  client, and the engine talks SIS to the node, as above. This is the usual
-  stack, and if greybeard-ale's node owns the modem link, the engine never
-  speaks Appendix A itself.
-- **Without 5066.** For one-shot bursts (broadcasts, a net's call-up, or a
-  station with no 5066 node), a second driver, `Appendix A modem`, would send
-  a frame straight to the modem over Appendix A, set the data rate and
-  interleave from the message's precedence and the link quality, and read
-  received data and modem status back. It replaces today's burst-WAV
-  hand-off and is a `ModemDriver` like the others, so nothing above it
-  changes.
+**Pieces.** The node caps each U_PDU at its MTU, and our frames reach 8 KB. A
+bigger frame goes as numbered pieces, each starting with 7 bytes: `P` `S`,
+version 1, a 2-byte sequence, the piece's index, and the count. With ARQ and
+in-order delivery the pieces arrive in order or the send is refused, so the
+far side only joins them per source address. A piece out of order loses that
+frame, which is counted; our ACK and retry cover it.
 
-Appendix A is also the one place where another station's terminal, such as
-an updated MSC or another team's tool, could plug into the same modem. That
-plugging in is local to the box. Between stations, interop is still over the
-air only.
+## The wire form
 
-Before either driver is written, we need from greybeard-ale whether their
-5066 node owns the Appendix A link, and the modem's Appendix A address and
-port. I haven't read the Appendix A text for this note. Its message set gets
-checked against the standard before any code. Nothing is built for it.
+As greybeard-ale's interface 7 fixes it, and as Wireshark's s5066sis dissector
+(`epan/dissectors/packet-s5066sis.c`) reads it. greybeard-ale names that
+dissector as the reference for the codes, and its exit test for the node is
+that the dissector decodes every frame with no malformed fields.
+
+- Each primitive: `0x90 0xEB`, version `0x00`, a 2-byte size, then the
+  primitive's type byte and fields. Everything is big-endian.
+- Types used: 1 bind request, 2 unbind request, 3 bind accepted, 4 bind
+  rejected, 5 unbind indication, 14 subnet availability, 15 data flow on,
+  16 data flow off, 17 keep-alive, 20 unidata request, 21 unidata indication,
+  22 unidata confirm, 23 unidata rejected.
+- An address is 4 bytes: 3 bits of address size (we send 7, a full 28-bit
+  address), a group bit (set only for the all-stations address), then 28 bits.
+- Service type: transmission mode (4 bits: 1 ARQ, 2 non-ARQ broadcast),
+  delivery confirmation (2 bits: 1 node, 2 client), delivery order (1 bit:
+  0 in order), extended (1 bit, 0), then 4 bits of repeats. In a unidata
+  request the 20-bit time to live follows straight on, in units of 2 seconds.
+- A unidata indication may carry two extra block counts before the data
+  (Wireshark notes this for Rockwell Collins v2.1 and earlier); the reader
+  skips them when the length says they're there.
 
 ## What stays the same
 
-- **Message-level ACKs.** 5066's client delivery confirm means the far 5066
-  client got the bytes. Our ACK means the far engine stored the message and
-  it is in the operator's traffic. Those are different promises, and only
-  the second one ends a message's life in the queue. ARQ makes retries rare,
-  but the ACK and the retry rule stay.
+- **Message ACKs.** A 5066 confirm means the far node (or client) has the
+  bytes. Our ACK means the far engine stored the message and it is in the
+  operator's traffic. Only the ACK ends a message's life in the queue. ARQ
+  makes retries rare, but the ACK and the retry rule stay.
 - The PNA1 frame, the ACP 127/126 message formats, the digest, signatures,
   codress and key tapes are all unchanged. 5066 carries the frame's bytes as
   they are.
 - Precedence ordering in our queue stays. The 5066 priority only orders what
   the node already holds.
-- The burst-WAV driver stays for practice, for the dummy load, and for any
-  station without a 5066 node. Which driver to use is a setting
-  (`link = burst | s5066`).
+- The burst-WAV driver stays for practice, the dummy load, and any station
+  without a 5066 node.
+
+## 110D Appendix A
+
+Appendix A is the modem's LAN interface. Under 5066, the node is the modem's
+Appendix A client and the engine talks SIS to the node, as above, so the
+engine never speaks Appendix A itself. greybeard-ale's orchestrator confirmed
+that is the normal stack.
+
+A second driver that drives the modem over Appendix A directly, for bursts
+outside 5066 or a box with no node, is not built. It waits on the modem's
+Appendix A interface, which greybeard-ale is building in
+pennington_m110a_demod, and on reading the Appendix A message set from the
+standard.
 
 ## Interop
 
-Any other station's software that runs a 5066 node and binds the same SAP
-with the same frame can exchange traffic with us. That's still interop over
-the air only. No MARS-wide SAP or frame for 5066 is known to us. If MARS
-names one (MSC or NGT over 5066, for example), the driver binds that SAP and
-the engine adds a reader for that format, as it did for the ACP 127 forms.
+Any other station's software that runs a 5066 node and binds SAP 3 with the
+same frame can exchange traffic with us, over the air only. No MARS-wide SAP
+or frame for 5066 is known to us. If MARS names one, the driver binds that SAP
+and the engine adds a reader for that format.
 
-## What we need from greybeard-ale
+## Tests
 
-1. Where the 5066 node runs, and whether it is their code or an existing node
-   they wrap.
-2. Its SIS port, and that it accepts clients on 127.0.0.1 only.
-3. The U_PDU limit, and which delivery modes it supports.
-4. Their numbering scheme for node addresses, so the address book can hold
-   them.
-5. How 3G ALE link set-up and teardown show up to a client, if at all. We
-   expect them not to: the node brings the link up when it has traffic.
-6. Whether their 5066 node is the modem's only Appendix A client, or the
-   engine may also drive the modem over Appendix A for bursts outside 5066.
+`tests/test_s5066.cpp`:
 
-## Tests, when built
+- The wire form byte for byte (bind, bind accepted, keep-alive, a unidata
+  request), the reader fed one byte at a time with junk in front, the
+  indication with and without the extra block counts, and a reject's reason.
+- Addresses and the peers file, including bad lines and the broadcast address
+  refused as a station.
+- Pieces: split, joined with two sources interleaved, a lost middle piece
+  counted, too many pieces refused.
+- Two cores through a stand-in node (two "nodes" in the test, joined by a
+  stand-in network, MTU 1024): a message and its ACK; a 4 KB message as four
+  pieces; one refusal then a retry that goes; a call with no address failing;
+  the peers file read again after a change; a broadcast; keep-alive; data
+  flow off and on; the node dropping the connection and the client binding
+  again; an unbind indication.
+- No node at all: not ready, sends refused, one line in the log.
 
-- A stand-in 5066 node in Python under `tools/`, like the other stand-ins. It
-  speaks enough SIS to bind, take `S_UNIDATA_REQUEST`, confirm or reject, and
-  deliver `S_UNIDATA_INDICATION` to a second client.
-- Two cores through the stand-in. This covers a send and its ACK, a 6 KB
-  message split and rejoined, a rejected send retried, an unknown address
-  refused at compose, and precedence order.
-- Interop with greybeard-ale's real node, once it exists, on audio files first
-  and then the dummy load.
+The stand-in has no ARQ and no radio. Interop with greybeard-ale's real node
+comes once it exists: audio files first, then the dummy load.
 
-## To check
+## Still to settle with greybeard-ale
 
-The primitive names, the delivery-mode fields and the priority field above
-come from my knowledge of STANAG 5066 Edition 3 Annex A. I didn't read them
-from the text this time: the pages I could reach show the SIS port (5066) and
-the ARQ and non-ARQ modes, and nothing more. They get checked against the
-standard's text before any code is written.
+1. The node's MTU, and whether it accepts client delivery confirmation if we
+   switch to it. The default is node confirmation.
+2. Their numbering of node addresses, so the peers file uses the same.
+3. Whether the address size field should be 7 (what we send) or the node's
+   own address length.
+4. Rank 0 is fine if the engine is the node's only client on SAP 3.
+5. Their core lockdown limits which settings the box's settings file may set.
+   The six new settings (`link`, `s5066-*`) need adding to that list before a
+   station can turn 5066 on from the settings file.

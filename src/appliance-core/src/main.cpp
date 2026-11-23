@@ -13,6 +13,8 @@
 #include "link_monitor.h"
 #include "ops.h"
 #include "loopback_modem.h"
+#include "s5066.h"
+#include "s5066_client.h"
 
 #include <csignal>
 #include <filesystem>
@@ -21,6 +23,7 @@
 #include <cstdlib>
 #include <ctime>
 #include <iostream>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -59,6 +62,14 @@ void usage() {
         "  --outbox DIR          where burst WAVs go (default DB-DIR/outbox)\n"
         "  --db-dir DIR          the store, work files and state (default .)\n"
         "  --api-port N          local API on 127.0.0.1:N (default 4100)\n\n"
+        "One station, through the STANAG 5066 node (greybeard-ale's interface 7):\n"
+        "  --station NAME        this station's call\n"
+        "  --link s5066          send through the 5066 node instead of gale-tx\n"
+        "  --s5066-peers FILE    CALL ADDRESS per line, e.g. STA-B 0.0.0.2 (required)\n"
+        "  --s5066-port N        the node's SIS port on 127.0.0.1 (default 5066)\n"
+        "  --s5066-sap N         SAP to bind, 0-15 (default 3, HMTP; same on every box)\n"
+        "  --s5066-ttl SEC       time to live per send (default 600)\n"
+        "  --s5066-confirm WHAT  node or client delivery confirmation (default node)\n\n"
         "Two stations in one process, no modem:\n"
         "  --loopback-pair A,B   stations A and B wired back to back\n"
         "  --db-dir DIR          where their stores go (default .)\n"
@@ -158,6 +169,8 @@ int main(int argc, char** argv) {
     std::string link_socket;
     int link_poll_ms = 2000;
     bool link_gate = false;
+    std::string link_kind = "burst";
+    S5066Config s5066;
 
     bool check_only = false;
     std::string config_path;
@@ -206,6 +219,26 @@ int main(int argc, char** argv) {
             else if (a == "--link-socket") link_socket = next();
             else if (a == "--link-poll-ms") link_poll_ms = std::stoi(next());
             else if (a == "--link-gate") link_gate = true;
+            else if (a == "--link") link_kind = next();
+            else if (a == "--s5066-peers") s5066.peers_file = next();
+            else if (a == "--s5066-port") s5066.port = static_cast<uint16_t>(std::stoi(next()));
+            else if (a == "--s5066-sap") {
+                int v = std::stoi(next());
+                if (v < 0 || v > 15) {
+                    std::cerr << "--s5066-sap: 0 to 15\n";
+                    return 2;
+                }
+                s5066.sap = static_cast<uint8_t>(v);
+            } else if (a == "--s5066-ttl") s5066.ttl_seconds = static_cast<uint32_t>(std::stoul(next()));
+            else if (a == "--s5066-confirm") {
+                std::string v = next();
+                if (v == "node") s5066.confirm = s5066::kNodeConfirm;
+                else if (v == "client") s5066.confirm = s5066::kClientConfirm;
+                else {
+                    std::cerr << "--s5066-confirm: node or client\n";
+                    return 2;
+                }
+            }
             else {
                 std::cerr << "unknown option " << a << " (try --help)\n";
                 return 2;
@@ -216,6 +249,10 @@ int main(int argc, char** argv) {
         }
     }
 
+    if (link_kind != "burst" && link_kind != "s5066") {
+        std::cerr << "--link: burst or s5066\n";
+        return 2;
+    }
     if (link_gate && link_socket.empty()) {
         std::cerr << "--link-gate needs --link-socket\n";
         return 2;
@@ -245,19 +282,30 @@ int main(int argc, char** argv) {
         } else if (!station.empty()) {
             if (!valid_station(station) || is_broadcast(station))
                 problems.push_back("station \"" + station + "\": use A-Z, digits and -, at most 16, not ALL");
-            std::cout << "  station        " << station << "\n"
-                      << "  modem          greybeard-ale, gale-tx mode " << (tx_mode.empty() ? "(not set)" : tx_mode)
-                      << "\n";
-            if (tx_mode.empty()) problems.push_back("tx-mode isn't set (the gale-tx mode, like 600S)");
-            std::string tx = find_program(tx_prog);
-            std::cout << "  gale-tx        " << (tx.empty() ? tx_prog + " (not found)" : tx) << "\n";
-            if (tx.empty())
-                problems.push_back("tx-cmd: " + tx_prog + " isn't found; give its full path, as the service " +
-                                   "may not have your PATH");
-            std::cout << "  captures       " << (captures.empty() ? "(not set)" : captures) << "\n";
-            std::error_code ec;
-            if (captures.empty()) problems.push_back("captures isn't set (greybeard-ale's capture directory)");
-            else if (!fs::is_directory(captures, ec)) problems.push_back("captures: " + captures + " isn't a directory");
+            std::cout << "  station        " << station << "\n";
+            if (link_kind == "s5066") {
+                std::cout << "  link           STANAG 5066 node at 127.0.0.1:" << s5066.port << ", SAP "
+                          << int(s5066.sap) << "\n";
+                std::map<std::string, uint32_t> peers;
+                std::string perr;
+                if (s5066.peers_file.empty()) problems.push_back("s5066-peers isn't set (CALL ADDRESS per line)");
+                else if (!s5066::read_peers(s5066.peers_file, peers, &perr)) problems.push_back("s5066-peers: " + perr);
+                else std::cout << "  5066 peers     " << peers.size() << " stations in " << s5066.peers_file << "\n";
+                notes.push_back("the 5066 node is looked for at start and every few seconds after; it needn't be up now");
+            } else {
+                std::cout << "  modem          greybeard-ale, gale-tx mode " << (tx_mode.empty() ? "(not set)" : tx_mode)
+                          << "\n";
+                if (tx_mode.empty()) problems.push_back("tx-mode isn't set (the gale-tx mode, like 600S)");
+                std::string tx = find_program(tx_prog);
+                std::cout << "  gale-tx        " << (tx.empty() ? tx_prog + " (not found)" : tx) << "\n";
+                if (tx.empty())
+                    problems.push_back("tx-cmd: " + tx_prog + " isn't found; give its full path, as the service " +
+                                       "may not have your PATH");
+                std::cout << "  captures       " << (captures.empty() ? "(not set)" : captures) << "\n";
+                std::error_code ec;
+                if (captures.empty()) problems.push_back("captures isn't set (greybeard-ale's capture directory)");
+                else if (!fs::is_directory(captures, ec)) problems.push_back("captures: " + captures + " isn't a directory");
+            }
             std::cout << "  API            127.0.0.1:" << api_port << "\n";
         } else {
             problems.push_back("set station (this station's call), or loopback-pair to practise with no radio");
@@ -315,21 +363,31 @@ int main(int argc, char** argv) {
                 std::cerr << "--station: letters A-Z, digits and -, at most 16\n";
                 return 2;
             }
-            if (tx_mode.empty() || captures.empty()) {
-                std::cerr << "--station needs --tx-mode and --captures (try --help)\n";
-                return 2;
-            }
-            GreybeardConfig g;
-            g.tx_cmd = {tx_prog};
-            g.tx_cmd.insert(g.tx_cmd.end(), tx_args.begin(), tx_args.end());
-            g.mode = tx_mode;
-            g.captures_dir = captures;
-            g.work_dir = db_dir + "/" + station + "-work";
-            g.outbox_dir = outbox.empty() ? db_dir + "/" + station + "-outbox" : outbox;
-            g.state_file = db_dir + "/" + station + "-captures-seen.txt";
             stations.resize(1);
             CoreConfig c{station, db_dir + "/" + station + ".db", max_attempts, 30, acks};
-            if (!start_station(stations[0], c, std::make_unique<GreybeardModem>(g), api_port)) return 1;
+            std::unique_ptr<ModemDriver> modem;
+            if (link_kind == "s5066") {
+                if (s5066.peers_file.empty()) {
+                    std::cerr << "--link s5066 needs --s5066-peers (try --help)\n";
+                    return 2;
+                }
+                modem = std::make_unique<S5066Client>(s5066);
+            } else {
+                if (tx_mode.empty() || captures.empty()) {
+                    std::cerr << "--station needs --tx-mode and --captures (try --help)\n";
+                    return 2;
+                }
+                GreybeardConfig g;
+                g.tx_cmd = {tx_prog};
+                g.tx_cmd.insert(g.tx_cmd.end(), tx_args.begin(), tx_args.end());
+                g.mode = tx_mode;
+                g.captures_dir = captures;
+                g.work_dir = db_dir + "/" + station + "-work";
+                g.outbox_dir = outbox.empty() ? db_dir + "/" + station + "-outbox" : outbox;
+                g.state_file = db_dir + "/" + station + "-captures-seen.txt";
+                modem = std::make_unique<GreybeardModem>(g);
+            }
+            if (!start_station(stations[0], c, std::move(modem), api_port)) return 1;
         } else {
             std::cerr << "give --station (greybeard-ale) or --loopback-pair (try --help)\n";
             return 2;
