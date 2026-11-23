@@ -92,7 +92,16 @@ struct Context {
     // send to goes, and a plain name with no routing indicator on a TO, INFO
     // or FM line: check() fills in the call and the routing indicator.
     std::function<std::optional<BookHit>(const std::string&)> lookup;
+    // The codress keys this station may send with now ("QXR01" and its net),
+    // from its keyring (keys.h). None: codress can't be sent.
+    struct Key {
+        std::string indicator, net;
+    };
+    std::vector<Key> codress_keys;
 };
+
+// Why codress can't be sent with this context, or "" when it can.
+std::string codress_why_not(const Context& ctx);
 
 // The fields of a template in a procedure (envelope first, then content).
 // Empty with *error when the template or procedure is unknown or they don't
@@ -133,7 +142,11 @@ struct Result {
     // The calls the message goes to over the air: one, or a collective's
     // stations from the book (one copy each). ALL is the broadcast address.
     std::vector<std::string> to_targets;
-    std::string message;             // VZCZC to NNNN, or the chat line
+    // VZCZC to NNNN with its [DIGEST:] line, or the chat line. For codress,
+    // the plaindress before it is enciphered (the sender enciphers it with
+    // codress_key, a fresh nonce for each copy: codress.h).
+    std::string message;
+    std::string codress_key;         // the key indicator, for ACP127_CODRESS
     // The core counters the serials come from, so the sender can take them:
     std::string channel_counter;     // "acp127.channel.MMM" (wraps at 999); "" for bare VZCZC or chat
     std::string serial_counter;      // "acp127.station.<orig>" (9999) or "acp126.nr.<station>" (999); "" for chat

@@ -92,6 +92,14 @@ bool start_station(Station& s, CoreConfig cfg, std::unique_ptr<ModemDriver> mode
     // The station book (address book, nets, duty, log, reports) in the same file.
     s.core->set_ops(std::make_shared<Ops>(name, db));
     if (g_link) s.core->set_link_monitor(g_link);
+    // Codress keys beside the database: STATION.keys (keys.h).
+    {
+        std::string kp = db.size() > 3 && db.compare(db.size() - 3, 3, ".db") == 0 ? db.substr(0, db.size() - 3) : db;
+        auto kr = std::make_shared<keys::Keyring>(kp + ".keys");
+        std::string err;
+        if (!kr->load(&err)) log_line(name, "codress keys not loaded (" + err + "): import the key tape again");
+        s.core->set_keyring(kr);
+    }
     s.core->on_log([name](const std::string& t) { log_line(name, t); });
     s.core->start();
     s.api = std::make_unique<ApiServer>(*s.core, port);

@@ -5,6 +5,9 @@
 //   appliance-cli [--port 4100] list [N]
 //   appliance-cli [--port 4100] get ID
 //   appliance-cli [--port 4100] api CMD [key=value ...]
+//   appliance-cli [--port 4100] keys import FILE     load a key tape (from its USB stick)
+//   appliance-cli [--port 4100] keys list            the codress keys held (never the keys themselves)
+//   appliance-cli [--port 4100] keys zeroize IND|TAPE
 //
 // "api" sends any call in docs/api.md: appliance-cli api net_callup who=all.
 // A value with spaces goes in quotes; \n in a value is a new line.
@@ -13,7 +16,11 @@
 #include "../src/json.h"
 #include "../src/net.h"
 
+#include "../src/crypto.h"
+
+#include <fstream>
 #include <iostream>
+#include <sstream>
 #include <string>
 
 using namespace pna;
@@ -27,7 +34,8 @@ int main(int argc, char** argv) {
     }
     if (i >= argc) {
         std::cerr << "usage: appliance-cli [--port N] status | send --to B [--prec R] TEXT | list [N] | get ID\n"
-                     "                    | api CMD [key=value ...]\n";
+                     "                    | api CMD [key=value ...] | keys import FILE | keys list\n"
+                     "                    | keys zeroize IND|TAPE\n";
         return 2;
     }
     std::string cmd = argv[i++];
@@ -69,6 +77,30 @@ int main(int argc, char** argv) {
             else body += (body.empty() ? "" : " ") + a;
         }
         w.field("to", to).field("prec", prec).field("body", body);
+    } else if (cmd == "keys") {
+        std::string sub = i < argc ? argv[i++] : "";
+        if (sub == "import" && i < argc) {
+            std::ifstream f(argv[i], std::ios::binary);
+            if (!f) {
+                std::cerr << "cannot read " << argv[i] << "\n";
+                return 1;
+            }
+            std::ostringstream ss;
+            ss << f.rdbuf();
+            std::string text = ss.str();
+            w = JsonWriter();
+            w.begin_object().field("cmd", "key_import").field("text", text);
+            crypto::wipe(text);
+        } else if (sub == "list") {
+            w = JsonWriter();
+            w.begin_object().field("cmd", "keys_list");
+        } else if (sub == "zeroize" && i < argc) {
+            w = JsonWriter();
+            w.begin_object().field("cmd", "key_zeroize").field("which", std::string(argv[i]));
+        } else {
+            std::cerr << "keys import FILE | keys list | keys zeroize IND|TAPE\n";
+            return 2;
+        }
     } else if (cmd == "list" && i < argc) {
         w.field("limit", std::stoi(argv[i]));
     } else if (cmd == "get" && i < argc) {

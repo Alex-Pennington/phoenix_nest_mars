@@ -8,6 +8,7 @@
 // must read back as that procedure with no warnings.
 #include "../src/acp201.h"
 #include "../src/api_server.h"
+#include "../src/codress.h"
 #include "../src/compose.h"
 #include "../src/core.h"
 #include "../src/json.h"
@@ -28,6 +29,7 @@ static compose::Context ctx() {
     compose::Context c;
     c.station = "AAR4XX";
     c.now = 1795269300;  // 21 Nov 2026 13:55Z
+    c.codress_keys = {{"QXR01", "PRACTICE NET"}};  // a made-up key indicator
     return c;
 }
 
@@ -151,6 +153,16 @@ static void test_first_time_operator() {
                 CHECK(c.warnings.empty());
                 continue;
             }
+            // Codress composes as the plaindress inside it; the sender
+            // enciphers it (test_codress). What goes on the air reads as
+            // codress; the rest of the checks read the plaindress inside.
+            if (p == "ACP127_CODRESS") {
+                CHECK(r.codress_key == "QXR01");
+                std::string air, e;
+                CHECK(codress::encipher(r.message, r.codress_key, std::string(32, 'k'), air, &e));
+                received::Message cm;
+                CHECK(received::parse(air, cm, &e) && received::procedure(cm) == p && cm.enciphered);
+            }
             received::Message m;
             std::string err;
             bool ok = received::parse(r.message, m, &err);
@@ -159,9 +171,10 @@ static void test_first_time_operator() {
                 std::cout << "  " << t.id << " in " << p << ": " << err << "\n" << r.message << "\n";
                 continue;
             }
-            if (received::procedure(m) != p)
+            const std::string want = p == "ACP127_CODRESS" ? "ACP127_PLAINDRESS" : p;
+            if (received::procedure(m) != want)
                 std::cout << "  " << t.id << " in " << p << " reads back as " << received::procedure(m) << "\n";
-            CHECK(received::procedure(m) == p);
+            CHECK(received::procedure(m) == want);
             // Lines aren't broken at 69 unless asked (MARS traffic isn't);
             // the reader notes a longer line, and that is all.
             if (m.warnings.size() == 1 && m.warnings[0] == "lines over 69 characters") m.warnings.clear();
@@ -376,7 +389,14 @@ static void test_common_mistakes() {
     // Wrong pairings and unknown names.
     {
         std::string err;
-        CHECK(compose::form("FREE_FORM", "ACP127_CODRESS", ctx(), &err).empty() && err.find("cipher") != std::string::npos);
+        compose::Context nokey = ctx();
+        nokey.codress_keys.clear();
+        CHECK(compose::form("FREE_FORM", "ACP127_CODRESS", nokey, &err).empty() && err.find("key") != std::string::npos);
+        CHECK(!compose::form("FREE_FORM", "ACP127_CODRESS", ctx(), &err).empty());
+        auto cr = compose::check(draft("FREE_FORM", "ACP127_CODRESS", {{"routing", "UHAAAA"}, {"to", "UHAAAA/X"},
+                                                                       {"text", "HI"}, {"key", "QXR02"}}),
+                                 ctx());
+        CHECK(has(cr, "key", "error"));
         CHECK(compose::form("SVC", "ACP126_SIMPLE", ctx(), &err).empty() && !err.empty());
         CHECK(compose::form("NOPE", "", ctx(), &err).empty() && !err.empty());
         auto r = compose::check(draft("NOPE", "", {}), ctx());

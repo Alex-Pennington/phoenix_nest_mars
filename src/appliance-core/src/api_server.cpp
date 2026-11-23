@@ -5,7 +5,11 @@
 #include "acp126.h"
 #include "acp127.h"
 #include "acp201.h"
+#include "codress.h"
 #include "compose.h"
+#include "crypto.h"
+#include "digest.h"
+#include "keys.h"
 #include "received.h"
 #include "json.h"
 #include "net.h"
@@ -221,6 +225,8 @@ std::string send_chat(Core& core, std::map<std::string, std::string>& req) {
 compose::Context compose_ctx(Core& core) {
     compose::Context c;
     c.station = core.station();
+    if (keys::Keyring* kr = core.keyring())
+        for (auto& k : kr->for_sending()) c.codress_keys.push_back({k.indicator, k.net});
     if (Ops* ops = core.ops()) {
         c.lookup = [ops](const std::string& name) -> std::optional<compose::BookHit> {
             auto e = ops->book_find(name);
@@ -262,12 +268,16 @@ void write_issues(JsonWriter& w, const std::vector<compose::Issue>& issues) {
     w.end_array();
 }
 
-std::string compose_templates() {
+std::string compose_templates(Core& core) {
+    // Codress can be sent only with a key current now.
+    std::string codress_no = compose::codress_why_not(compose_ctx(core));
     JsonWriter w;
     w.begin_object().field("ok", true).begin_array("procedures");
     for (auto& p : compose::procedures()) {
-        w.begin_object().field("id", p.id).field("title", p.title).field("summary", p.summary).field("available", p.available);
-        if (!p.available) w.field("why_not", p.why_not);
+        bool available = p.available && !(p.id == "ACP127_CODRESS" && !codress_no.empty());
+        std::string why_not = p.available ? codress_no : p.why_not;
+        w.begin_object().field("id", p.id).field("title", p.title).field("summary", p.summary).field("available", available);
+        if (!available) w.field("why_not", why_not);
         w.end_object();
     }
     w.end_array().begin_array("templates");
@@ -328,6 +338,10 @@ std::string compose_check(Core& core, std::map<std::string, std::string>& req) {
     write_issues(w, r.issues);
     if (r.ready) {
         w.field("preview", r.message).field("to_station", r.to_station).field("prec", std::string(1, r.prec));
+        if (!r.codress_key.empty())
+            w.field("codress_key", r.codress_key)
+                .field("note", "This is the message before it is enciphered. It goes enciphered in key " +
+                                   r.codress_key + ": everything after the date-time group becomes cipher groups.");
         w.begin_array("to_targets");
         for (auto& t : r.to_targets) w.field("", t);
         w.end_array();
@@ -363,8 +377,28 @@ std::string compose_send(Core& core, std::map<std::string, std::string>& req) {
     // One copy for each station: a collective from the station book fans out.
     std::string err;
     std::vector<std::string> ids, refused;
+    // Codress: each copy is enciphered on its own, with a fresh nonce.
+    std::string codress_key;
+    if (!r.codress_key.empty()) {
+        keys::Keyring* kr = core.keyring();
+        if (!kr) return error_reply("this station has no keyring");
+        if (!kr->send_key(r.codress_key, codress_key, &err)) return error_reply(err);
+    }
+    std::string sent_text = r.message;
     for (auto& t : r.to_targets) {
-        std::string e, id = core.submit(t, r.prec, r.message, &e);
+        std::string e, id;
+        if (!codress_key.empty()) {
+            std::string out;
+            if (!codress::encipher(r.message, r.codress_key, codress_key, out, &e)) {
+                refused.push_back(t + ": " + e);
+                err = e;
+                continue;
+            }
+            sent_text = out;
+            id = core.submit_codress(t, r.prec, out, r.message, r.codress_key, &e);
+        } else {
+            id = core.submit(t, r.prec, r.message, &e);
+        }
         if (!id.empty()) {
             ids.push_back(id);
         } else {
@@ -372,9 +406,11 @@ std::string compose_send(Core& core, std::map<std::string, std::string>& req) {
             err = e;
         }
     }
+    crypto::wipe(codress_key);
     if (ids.empty()) return error_reply(err);
     JsonWriter w;
-    w.begin_object().field("ok", true).field("id", ids[0]).field("procedure", r.procedure).field("message", r.message);
+    w.begin_object().field("ok", true).field("id", ids[0]).field("procedure", r.procedure).field("message", sent_text);
+    if (!r.codress_key.empty()) w.field("codress_key", r.codress_key).field("clear", r.message);
     w.begin_array("ids");
     for (auto& i : ids) w.field("", i);
     w.end_array().begin_array("to_targets");
@@ -426,6 +462,21 @@ int limit_of(std::map<std::string, std::string>& req, int def, int max, bool* ba
     return limit;
 }
 
+// How a service message names a message: "#0209 062310Z NOV 2019", as the
+// SVC template asks.
+std::string repeat_ref(const received::Message& m, const std::string& id) {
+    static const char* kMon[] = {"JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"};
+    std::string r = m.serial.empty() ? id : "#" + m.serial;
+    if (m.has_dtg && m.dtg.month >= 1 && m.dtg.month <= 12) {
+        char b[40];
+        std::snprintf(b, sizeof b, " %02d%02d%02d%c %s", m.dtg.day, m.dtg.hour, m.dtg.minute, m.dtg.zone,
+                      kMon[m.dtg.month - 1]);
+        r += b;
+        if (m.dtg.year) r += " " + std::to_string(m.dtg.year);
+    }
+    return r;
+}
+
 // parse_traffic: reads a stored message in any form MARS stations send
 // (received.h), or a chat line (acp201.h), and lists what it had to tolerate.
 std::string parse_traffic(Core& core, std::map<std::string, std::string>& req) {
@@ -461,8 +512,17 @@ std::string parse_traffic(Core& core, std::map<std::string, std::string>& req) {
             .end_object();
         return w.str();
     }
+    // Codress: read the plain copy when this station has one (Core::read_codress).
+    const bool enciphered = codress::is_codress(msg->body);
+    std::string key_indicator = enciphered ? codress::indicator_of(msg->body) : "";
+    auto clear = enciphered ? core.clear(msg->id) : std::nullopt;
+    const std::string& text_in = clear ? clear->first : msg->body;
+    // The MSC digest (digest.h): of what went over the air, and for codress
+    // also of the plaindress inside it.
+    digest::Check air = digest::check(msg->body);
+    digest::Check inner = clear ? digest::check(clear->first) : digest::Check::None;
     received::Message m;
-    if (!received::parse(msg->body, m, &err)) return error_reply("not a message this reader can place: " + err);
+    if (!received::parse(text_in, m, &err)) return error_reply("not a message this reader can place: " + err);
     std::string routing, warnings;
     for (auto& r : m.routing) routing += (routing.empty() ? "" : " ") + r;
     std::string relay;
@@ -495,7 +555,34 @@ std::string parse_traffic(Core& core, std::map<std::string, std::string>& req) {
         .field("class_line", m.class_line)
         .field("text", received::text_of(m))
         .field("warnings", warnings)
-        .end_object();
+        .field("digest", digest::check_name(air));
+    if (enciphered) {
+        w.field("codress", true)
+            .field("codress_key", key_indicator)
+            .field("deciphered", static_cast<bool>(clear))
+            .field("inner_digest", digest::check_name(inner));
+        if (!clear) {
+            std::string k;
+            bool held = core.keyring() && core.keyring()->receive_key(key_indicator, k);
+            crypto::wipe(k);
+            w.field("why_not_deciphered",
+                    held ? "its groups did not check with key " + key_indicator +
+                               " (damaged, changed or another key), or it came before the key was loaded: see the log"
+                         : "this station holds no key " + key_indicator);
+        }
+    }
+    // A digest that doesn't match: the text may have been garbled on the way.
+    // The message stands; offer a service message asking for a repeat.
+    if (air == digest::Check::Fail || inner == digest::Check::Fail) {
+        w.field("possibly_garbled", true);
+        w.begin_object("repeat_request")
+            .field("template", "SVC")
+            .field("to_station", msg->src)
+            .field("refs", repeat_ref(m, msg->id))
+            .field("svc_text", "REQUEST REPEAT, DIGEST FAILED")
+            .end_object();
+    }
+    w.end_object();
     return w.str();
 }
 
@@ -696,7 +783,7 @@ std::string ApiServer::handle(Core& core, const std::string& line) {
     if (cmd == "send_acp126") return send_acp126(core, req);
     if (cmd == "parse_traffic") return parse_traffic(core, req);
     if (cmd == "send_chat") return send_chat(core, req);
-    if (cmd == "compose_templates") return compose_templates();
+    if (cmd == "compose_templates") return compose_templates(core);
     if (cmd == "compose_form") return compose_form(core, req);
     if (cmd == "compose_check") return compose_check(core, req);
     if (cmd == "compose_send") return compose_send(core, req);
@@ -738,11 +825,57 @@ std::string ApiServer::handle(Core& core, const std::string& line) {
         return w.str();
     }
 
+    // Codress keys (keys.h). Key bytes never leave the core.
+    if (cmd == "key_import" || cmd == "keys_list" || cmd == "key_zeroize") {
+        keys::Keyring* kr = core.keyring();
+        if (!kr) return error_reply("this station has no keyring");
+        std::string err;
+        if (cmd == "key_import") {
+            keys::ImportResult r;
+            bool ok = kr->import_tape(req["text"], r, &err);
+            crypto::wipe(req["text"]);
+            if (!ok) return error_reply("key tape not loaded: " + err);
+            core.note("key tape " + r.tape + " for " + r.net + " loaded: " + std::to_string(r.added) + " key(s) added, " +
+                      std::to_string(r.already) + " already held, " + std::to_string(r.expired) + " already ended");
+            JsonWriter w;
+            w.begin_object()
+                .field("ok", true)
+                .field("net", r.net)
+                .field("tape", r.tape)
+                .field("added", r.added)
+                .field("already", r.already)
+                .field("expired", r.expired)
+                .end_object();
+            return w.str();
+        }
+        if (cmd == "key_zeroize") {
+            int n = kr->zeroize(req["which"], &err);
+            if (n <= 0) return error_reply(err);
+            core.note(std::to_string(n) + " key(s) of " + req["which"] + " zeroized by the operator");
+            JsonWriter w;
+            w.begin_object().field("ok", true).field("zeroized", n).end_object();
+            return w.str();
+        }
+        JsonWriter w;
+        w.begin_object().field("ok", true).begin_array("keys");
+        for (auto& k : kr->list())
+            w.begin_object()
+                .field("indicator", k.indicator)
+                .field("net", k.net)
+                .field("tape", k.tape)
+                .field("from", keys::time_text(k.from))
+                .field("until", keys::time_text(k.until))
+                .field("state", k.state)
+                .end_object();
+        w.end_array().end_object();
+        return w.str();
+    }
+
     if (auto r = handle_ops(core, cmd, req)) return *r;
 
     return error_reply(
         "unknown cmd; use status, send, list, get, queue, log, send_acp127, send_acp126, send_chat, parse_acp127, "
-        "parse_traffic, compose_templates, compose_form, compose_check, compose_send, compose_advise, or the book's calls (docs/api.md): book_*, net_*, sched_*, duty_*, log_add, station_log, report_monthly");
+        "parse_traffic, compose_templates, compose_form, compose_check, compose_send, compose_advise, key_import, keys_list, key_zeroize, or the book's calls (docs/api.md): book_*, net_*, sched_*, duty_*, log_add, station_log, report_monthly");
 }
 
 }  // namespace pna

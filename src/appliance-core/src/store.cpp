@@ -60,6 +60,7 @@ Store::Store(const std::string& path) {
         "CREATE TABLE IF NOT EXISTS events ("
         " ts INTEGER NOT NULL, msg_id TEXT, text TEXT NOT NULL)");
     exec("CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value INTEGER NOT NULL)");
+    exec("CREATE TABLE IF NOT EXISTS clear (id TEXT PRIMARY KEY, text BLOB NOT NULL, key TEXT NOT NULL)");
     exec("CREATE INDEX IF NOT EXISTS messages_queue ON messages(direction, state, prec, created_at)");
 }
 
@@ -219,6 +220,19 @@ void Store::log_event(const std::string& msg_id, const std::string& text) {
     Stmt s(db_, "INSERT INTO events(ts, msg_id, text) VALUES(?,?,?)");
     s.bind(1, now_utc()).bind(2, msg_id).bind(3, text);
     s.step();
+}
+
+void Store::set_clear(const std::string& id, const std::string& text, const std::string& key) {
+    Stmt s(db_, "INSERT OR REPLACE INTO clear(id, text, key) VALUES(?,?,?)");
+    s.bind(1, id).bind_blob(2, text).bind(3, key);
+    s.step();
+}
+
+std::optional<std::pair<std::string, std::string>> Store::clear(const std::string& id) {
+    Stmt s(db_, "SELECT text, key FROM clear WHERE id = ?");
+    s.bind(1, id);
+    if (!s.step()) return std::nullopt;
+    return std::make_pair(s.blob(0), s.text(1));
 }
 
 }  // namespace pna

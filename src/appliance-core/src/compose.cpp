@@ -6,6 +6,7 @@
 #include "acp126.h"
 #include "acp127.h"
 #include "acp201.h"
+#include "digest.h"
 #include "json.h"
 #include "run_program.h"
 
@@ -252,8 +253,9 @@ const std::vector<ProcInfo>& proc_table() {
               "Capitals only, and only A-Z, 0-9, space and - ? : ( ) . , /.",
               Env::Acp127),
             P("ACP127_CODRESS", "ACP 127 codress",
-              "Enciphered traffic with the addresses inside the cipher.", Env::Codress, false, false,
-              "Codress needs the MARS cipher, and this appliance doesn't have it."),
+              "Enciphered traffic: everything after the date-time group, addresses included, goes inside the "
+              "cipher, under your net's key from its key tape.",
+              Env::Codress),
             P("ACP126_PLAINDRESS", "ACP 126 call-up with FM and TO",
               "\"CALL DE STATION NR 051\", then the date-time group, FM and TO. Capitals only.", Env::Acp126Plain),
             P("ACP126_SIMPLE", "ACP 126 call-up",
@@ -299,6 +301,12 @@ std::vector<Field> envelope(const ProcInfo& pi, char prec) {
                           "Anyone who gets a copy for information, one per line, written like the TO line.",
                           "UHAAAB/REGION FOUR OPS");
     switch (pi.env) {
+        case Env::Codress:
+            f.push_back(F("key", "Key", "choice", true, "",
+                          "The key it goes in: one of your net's keys for today, from the key tape you imported. "
+                          "The receiving station must hold the same tape.",
+                          "QXR01"));
+            [[fallthrough]];
         case Env::Acp127:
             f.push_back(fprec);
             f.push_back(F("routing", "Routing line", "stations", true, "",
@@ -361,7 +369,6 @@ std::vector<Field> envelope(const ProcInfo& pi, char prec) {
             f.push_back(F("station", "Your call sign", "call", true, "$CALL", "Your own call sign.", "AAR4XX"));
             f.push_back(fto_station);
             break;
-        case Env::Codress: break;
     }
     if (pi.env != Env::Chat && pi.env != Env::Codress)
         f.push_back(F("wrap", "Break lines at 69 characters", "yn", false, "N",
@@ -1282,6 +1289,22 @@ std::vector<Field> raw_form(const TemplateDef& d, const ProcInfo& pi) {
     return out;
 }
 
+// The key field's choices: the keys current now.
+void fill_keys(std::vector<Field>& fields, const Context& ctx) {
+    for (auto& f : fields)
+        if (f.key == "key" && f.kind == "choice") {
+            f.choices.clear();
+            for (auto& k : ctx.codress_keys) f.choices.push_back(k.indicator);
+            if (!f.choices.empty()) {
+                f.def = f.choices[0];
+                f.example = f.choices[0];
+                std::string nets;
+                for (auto& k : ctx.codress_keys) nets += (nets.empty() ? "" : ", ") + k.indicator + " " + k.net;
+                f.hint += " Loaded now: " + nets + ".";
+            }
+        }
+}
+
 bool pick(const std::string& template_id, const std::string& procedure, const TemplateDef*& d, const ProcInfo*& pi,
           std::string* error) {
     d = find_def(template_id);
@@ -1308,12 +1331,23 @@ bool pick(const std::string& template_id, const std::string& procedure, const Te
 
 }  // namespace
 
+std::string codress_why_not(const Context& ctx) {
+    if (ctx.codress_keys.empty())
+        return "Codress needs a key: no key for today is loaded on this station. Import your net's key tape first.";
+    return "";
+}
+
 std::vector<Field> form(const std::string& template_id, const std::string& procedure, const Context& ctx,
                         std::string* error) {
     const TemplateDef* d = nullptr;
     const ProcInfo* pi = nullptr;
     if (!pick(template_id, procedure, d, pi, error)) return {};
+    if (pi->env == Env::Codress && !codress_why_not(ctx).empty()) {
+        if (error) *error = codress_why_not(ctx);
+        return {};
+    }
     std::vector<Field> out = raw_form(*d, *pi);
+    fill_keys(out, ctx);
     for (auto& f : out) f.def = resolve(f.def, ctx);
     if (error) error->clear();
     return out;
@@ -1412,7 +1446,14 @@ Result check(const Draft& d, const Context& ctx, const Serials& serials) {
         return r;
     }
     r.procedure = pi->p.id;
+    if (pi->env == Env::Codress && !codress_why_not(ctx).empty()) {
+        c.add("", "error", codress_why_not(ctx),
+              "Import your net's key tape from its USB stick (appliance-cli keys import FILE), or send it plaindress.");
+        r.issues = c.issues;
+        return r;
+    }
     std::vector<Field> fields = raw_form(*def, *pi);
+    fill_keys(fields, ctx);
 
     // Values: given, or the default. Strict procedures carry capitals only, so
     // their text is put in capitals here and the operator told once.
@@ -1610,6 +1651,9 @@ Result check(const Draft& d, const Context& ctx, const Serials& serials) {
     std::tm u = utc(ctx);
     std::string msg;
     switch (pi->env) {
+        case Env::Codress:
+            r.codress_key = val["key"];
+            [[fallthrough]];
         case Env::Acp127: {
             Body b = def->render(val, RenderCtx{std::to_string(serials.station_serial)});
             acp127::Message m;
@@ -1684,8 +1728,9 @@ Result check(const Draft& d, const Context& ctx, const Serials& serials) {
             msg = acp201::build(ch, &err);
             break;
         }
-        case Env::Codress: break;
     }
+    // Every message but a chat line carries the MSC digest (digest.h).
+    if (!msg.empty() && pi->env != Env::Chat) msg = digest::append(msg);
     if (msg.empty()) {
         c.add("", "error", plain_error(err), "Check the fields marked above, or send it as 16L, which is less strict.");
         r.issues = c.issues;

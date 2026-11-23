@@ -1,5 +1,8 @@
 #include "core.h"
 
+#include "codress.h"
+#include "crypto.h"
+
 #include <chrono>
 
 namespace pna {
@@ -67,6 +70,45 @@ std::string Core::submit(const std::string& to, char prec, const std::string& bo
     return m.id;
 }
 
+std::string Core::submit_codress(const std::string& to, char prec, const std::string& codress,
+                                 const std::string& clear, const std::string& key, std::string* error) {
+    std::string id = submit(to, prec, codress, error);
+    if (id.empty()) return id;
+    std::lock_guard<std::mutex> g(mu_);
+    store_.set_clear(id, clear, key);
+    log(id, "enciphered with key " + key);
+    return id;
+}
+
+void Core::note(const std::string& text) {
+    std::lock_guard<std::mutex> g(mu_);
+    log("", text);
+}
+
+std::optional<std::pair<std::string, std::string>> Core::clear(const std::string& id) {
+    std::lock_guard<std::mutex> g(mu_);
+    return store_.clear(id);
+}
+
+void Core::read_codress(const std::string& id, const std::string& body) {
+    std::string ind = codress::indicator_of(body);
+    if (ind.empty()) return;
+    std::string key;
+    if (!keys_ || !keys_->receive_key(ind, key)) {
+        log(id, "codress in key " + ind + ": this station holds no such key, so it can't be read here");
+        return;
+    }
+    std::string plain, err;
+    bool ok = codress::decipher(body, key, plain, &err);
+    crypto::wipe(key);
+    if (!ok) {
+        log(id, "codress in key " + ind + " could not be read: " + err);
+        return;
+    }
+    store_.set_clear(id, plain, ind);
+    log(id, "deciphered with key " + ind);
+}
+
 int64_t Core::next_counter(const std::string& key, int64_t wrap) {
     std::lock_guard<std::mutex> g(mu_);
     return store_.next_counter(key, wrap);
@@ -130,6 +172,9 @@ void Core::tick() {
             told_clock_ = c;
         }
     }
+    // Keys past their receive hold are zeroized (keys.h).
+    if (keys_)
+        for (auto& line : keys_->sweep()) log("", line);
     if (ops_ && std::chrono::steady_clock::now() >= next_sched_) {
         // Scheduled nets: open the ones set to open themselves, say the rest once.
         next_sched_ = std::chrono::steady_clock::now() + std::chrono::seconds(30);
@@ -254,6 +299,7 @@ void Core::handle_rx(const std::string& bytes) {
             store_.insert(m);
             log(f.id, std::string("received ") + prec_name(f.prec) + " from " + f.src +
                           (to_all ? " to all stations" : ""));
+            read_codress(f.id, f.body);
         }
         // Nobody acks a broadcast: every station on the net would answer at once.
         if (cfg_.send_acks && !to_all) {

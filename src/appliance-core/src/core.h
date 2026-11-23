@@ -3,6 +3,7 @@
 #pragma once
 
 #include "frame.h"
+#include "keys.h"
 #include "link_monitor.h"
 #include "ops.h"
 #include "modem.h"
@@ -71,6 +72,16 @@ public:
     // The station book (ops.h): nets hear stations through it. Set before start().
     void set_ops(std::shared_ptr<Ops> ops) { ops_ = std::move(ops); }
     Ops* ops() const { return ops_.get(); }
+    // The station's codress keys (keys.h). Set before start(); none: codress
+    // is neither sent nor read.
+    void set_keyring(std::shared_ptr<keys::Keyring> k) { keys_ = std::move(k); }
+    keys::Keyring* keyring() const { return keys_.get(); }
+    // Queues a codress copy and keeps its plain copy beside it (Store::set_clear).
+    std::string submit_codress(const std::string& to, char prec, const std::string& codress, const std::string& clear,
+                               const std::string& key, std::string* error);
+    std::optional<std::pair<std::string, std::string>> clear(const std::string& id);
+    // Writes a line to the station's event log (key loads and zeroizes).
+    void note(const std::string& text);
     std::vector<Message> list(int limit);
     std::optional<Message> get(const std::string& id);
     std::vector<Message> queue(int limit);
@@ -87,6 +98,7 @@ private:
     void handle_rx(const std::string& bytes);
     void handle_tx_done(bool ok, const std::string& err);
     void log(const std::string& msg_id, const std::string& text);
+    void read_codress(const std::string& id, const std::string& body);  // caller holds mu_
 
     CoreConfig cfg_;
     std::unique_ptr<ModemDriver> modem_;
@@ -101,6 +113,7 @@ private:
     std::function<void(const std::string&)> log_fn_;
     std::shared_ptr<LinkMonitor> link_;
     std::shared_ptr<Ops> ops_;
+    std::shared_ptr<keys::Keyring> keys_;
     std::set<std::string> told_waiting_;  // messages already logged as waiting for a link
     std::string told_clock_;              // the clock source last logged
     std::chrono::steady_clock::time_point next_sched_{};  // when to look at net schedules again

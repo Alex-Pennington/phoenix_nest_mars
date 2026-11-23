@@ -80,6 +80,12 @@ public:
 
     void log_event(const std::string& msg_id, const std::string& text);
 
+    // The plain copy of a codress message (codress.h): what the station sent
+    // before it was enciphered, or what it read after deciphering, and the
+    // key indicator. Kept so the operator can read it after the key is gone.
+    void set_clear(const std::string& id, const std::string& text, const std::string& key);
+    std::optional<std::pair<std::string, std::string>> clear(const std::string& id);  // text, key
+
 private:
     void exec(const char* sql);
     sqlite3* db_ = nullptr;
