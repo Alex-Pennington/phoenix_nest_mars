@@ -134,7 +134,7 @@ int main() {
 
     // ---- Normal day, 45 days before the drill. ----
     g_now = t0;
-    std::string hand_b, hand_c, hand_k, back_a, back_b, back_k, old_c_fp;
+    std::string hand_b, hand_c, hand_k, back_a, back_b, back_k, old_c_fp, a_fp, k_fp;
     {
         auto ma = std::make_unique<LoopbackModem>(0);
         auto mb = std::make_unique<LoopbackModem>(0);
@@ -144,6 +144,8 @@ int main() {
         Box C = make_box(dir / "day", "STA-C", std::make_unique<LoopbackModem>(0));
         Box K = make_box(dir / "day", "ALT-K", std::make_unique<LoopbackModem>(0));
         old_c_fp = C.fp;
+        a_fp = A.fp;  // NCS-A and ALT-K keep these keys through their backups
+        k_fp = K.fp;
 
         // Members' cards to the keymaster by stick, each read back by voice.
         for (Box* m : {&B, &C, &K}) {
@@ -191,10 +193,24 @@ int main() {
         bent.replace(bent.find("PRACTICE NET"), 12, "PRACTICE NUT");
         CHECK(!ok(call(*C.core, {{"cmd", "handout_import"}, {"text", bent}})));
 
-        // Each member loads its handout: keymasters named, tape opened.
+        // Each member loads its handout. Nobody is named keymaster for them:
+        // the member reads each keymaster's fingerprint back by voice and
+        // chooses. The tape opens once the issuer is accepted.
         for (auto [box, text] : {std::pair<Box*, std::string*>{&B, &hand_b}, {&C, &hand_c}, {&K, &hand_k}}) {
             r = call(*box->core, {{"cmd", "handout_import"}, {"text", *text}});
-            CHECK(ok(r) && yes(r, "tape_opened") && num(r, "added") == 31 && !yes(r, "stale"));
+            CHECK(ok(r) && !yes(r, "tape_opened") && yes(r, "waiting_on_member") && !yes(r, "stale"));
+            CHECK(str(r, "next").find("NCS-A " + A.fp + " wants to be your keymaster") == 0);
+            CHECK(!box->core->card_keymaster("NCS-A"));
+            r = call(*box->core, {{"cmd", "rally_status"}});
+            CHECK(ok(r) && str(r, "next").find("NCS-A") == 0 && r.get("undecided")->arr.size() >= 1);
+            r = call(*box->core,
+                     {{"cmd", "keymaster_accept"}, {"station", "NCS-A"}, {"fingerprint", A.fp}, {"how", "by voice"}});
+            CHECK(ok(r) && r.get("handouts") && r.get("handouts")->arr.size() == 1);
+            const JsonValue& h0 = r.get("handouts")->arr[0];
+            CHECK(yes(h0, "tape_opened") && num(h0, "added") == 31);
+            if (box != &K)
+                CHECK(ok(call(*box->core,
+                              {{"cmd", "keymaster_accept"}, {"station", "ALT-K"}, {"fingerprint", K.fp}})));
             r = call(*box->core, {{"cmd", "rally_status"}});
             CHECK(ok(r) && str(r, "next").find("Ready") == 0);
         }
@@ -239,8 +255,11 @@ int main() {
         r = call(*C.core, {{"cmd", "rally_status"}});
         CHECK(ok(r) && str(r, "next").find("Load your handout") == 0);
         r = call(*C.core, {{"cmd", "handout_import"}, {"text", hand_c}});
-        CHECK(ok(r) && yes(r, "stale") && !yes(r, "tape_opened") &&
-              str(r, "next").find("older key") != std::string::npos);
+        CHECK(ok(r) && yes(r, "stale") && !yes(r, "tape_opened") && yes(r, "waiting_on_member"));
+        // C hears NCS-A on the air, knows the voice, reads the fingerprint back, and accepts.
+        r = call(*C.core, {{"cmd", "keymaster_accept"}, {"station", "NCS-A"}, {"fingerprint", a_fp}});
+        CHECK(ok(r) && r.get("handouts")->arr.size() == 1);
+        CHECK(str(r.get("handouts")->arr[0], "next").find("older key") != std::string::npos);
         r = call(*C.core, {{"cmd", "rally_status"}});
         CHECK(ok(r) && str(r, "next").find("No key for now") == 0);
         CHECK(C.keys->for_sending().empty());
@@ -316,6 +335,8 @@ int main() {
         CHECK(K.keys->for_sending().empty());
 
         CHECK(ok(call(*B.core, {{"cmd", "station_restore"}, {"text", back_b}, {"passphrase", kPass}})));
+        r = call(*K.core, {{"cmd", "keymaster_list"}});
+        CHECK(ok(r) && r.get("accepted")->arr.size() >= 1 && r.get("undecided")->arr.empty());
         CHECK(ok(call(*C.core, {{"cmd", "handout_import"}, {"text", hand_c}})));
         // C rebuilt again with new keys: the alternate hears its card by voice.
         CHECK(ok(call(*K.core, {{"cmd", "card_import"}, {"text", card_of(C)}, {"replace", "Y"}})));
@@ -335,7 +356,11 @@ int main() {
                            {"members", "STA-C"},
                            {"handouts", "Y"}});
         r = call(*C.core, {{"cmd", "handout_import"}, {"text", handout_for(r, "STA-C")}});
-        CHECK(ok(r) && yes(r, "tape_opened") && num(r, "added") == 7);
+        CHECK(ok(r) && !yes(r, "tape_opened") && yes(r, "waiting_on_member"));
+        // C chooses the alternate's authority: the tape kept for it opens.
+        r = call(*C.core, {{"cmd", "keymaster_accept"}, {"station", "ALT-K"}, {"fingerprint", k_fp}, {"how", "in person"}});
+        CHECK(ok(r) && r.get("handouts")->arr.size() == 1);
+        CHECK(yes(r.get("handouts")->arr[0], "tape_opened") && num(r.get("handouts")->arr[0], "added") == 7);
 
         // A station that never named ALT-K keymaster won't take its tape.
         Box D = make_box(dir / "drill2", "STA-D", std::make_unique<LoopbackModem>(0));

@@ -236,6 +236,55 @@ bool Core::add_trusted_card(const std::string& text, const std::string& source, 
     return true;
 }
 
+bool Core::accept_keymaster(const std::string& call, const std::string& fingerprint, const std::string& how,
+                            std::string* error) {
+    if (!verify_card(call, fingerprint, error)) return false;
+    std::lock_guard<std::mutex> g(mu_);
+    store_.set_card_keymaster(call, true);
+    store_.clear_keymaster_refused(call);
+    log("", "the member accepted " + call + " as a keymaster" + (how.empty() ? "" : " after a check " + how) +
+                ": its sealed key tapes will open here");
+    return true;
+}
+
+bool Core::refuse_keymaster(const std::string& call, std::string* error) {
+    std::lock_guard<std::mutex> g(mu_);
+    auto row = store_.card(call);
+    if (!row) {
+        if (error) *error = "no card for " + call;
+        return false;
+    }
+    store_.set_card_keymaster(call, false);
+    store_.set_keymaster_refused(call, row->fingerprint, now_utc());
+    log("", "the member refused " + call + " (" + row->fingerprint + ") as a keymaster: its key tapes won't be taken");
+    return true;
+}
+
+std::string Core::keymaster_choice(const std::string& call, const std::string& fingerprint) {
+    std::lock_guard<std::mutex> g(mu_);
+    if (id_ && call == id_->station) return "accepted";
+    auto row = store_.card(call);
+    if (row && row->fingerprint == fingerprint && row->keymaster) return "accepted";
+    auto r = store_.keymaster_refused(call);
+    if (r && *r == fingerprint) return "refused";
+    return "undecided";
+}
+
+void Core::put_pending_handout(const Store::PendingHandout& p) {
+    std::lock_guard<std::mutex> g(mu_);
+    store_.put_pending_handout(p);
+}
+
+void Core::remove_pending_handout(const std::string& key) {
+    std::lock_guard<std::mutex> g(mu_);
+    store_.remove_pending_handout(key);
+}
+
+std::vector<Store::PendingHandout> Core::pending_handouts() {
+    std::lock_guard<std::mutex> g(mu_);
+    return store_.pending_handouts();
+}
+
 void Core::note(const std::string& text) {
     std::lock_guard<std::mutex> g(mu_);
     log("", text);

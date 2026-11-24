@@ -170,6 +170,20 @@ public:
     // replace is set. *what as add_card's.
     bool add_trusted_card(const std::string& text, const std::string& source, bool keymaster, bool replace,
                           station::Card& card, std::string& what, std::string* error);
+    // The member's choice of keymasters (docs/crypto.md). accept: the
+    // fingerprint is checked against the card held, the card is marked
+    // checked and keymaster, and any refusal is taken back; how says how it
+    // was confirmed ("voice", "in person"). refuse: the keymaster mark comes
+    // off and the refusal is kept with the card's fingerprint. Neither
+    // removes the card: signed plain traffic still checks.
+    bool accept_keymaster(const std::string& call, const std::string& fingerprint, const std::string& how,
+                          std::string* error);
+    bool refuse_keymaster(const std::string& call, std::string* error);
+    // "accepted", "refused" (this fingerprint was refused) or "undecided".
+    std::string keymaster_choice(const std::string& call, const std::string& fingerprint);
+    void put_pending_handout(const Store::PendingHandout& p);
+    void remove_pending_handout(const std::string& key);
+    std::vector<Store::PendingHandout> pending_handouts();
     std::vector<Message> list(int limit);
     std::optional<Message> get(const std::string& id);
     std::vector<Message> queue(int limit);

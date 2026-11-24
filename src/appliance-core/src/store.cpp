@@ -82,6 +82,10 @@ Store::Store(const std::string& path) {
         if (!has) exec("ALTER TABLE messages ADD COLUMN sends INTEGER NOT NULL DEFAULT 0");
     }
     exec("CREATE TABLE IF NOT EXISTS links (station TEXT PRIMARY KEY, format TEXT NOT NULL)");
+    exec("CREATE TABLE IF NOT EXISTS keymaster_refused (station TEXT PRIMARY KEY, fingerprint TEXT NOT NULL,"
+         " at INTEGER NOT NULL)");
+    exec("CREATE TABLE IF NOT EXISTS pending_handouts (key TEXT PRIMARY KEY, issuer TEXT NOT NULL,"
+         " text TEXT NOT NULL, packet TEXT NOT NULL DEFAULT '', added INTEGER NOT NULL)");
     exec("CREATE INDEX IF NOT EXISTS messages_queue ON messages(direction, state, prec, created_at)");
 }
 
@@ -400,6 +404,52 @@ void Store::set_card_verified(const std::string& station, bool v) {
     Stmt s(db_, "UPDATE cards SET verified = ? WHERE station = ?");
     s.bind(1, static_cast<int64_t>(v ? 1 : 0)).bind(2, station);
     s.step();
+}
+
+void Store::set_keymaster_refused(const std::string& station, const std::string& fingerprint, int64_t at) {
+    Stmt s(db_, "INSERT OR REPLACE INTO keymaster_refused(station, fingerprint, at) VALUES(?,?,?)");
+    s.bind(1, station).bind(2, fingerprint).bind(3, at);
+    s.step();
+}
+
+void Store::clear_keymaster_refused(const std::string& station) {
+    Stmt s(db_, "DELETE FROM keymaster_refused WHERE station = ?");
+    s.bind(1, station);
+    s.step();
+}
+
+std::optional<std::string> Store::keymaster_refused(const std::string& station) {
+    Stmt s(db_, "SELECT fingerprint FROM keymaster_refused WHERE station = ?");
+    s.bind(1, station);
+    if (!s.step()) return std::nullopt;
+    return s.text(0);
+}
+
+void Store::put_pending_handout(const PendingHandout& p) {
+    Stmt s(db_, "INSERT OR REPLACE INTO pending_handouts(key, issuer, text, packet, added) VALUES(?,?,?,?,?)");
+    s.bind(1, p.key).bind(2, p.issuer).bind(3, p.text).bind(4, p.packet).bind(5, p.added);
+    s.step();
+}
+
+void Store::remove_pending_handout(const std::string& key) {
+    Stmt s(db_, "DELETE FROM pending_handouts WHERE key = ?");
+    s.bind(1, key);
+    s.step();
+}
+
+std::vector<Store::PendingHandout> Store::pending_handouts() {
+    Stmt s(db_, "SELECT key, issuer, text, packet, added FROM pending_handouts ORDER BY added, key");
+    std::vector<PendingHandout> out;
+    while (s.step()) {
+        PendingHandout p;
+        p.key = s.text(0);
+        p.issuer = s.text(1);
+        p.text = s.text(2);
+        p.packet = s.text(3);
+        p.added = s.i64(4);
+        out.push_back(p);
+    }
+    return out;
 }
 
 }  // namespace pna

@@ -112,19 +112,34 @@ or check signatures with another station:
 | Load a card that came in, or from a stick | `appliance-cli cards import ID` or `cards import FILE` |
 | Mark a card checked, after reading the fingerprint back by voice | `appliance-cli cards check NCS-A "K7QM 2XRD 9FTA HW3C"` |
 | Load the handout your keymaster gave you | `appliance-cli handout import FILE` |
+| Accept a keymaster, after reading the fingerprint back by voice | `appliance-cli keymaster accept NCS-A "K7QM 2XRD 9FTA HW3C"` |
+| Refuse a keymaster | `appliance-cli keymaster refuse NCS-A` |
+| See who you accepted, refused, or haven't decided on | `appliance-cli keymaster list` |
+| Load a startup bundle (book, channels, schedules) | `appliance-cli bundle load FILE` or `bundle load ID` |
+| Make your own startup bundle for a stick | `appliance-cli bundle make FILE --label "PRACTICE NET"` |
+| Send it over the air | `appliance-cli bundle send STA-B,STA-C` |
 | See what your box can do now, and the next step | `appliance-cli rally` |
 | Load a key tape from a stick | `appliance-cli keys import FILE` |
 | Open a sealed key tape that came in | `appliance-cli keys open ID` |
 | See your keys | `appliance-cli keys list` |
 | Wipe a key or a whole tape now | `appliance-cli keys zeroize QXR01` |
 
+**Whose net you join is your choice.** Loading a handout names nobody your
+keymaster: the box asks about each one, and takes no tape until you accept.
+Accept only after you have read the fingerprint back with a voice you know,
+or in person. A bundle from a station you haven't checked loads only with
+`--yes`, and changes no card or key either way.
+
 When a key for today is loaded, the Messages panel offers codress, and every
 message you send is signed. Keymasters, see docs/crypto.md for making tapes
 and handouts and building a net from nothing.
 
 **On a bad day,** with your box wiped: restore your station backup (or start
-fresh), load your old handout, even a stale one, and run `appliance-cli rally`.
-It says what to do next.
+fresh), load your old handout and startup bundle, even stale ones, and run
+`appliance-cli rally`. It says what to do next. With every tape ended and your
+old keymaster gone, signed plain traffic still works: exchange cards with
+whoever is running the net, choose them as your keymaster if you trust them,
+and open their new tape.
 
 ## 5b. Your station's files
 

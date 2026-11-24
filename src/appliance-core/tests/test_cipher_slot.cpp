@@ -367,6 +367,18 @@ static void net(const fs::path& dir) {
           fs::exists(packet / "cipher" / "ABOUT.txt"));
     CHECK(read_file(packet / "cipher" / "module.sha256") == hash + "\n");
 
+    // Until B accepts NCS-A as its keymaster, nothing from the handout is
+    // taken: not the tape, not the cipher module.
+    r = call(*B.core, {{"cmd", "handout_import"}, {"packet", packet.string()}});
+    CHECK(ok(r) && yes(r, "waiting_on_member") && !yes(r, "cipher_installed") && !yes(r, "tape_opened"));
+    CHECK(B.core->cipher()->is_builtin());
+    r = call(*B.core, {{"cmd", "handout_import"}, {"text", hand}});
+    CHECK(ok(r) && yes(r, "waiting_on_member"));
+    r = call(*B.core, {{"cmd", "keymaster_accept"}, {"station", "NCS-A"}, {"fingerprint", A.fp}});
+    CHECK(ok(r) && r.get("handouts")->arr.size() == 1 &&
+          str(r.get("handouts")->arr[0], "next").find("whole packet folder") != std::string::npos);
+    CHECK(B.core->cipher()->is_builtin());
+
     // The page alone: B is told to load the whole packet; nothing installed.
     r = call(*B.core, {{"cmd", "handout_import"}, {"text", hand}});
     CHECK(ok(r) && !yes(r, "tape_opened") && !yes(r, "cipher_installed") &&

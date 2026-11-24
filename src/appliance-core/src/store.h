@@ -133,6 +133,25 @@ public:
     void set_card_verified(const std::string& station, bool v);
     void set_card_keymaster(const std::string& station, bool v);
 
+    // The member's choice about a keymaster (docs/crypto.md, "Choosing your
+    // keymasters"): refused, with the fingerprint refused. An accepted
+    // keymaster is a card with its keymaster mark; a refusal is kept here so
+    // the same keymaster isn't asked about again until the member changes
+    // their mind.
+    void set_keymaster_refused(const std::string& station, const std::string& fingerprint, int64_t at);
+    void clear_keymaster_refused(const std::string& station);
+    std::optional<std::string> keymaster_refused(const std::string& station);  // the fingerprint refused
+
+    // Handouts waiting on the member's choice of keymaster: kept so the tape
+    // they carry opens once the member accepts the issuer.
+    struct PendingHandout {
+        std::string key, issuer, text, packet;
+        int64_t added = 0;
+    };
+    void put_pending_handout(const PendingHandout& p);
+    void remove_pending_handout(const std::string& key);
+    std::vector<PendingHandout> pending_handouts();
+
 private:
     void exec(const char* sql);
     sqlite3* db_ = nullptr;

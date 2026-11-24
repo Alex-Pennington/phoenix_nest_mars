@@ -409,7 +409,10 @@ memory after use and never written to the log.
   (for dated backups) and `refused`.
 - `rally_status`: for a box coming back on a bad day. `station`,
   `fingerprint`, `keymasters` (each `station`, `fingerprint`), `cards`,
-  `keys_now` (each `indicator`, `net`, `check`) and `next`, the step to take.
+  `keys_now` (each `indicator`, `net`, `check`), `undecided` (keymasters
+  waiting on the member's answer, each `station`, `fingerprint`, `question`)
+  and `next`, the step to take. When a keymaster is waiting, `next` asks about
+  it first.
 
 ### Other stations' cards
 
@@ -421,7 +424,8 @@ memory after use and never written to the log.
   `station`, `fingerprint`, `checked`, `keymaster`, `source` and `added`.
 - `card_check {station, fingerprint, keymaster}`: marks a card checked when the
   fingerprint read back by voice matches. Case and spaces don't matter. With
-  `keymaster=Y` it also names the station a keymaster.
+  `keymaster=Y` it is also the member's acceptance of that keymaster, as
+  `keymaster_accept`, and returns `handouts` the same way.
 - `card_keymaster {station, keymaster}`: names a checked card a keymaster
   (`keymaster=N` takes it back). Only a keymaster's sealed tapes open here.
 - `handout_import {text | id | packet, replace}`: loads a member handout, new or stale.
@@ -429,12 +433,69 @@ memory after use and never written to the log.
   the net uses another cipher module); the module is installed only when its
   set hash matches the handout's signed `CIPHER` line. Also returns `cipher`
   (the module the handout names, when it names one) and `cipher_installed`.
-  It must be for this station and signed by its issuer. Its cards are held as
-  checked and its keymasters named; a different card for a station already
-  held needs `replace=Y`. Returns `net`, `by`, `issued`, `cards`, `stale`,
-  `keymasters`, `tape_opened` (with `added`, `already`, `expired` when it
-  opened), `next` when there's a step to take, and `refused`.
+  It must be for this station and signed by its issuer. A different card for
+  a station already held needs `replace=Y`. Loading it names no keymaster:
+  `keymaster_choices` has one entry per keymaster line, each `station`,
+  `fingerprint`, `choice` (`accepted`, `refused` or `undecided`) and, when
+  undecided, `question` to put to the member ("NCS-A K7QM 2XRD 9FTA HW3C wants
+  to be your keymaster. Accept?"). While the issuer is undecided the handout
+  waits on the box (`waiting_on_member` true): no tape is opened, no cipher
+  module installed, and its member cards are held unchecked. If the issuer
+  was refused, nothing from it is kept. The keymasters' cards are held checked
+  once the member accepts. Returns `net`, `by`, `issued`, `cards`, `stale`,
+  `keymasters`, `keymaster_choices`, `waiting_on_member`, `tape_opened` (with
+  `added`, `already`, `expired` when it opened), `next` when there's a step
+  to take, and `refused`.
 - `card_send {to}`: sends this station's card as a plain message. Returns `id`.
+
+### Choosing keymasters
+
+The member chooses whose tapes this box takes (docs/crypto.md, Choosing your
+keymasters). These are the calls a panel needs to put that choice to them.
+
+- `keymaster_accept {station, fingerprint, how}`: the member accepts
+  `station` as a keymaster. `fingerprint` is the one read back by voice (or
+  in person; `how` is `by voice` or `in person`, for the log) and must match
+  the card held. Marks the card checked and keymaster, clears any refusal,
+  and loads every handout waiting on that station. Returns `station`,
+  `keymaster` (true) and `handouts`, one handout reply (as
+  `handout_import`) for each that was waiting.
+- `keymaster_refuse {station}`: the member refuses `station`. Its keymaster
+  mark comes off, the refusal is kept against its fingerprint, and handouts
+  waiting on it are dropped. Returns `station`, `keymaster` (false),
+  `handouts_dropped` and `next`.
+- `keymaster_list`: `accepted` (each `station`, `fingerprint`, `source`),
+  `refused` (each `station`, `fingerprint`) and `undecided` (each `station`,
+  `fingerprint`, `from_handout_by`, `question`).
+
+### Startup bundles
+
+The station book, channel designators, net schedules and link formats, signed
+by the station that made them (docs/crypto.md, Startup bundles). A bundle
+never carries a frequency and never changes a card, key or keymaster.
+
+- `bundle_make {label, out}`: builds this box's bundle. `out` is a file path
+  to write it to (a stick). Returns `tag`, `by`, `fingerprint`, `made`,
+  `book`, `channels`, `schedules`, `links` (counts), `bytes`, `parts` (on the
+  air), `text`, `written` when `out` was given, and `changed`: what was cut or
+  left out (characters the radio can't send, frequency-like text).
+- `bundle_send {to, label, text | file}`: sends a bundle (this box's, or the
+  one given) to each station in `to` (calls, spaces or commas) as signed plain
+  traffic, in parts when it is large. Returns `tag`, `by`, `parts`, `sent`
+  (each `station` and `ids`) and `failed`.
+- `bundle_load {text | file | id, accept}`: loads a bundle. From `id`, every
+  stored part with the same tag is gathered; with parts missing it returns
+  `loaded` false and `missing_parts`. Always returns `tag`, `by`,
+  `fingerprint`, `signer` (`own`, `checked`, `unchecked`, `unknown` or
+  `different`, when the card in the bundle isn't the one held), `label`,
+  `made` and the counts. From a signer this box hasn't checked, without
+  `accept=Y`, it returns `loaded` false, `needs_yes` true and `question` to
+  put to the member, and changes nothing. Loaded, it returns `loaded` true,
+  `signer_checked`, `book_added`, `book_replaced`, `book_same`,
+  `schedules_added`, `schedules_replaced`, `schedules_same`,
+  `channels_updated`, `links_set`, `need_frequency` (designators this box
+  has no frequency for), `problems` and `next`. A bundle that was changed is
+  an error.
 
 ### Keymaster
 

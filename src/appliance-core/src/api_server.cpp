@@ -13,6 +13,8 @@
 #include "digest.h"
 #include "keys.h"
 #include "station.h"
+#include "bundle.h"
+#include "ops.h"
 #include "received.h"
 #include "json.h"
 #include "net.h"
@@ -730,35 +732,38 @@ std::string read_whole(const std::string& path, bool* ok) {
 }
 
 // handout_import: a member handout (station.h), from a file or a stored
-// message. Its cards are held as checked (the handout came by hand), its
-// keymasters are named, and its sealed tape is opened when it is sealed to
-// this station's present keys. A stale handout still loads its cards.
+// message. The member decides whose authority they accept (docs/crypto.md,
+// "Choosing your keymasters"), so loading a handout names nobody a
+// keymaster. Each keymaster it lists is:
+//   accepted   already a keymaster here, with the same card (a station
+//              restored from its backup, or one the member accepted before):
+//              not asked again;
+//   refused    the member refused this card before: its tapes aren't taken;
+//   undecided  its card is held unchecked, and the reply asks the member to
+//              check the fingerprint by voice or in person and then
+//              keymaster_accept or keymaster_refuse it.
+// The handout's sealed tape opens, and the other cards in it are held as
+// checked, only once its issuer is accepted. Until then the handout is kept,
+// and keymaster_accept opens it. Signed plain traffic works either way.
 //
 // packet: a handout packet folder (docs/cipher-slot.md): handout.txt, and,
 // for a net that uses another cipher, cipher/ with its module. The module is
-// installed only when its SHA-256 matches the CIPHER line the keymaster
-// signed into the handout, and it passes the slot's checks.
-std::string handout_import(Core& core, const station::Identity& me, std::map<std::string, std::string>& req) {
-    std::string text = req["text"], err;
-    const std::string packet = req["packet"];
-    if (!packet.empty()) {
-        bool ok = false;
-        text = read_whole(packet + "/handout.txt", &ok);
-        if (!ok) return error_reply("no handout.txt in the packet folder " + packet);
-    }
-    if (!req["id"].empty()) {
-        auto m = core.get(req["id"]);
-        if (!m) return error_reply("no message with that id");
-        text = m->body;
-    }
-    station::Handout h;
-    if (!station::parse_handout(text, h, &err)) return error_reply("handout not loaded: " + err);
-    if (h.for_station != me.station)
-        return error_reply("this handout is for " + h.for_station + ", not this station");
-    // The net's cipher, when it isn't our own.
+// installed only when the issuer is accepted, its SHA-256 matches the CIPHER
+// line the keymaster signed into the handout, and it passes the slot's checks.
+std::string handout_key(const station::Handout& h) {
+    return h.by + " " + keys::time_text(h.issued) + " " + h.for_station + " " + h.tape;
+}
+
+void handout_reply(JsonWriter& w, Core& core, const station::Identity& me, const station::Handout& h,
+                   const std::string& text, const std::string& packet, bool replace) {
+    std::string issuer_fp = h.keymasters.empty() ? "" : h.keymasters[0].second;
+    const std::string issuer_choice = core.keymaster_choice(h.by, issuer_fp);
+    const bool issuer_ok = issuer_choice == "accepted";
+    std::string err;
+    // The net's cipher, when it isn't our own, from an accepted issuer only.
     std::string cipher_next;
     bool cipher_installed = false;
-    if (!h.cipher.empty()) {
+    if (!h.cipher.empty() && issuer_ok) {
         auto cur = core.cipher();
         bool have = cur->usable() && cur->info().name == h.cipher && cur->info().set_hash == h.cipher_hash;
         namespace fs = std::filesystem;
@@ -793,34 +798,58 @@ std::string handout_import(Core& core, const station::Identity& me, std::map<std
     for (auto& ct : h.cards) {
         station::Card c;
         if (!station::parse_card(ct, c, nullptr)) continue;
+        std::string fp = station::fingerprint(c);
         bool km = false;
         for (auto& k : h.keymasters) km = km || k.first == c.station;
+        // A keymaster's card is trusted only once the member accepted it; a
+        // member's card, once the issuer who vouches for it is accepted.
+        bool trusted = km ? core.keymaster_choice(c.station, fp) == "accepted" : issuer_ok;
         std::string what, e;
-        if (core.add_trusted_card(ct, source, km, req["replace"] == "Y", c, what, &e)) {
+        bool good = trusted ? core.add_trusted_card(ct, source, km, replace, c, what, &e)
+                            : core.add_card(ct, source + " (not yet accepted)", replace, c, what, &e);
+        if (!good && c.station == me.station) good = true, what = "own";
+        if (good) {
             if (what != "own") ++loaded;
         } else {
-            if (c.station == h.by) return error_reply("handout not loaded: " + e);
             refused.push_back(e);
         }
     }
-    int64_t now = core.keyring() ? core.keyring()->now() : static_cast<int64_t>(std::time(nullptr));
-    JsonWriter w;
-    w.begin_object()
-        .field("ok", true)
-        .field("net", h.net)
-        .field("by", h.by)
-        .field("issued", keys::time_text(h.issued))
-        .field("cards", loaded)
-        .field("stale", h.valid_until > 0 && h.valid_until <= now);
+    // Ask, or keep, the member's choice of each keymaster.
+    std::vector<std::pair<std::string, std::string>> undecided;
     w.begin_array("keymasters");
     for (auto& k : h.keymasters) w.field("", k.first);
     w.end_array();
-    w.field("cipher", h.cipher.empty() ? std::string(cipher::kBuiltinName) : h.cipher)
-        .field("cipher_installed", cipher_installed);
+    w.begin_array("keymaster_choices");
+    for (auto& k : h.keymasters) {
+        std::string ch = core.keymaster_choice(k.first, k.second);
+        w.begin_object().field("station", k.first).field("fingerprint", k.second).field("choice", ch);
+        if (ch == "undecided") {
+            undecided.push_back(k);
+            w.field("question", k.first + " " + k.second + " wants to be your keymaster. Accept?");
+        }
+        w.end_object();
+    }
+    w.end_array();
+    int64_t now = core.keyring() ? core.keyring()->now() : static_cast<int64_t>(std::time(nullptr));
+    w.field("net", h.net)
+        .field("by", h.by)
+        .field("issued", keys::time_text(h.issued))
+        .field("cards", loaded)
+        .field("stale", h.valid_until > 0 && h.valid_until <= now)
+        .field("cipher", h.cipher.empty() ? std::string(cipher::kBuiltinName) : h.cipher)
+        .field("cipher_installed", cipher_installed)
+        .field("waiting_on_member", !undecided.empty());
     bool opened = false;
     std::string why;
     keys::ImportResult r;
-    if (!cipher_next.empty()) {
+    if (issuer_choice == "undecided") {
+        why = h.by + " " + issuer_fp + " wants to be your keymaster. Check that fingerprint with " + h.by +
+              " by voice or in person, then accept it (keymaster_accept) or refuse it (keymaster_refuse). " +
+              (h.sealed.empty() ? "" : "Its tape opens once you accept. ") + "Signed plain traffic works meanwhile.";
+    } else if (issuer_choice == "refused") {
+        why = "you refused " + h.by + " as a keymaster, so this handout's tape was not taken. Signed plain traffic "
+              "still works.";
+    } else if (!cipher_next.empty()) {
         why = cipher_next;
     } else if (h.sealed.empty()) {
         why = "this handout has no tape: send your card to a keymaster (card_send) and read the fingerprint by voice";
@@ -843,14 +872,354 @@ std::string handout_import(Core& core, const station::Identity& me, std::map<std
                           " key(s) added, " + std::to_string(r.expired) + " already ended");
         }
     }
+    // Kept until the member decides about its issuer.
+    std::string key = handout_key(h);
+    if (issuer_choice == "undecided") {
+        Store::PendingHandout p;
+        p.key = key;
+        p.issuer = h.by;
+        p.text = text;
+        p.packet = packet;
+        p.added = now;
+        core.put_pending_handout(p);
+    } else {
+        core.remove_pending_handout(key);
+    }
     w.field("tape_opened", opened);
     if (opened) w.field("added", r.added).field("already", r.already).field("expired", r.expired);
     if (opened && r.added == 0) why = "every key on this tape has ended: ask a keymaster for a new tape";
     if (!why.empty()) w.field("next", why);
     w.begin_array("refused");
     for (auto& e : refused) w.field("", e);
+    w.end_array();
+    core.note("handout from " + h.by + " for " + h.net + " loaded: " + std::to_string(loaded) + " card(s), issuer " +
+              issuer_choice);
+}
+
+std::string handout_import(Core& core, const station::Identity& me, std::map<std::string, std::string>& req) {
+    std::string text = req["text"], err;
+    const std::string packet = req["packet"];
+    if (!packet.empty()) {
+        bool ok = false;
+        text = read_whole(packet + "/handout.txt", &ok);
+        if (!ok) return error_reply("no handout.txt in the packet folder " + packet);
+    }
+    if (!req["id"].empty()) {
+        auto m = core.get(req["id"]);
+        if (!m) return error_reply("no message with that id");
+        text = m->body;
+    }
+    station::Handout h;
+    if (!station::parse_handout(text, h, &err)) return error_reply("handout not loaded: " + err);
+    if (h.for_station != me.station)
+        return error_reply("this handout is for " + h.for_station + ", not this station");
+    // A different card already held for the issuer: stop before anything is kept.
+    if (auto held = core.card_for(h.by); held && h.by != me.station && !h.keymasters.empty() &&
+        station::fingerprint(*held) != h.keymasters[0].second && req["replace"] != "Y")
+        return error_reply("handout not loaded: this station already holds a different card for " + h.by + " (" +
+                           station::fingerprint(*held) + "); the handout's is " + h.keymasters[0].second +
+                           ". Check it with " + h.by + " by voice before replacing");
+    JsonWriter w;
+    w.begin_object().field("ok", true);
+    handout_reply(w, core, me, h, text, packet, req["replace"] == "Y");
+    w.end_object();
+    return w.str();
+}
+
+// After the member accepts a keymaster: every handout kept for it opens.
+void reapply_pending(JsonWriter& w, Core& core, const station::Identity& me, const std::string& issuer) {
+    w.begin_array("handouts");
+    for (auto& p : core.pending_handouts()) {
+        if (p.issuer != issuer) continue;
+        station::Handout h;
+        std::string err;
+        if (!station::parse_handout(p.text, h, &err) || h.for_station != me.station) {
+            core.remove_pending_handout(p.key);
+            continue;
+        }
+        w.begin_object();
+        handout_reply(w, core, me, h, p.text, p.packet, false);
+        w.end_object();
+    }
+    w.end_array();
+}
+
+// keymaster_accept / keymaster_refuse / keymaster_list: the member's choice.
+std::string keymaster_cmd(Core& core, const station::Identity& me, const std::string& cmd,
+                          std::map<std::string, std::string>& req) {
+    std::string err, call = req["station"];
+    for (auto& c : call) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+    if (cmd == "keymaster_accept") {
+        if (req["fingerprint"].empty())
+            return error_reply("give the fingerprint you read back with " + call + " by voice or in person");
+        std::string how = req["how"].empty() ? "by voice" : req["how"];
+        if (!core.accept_keymaster(call, req["fingerprint"], how, &err)) return error_reply(err);
+        JsonWriter w;
+        w.begin_object().field("ok", true).field("station", call).field("keymaster", true);
+        reapply_pending(w, core, me, call);
+        w.end_object();
+        return w.str();
+    }
+    if (cmd == "keymaster_refuse") {
+        if (!core.refuse_keymaster(call, &err)) return error_reply(err);
+        int dropped = 0;
+        for (auto& p : core.pending_handouts())
+            if (p.issuer == call) {
+                core.remove_pending_handout(p.key);
+                ++dropped;
+            }
+        JsonWriter w;
+        w.begin_object()
+            .field("ok", true)
+            .field("station", call)
+            .field("keymaster", false)
+            .field("handouts_dropped", dropped)
+            .field("next", "Signed plain traffic from " + call + " still checks. Its key tapes won't be taken.")
+            .end_object();
+        return w.str();
+    }
+    // keymaster_list: who the member accepted, refused, and who still waits.
+    JsonWriter w;
+    w.begin_object().field("ok", true);
+    w.begin_array("accepted");
+    for (auto& c : core.cards())
+        if (c.keymaster)
+            w.begin_object().field("station", c.station).field("fingerprint", c.fingerprint).field("source", c.source).end_object();
+    w.end_array();
+    w.begin_array("refused");
+    for (auto& c : core.cards())
+        if (core.keymaster_choice(c.station, c.fingerprint) == "refused")
+            w.begin_object().field("station", c.station).field("fingerprint", c.fingerprint).end_object();
+    w.end_array();
+    std::set<std::string> seen;
+    w.begin_array("undecided");
+    for (auto& p : core.pending_handouts()) {
+        station::Handout h;
+        if (!station::parse_handout(p.text, h, nullptr)) continue;
+        for (auto& k : h.keymasters)
+            if (core.keymaster_choice(k.first, k.second) == "undecided" && seen.insert(k.first).second)
+                w.begin_object()
+                    .field("station", k.first)
+                    .field("fingerprint", k.second)
+                    .field("from_handout_by", h.by)
+                    .field("question", k.first + " " + k.second + " wants to be your keymaster. Accept?")
+                    .end_object();
+    }
     w.end_array().end_object();
-    core.note("handout from " + h.by + " for " + h.net + " loaded: " + std::to_string(loaded) + " card(s)");
+    return w.str();
+}
+
+// Startup bundles (bundle.h): the operating data a net needs, signed by the
+// box that built it. bundle_make builds one from this station's book,
+// channel designators, schedules and link formats. bundle_load loads one
+// from text, a file, or a message received over the air (its parts are
+// gathered by tag). bundle_send sends one, in parts, to each station named.
+// A bundle changes no card, key or keymaster here. From a signer whose card
+// this station doesn't hold checked, it loads only with accept=Y, the
+// member's own yes, and is marked as from that signer.
+constexpr size_t kBundlePart = 6000;  // text bytes a part, well under a message's 8192
+
+std::string bundle_cmd(Core& core, const station::Identity& me, const std::string& cmd,
+                       std::map<std::string, std::string>& req) {
+    Ops* ops = core.ops();
+    if (!ops) return error_reply("this station has no station book");
+    std::string err;
+    auto make = [&](std::vector<std::string>* changed) {
+        bundle::Bundle b = bundle::collect(*ops, core.link_formats(), req["label"], changed);
+        b.made = ops->now();
+        return bundle::format(b, me);
+    };
+    // The bundle's text: given, from a file, or (bundle_make/send) built here.
+    auto given = [&](std::string& text) -> std::string {
+        if (!req["file"].empty()) {
+            bool ok = false;
+            text = read_whole(req["file"], &ok);
+            if (!ok) return "can't read " + req["file"];
+        } else if (!req["text"].empty()) {
+            text = req["text"];
+        }
+        return "";
+    };
+    if (cmd == "bundle_make") {
+        std::vector<std::string> changed;
+        std::string text = make(&changed);
+        bundle::Bundle b;
+        if (!bundle::parse(text, b, &err)) return error_reply("the bundle didn't check after it was made: " + err);
+        if (!req["out"].empty()) {
+            std::ofstream f(req["out"], std::ios::binary | std::ios::trunc);
+            f << text;
+            if (!f) return error_reply("can't write " + req["out"]);
+        }
+        core.note("startup bundle " + b.tag + " made: " + std::to_string(b.book.size()) + " book entries, " +
+                  std::to_string(b.channels.size()) + " channels, " + std::to_string(b.schedules.size()) + " schedules");
+        JsonWriter w;
+        w.begin_object()
+            .field("ok", true)
+            .field("tag", b.tag)
+            .field("by", b.by)
+            .field("fingerprint", b.signer_fp)
+            .field("made", keys::time_text(b.made))
+            .field("book", static_cast<int>(b.book.size()))
+            .field("channels", static_cast<int>(b.channels.size()))
+            .field("schedules", static_cast<int>(b.schedules.size()))
+            .field("links", static_cast<int>(b.links.size()))
+            .field("bytes", static_cast<int>(text.size()))
+            .field("parts", static_cast<int>(bundle::split(text, kBundlePart).size()))
+            .field("text", text);
+        if (!req["out"].empty()) w.field("written", req["out"]);
+        w.begin_array("changed");
+        for (auto& c : changed) w.field("", c);
+        w.end_array().end_object();
+        return w.str();
+    }
+    if (cmd == "bundle_send") {
+        std::string text;
+        std::string e = given(text);
+        if (!e.empty()) return error_reply(e);
+        if (text.empty()) text = make(nullptr);
+        bundle::Bundle b;
+        if (!bundle::parse(text, b, &err)) return error_reply("bundle not sent: " + err);
+        auto to = call_list(req["to"]);
+        if (to.empty()) return error_reply("name the stations to send it to (to=\"STA-B STA-C\")");
+        auto parts = bundle::split(text, kBundlePart);
+        JsonWriter w;
+        w.begin_object().field("ok", true).field("tag", b.tag).field("by", b.by).field("parts", static_cast<int>(parts.size()));
+        w.begin_array("sent");
+        std::vector<std::string> failed;
+        for (auto& st : to) {
+            w.begin_object().field("station", st);
+            w.begin_array("ids");
+            for (auto& p : parts) {
+                std::string id = send_block(core, st, p, &err);
+                if (id.empty()) {
+                    failed.push_back(st + ": " + err);
+                    break;
+                }
+                w.field("", id);
+            }
+            w.end_array().end_object();
+        }
+        w.end_array();
+        w.begin_array("failed");
+        for (auto& f : failed) w.field("", f);
+        w.end_array().end_object();
+        core.note("startup bundle " + b.tag + " by " + b.by + " sent to " + req["to"] + " in " +
+                  std::to_string(parts.size()) + " part(s)");
+        return w.str();
+    }
+    // bundle_load
+    std::string text;
+    std::string e = given(text);
+    if (!e.empty()) return error_reply(e);
+    if (!req["id"].empty()) {
+        auto m = core.get(req["id"]);
+        if (!m) return error_reply("no message with that id");
+        text = m->body;
+        std::string tag;
+        int n = 0, of = 0;
+        if (bundle::part_head(text, tag, n, of)) {
+            // Gather every part with this tag from what this station received.
+            std::map<int, std::string> got;
+            for (auto& msg : core.list(5000)) {
+                std::string t;
+                int k = 0, kof = 0;
+                if (bundle::part_head(msg.body, t, k, kof) && t == tag && kof == of && !got.count(k))
+                    got[k] = bundle::part_body(msg.body);
+            }
+            std::vector<int> missing;
+            for (int k = 1; k <= of; ++k)
+                if (!got.count(k)) missing.push_back(k);
+            if (!missing.empty()) {
+                JsonWriter w;
+                w.begin_object().field("ok", true).field("loaded", false).field("tag", tag).field("parts", of);
+                w.begin_array("missing_parts");
+                for (int k : missing) w.field("", k);
+                w.end_array();
+                w.field("next", "Not every part of this bundle has arrived. Ask the sender to repeat the missing parts.");
+                w.end_object();
+                return w.str();
+            }
+            text.clear();
+            for (auto& [k, body] : got) text += body;
+        }
+    }
+    if (text.empty()) return error_reply("give the bundle as text, file or the id of a message that carries it");
+    bundle::Bundle b;
+    if (!bundle::parse(text, b, &err)) return error_reply("bundle not loaded: " + err);
+    // Who signed it, as this station knows them.
+    std::string signer;
+    if (b.by == me.station) {
+        signer = station::fingerprint(station::card_of(me)) == b.signer_fp ? "own" : "different";
+    } else if (auto held = core.card_for(b.by)) {
+        signer = station::fingerprint(*held) != b.signer_fp ? "different"
+                 : core.card_verified(b.by)                ? "checked"
+                                                           : "unchecked";
+    } else {
+        signer = "unknown";
+    }
+    bool trusted = signer == "own" || signer == "checked";
+    auto summary = [&](JsonWriter& w) {
+        w.field("tag", b.tag)
+            .field("by", b.by)
+            .field("fingerprint", b.signer_fp)
+            .field("signer", signer)
+            .field("label", b.label)
+            .field("made", keys::time_text(b.made))
+            .field("book", static_cast<int>(b.book.size()))
+            .field("channels", static_cast<int>(b.channels.size()))
+            .field("schedules", static_cast<int>(b.schedules.size()))
+            .field("links", static_cast<int>(b.links.size()));
+    };
+    if (!trusted && req["accept"] != "Y") {
+        std::string what = std::to_string(b.book.size()) + " book entries, " + std::to_string(b.channels.size()) +
+                           " channels, " + std::to_string(b.schedules.size()) + " net schedules";
+        std::string q = b.by + " " + b.signer_fp + " signed this startup bundle (" + what + "). Load it?";
+        if (signer == "different")
+            q = "This bundle is signed by a card for " + b.by + " (" + b.signer_fp +
+                ") that is NOT the one this station holds for " + b.by + ". Load it anyway?";
+        JsonWriter w;
+        w.begin_object().field("ok", true).field("loaded", false).field("needs_yes", true);
+        summary(w);
+        w.field("question", q)
+            .field("next", "Check the fingerprint with " + b.by +
+                               " by voice or in person. Load it with accept=Y if you choose to. Nothing has changed.")
+            .end_object();
+        return w.str();
+    }
+    std::string source = "bundle from " + b.by + " " + b.signer_fp + " made " + keys::time_text(b.made) +
+                         (trusted ? "" : " (signer not checked: loaded on the member's yes)");
+    bundle::Applied a = bundle::apply(b, *ops, source);
+    int links = 0;
+    for (auto& l : b.links) {
+        if (l.first == me.station) continue;
+        if (core.set_link_format(l.first, l.second, &err)) ++links;
+        else a.problems.push_back("link " + l.first + ": " + err);
+    }
+    core.note("startup bundle " + b.tag + " from " + b.by + " loaded (" + signer + " signer): " +
+              std::to_string(a.book_added + a.book_replaced) + " book entries, " +
+              std::to_string(a.schedules_added + a.schedules_replaced) + " schedules");
+    JsonWriter w;
+    w.begin_object().field("ok", true).field("loaded", true);
+    summary(w);
+    w.field("signer_checked", trusted)
+        .field("book_added", a.book_added)
+        .field("book_replaced", a.book_replaced)
+        .field("book_same", a.book_same)
+        .field("schedules_added", a.schedules_added)
+        .field("schedules_replaced", a.schedules_replaced)
+        .field("schedules_same", a.schedules_same)
+        .field("channels_updated", a.channels_updated)
+        .field("links_set", links);
+    w.begin_array("need_frequency");
+    for (auto& c : a.need_frequency) w.field("", c);
+    w.end_array();
+    w.begin_array("problems");
+    for (auto& p : a.problems) w.field("", p);
+    w.end_array();
+    if (!a.need_frequency.empty())
+        w.field("next", "The bundle names channels by designator only. Load your frequency card (mars_import) for " +
+                            std::to_string(a.need_frequency.size()) + " channel(s) this box doesn't hold.");
+    w.end_object();
     return w.str();
 }
 
@@ -879,8 +1248,23 @@ std::string rally_status(Core& core, const station::Identity& me) {
             w.begin_object().field("indicator", k.indicator).field("net", k.net).field("check", k.check).end_object();
         }
     w.end_array();
+    std::vector<std::pair<std::string, std::string>> ask;
+    std::set<std::string> seen;
+    for (auto& p : core.pending_handouts()) {
+        station::Handout h;
+        if (!station::parse_handout(p.text, h, nullptr)) continue;
+        for (auto& k : h.keymasters)
+            if (core.keymaster_choice(k.first, k.second) == "undecided" && seen.insert(k.first).second)
+                ask.push_back(k);
+    }
+    w.begin_array("undecided");
+    for (auto& k : ask) w.begin_object().field("station", k.first).field("fingerprint", k.second).end_object();
+    w.end_array();
     std::string next;
-    if (keymasters == 0)
+    if (!ask.empty() && (keymasters == 0 || current.empty()))
+        next = ask[0].first + " " + ask[0].second + " wants to be your keymaster. Check that fingerprint by voice or "
+               "in person, then keymaster_accept or keymaster_refuse. Signed plain traffic works meanwhile.";
+    else if (keymasters == 0)
         next = "Load your handout (handout_import), stale is fine, or check a keymaster's card by voice and run "
                "card_check with keymaster=Y.";
     else if (current.empty())
@@ -895,7 +1279,9 @@ std::string rally_status(Core& core, const station::Identity& me) {
 std::optional<std::string> station_cmd(Core& core, const std::string& cmd, std::map<std::string, std::string>& req) {
     static const std::set<std::string> kCmds = {"station_card", "station_backup", "station_restore", "card_import",
                                                 "cards_list",   "card_check",     "card_send",       "net_tape",
-                                                "tape_seal",    "card_keymaster", "handout_import",  "rally_status"};
+                                                "tape_seal",    "card_keymaster", "handout_import",  "rally_status",
+                                                "keymaster_accept", "keymaster_refuse", "keymaster_list",
+                                                "bundle_make", "bundle_load", "bundle_send"};
     if (!kCmds.count(cmd)) return std::nullopt;
     const station::Identity* me = core.identity();
     if (!me && cmd != "station_restore" && cmd != "cards_list") return error_reply("this station has no keys of its own");
@@ -1006,28 +1392,42 @@ std::optional<std::string> station_cmd(Core& core, const std::string& cmd, std::
         return w.str();
     }
     if (cmd == "card_check") {
-        if (!core.verify_card(req["station"], req["fingerprint"], &err)) return error_reply(err);
-        if (req["keymaster"] == "Y" && !core.set_card_keymaster(req["station"], true, &err)) return error_reply(err);
+        // keymaster=Y is the member accepting that station as a keymaster.
+        bool ok = req["keymaster"] == "Y" ? core.accept_keymaster(req["station"], req["fingerprint"], "by voice", &err)
+                                          : core.verify_card(req["station"], req["fingerprint"], &err);
+        if (!ok) return error_reply(err);
         JsonWriter w;
         w.begin_object()
             .field("ok", true)
             .field("station", req["station"])
             .field("checked", true)
-            .field("keymaster", core.card_keymaster(req["station"]))
-            .end_object();
+            .field("keymaster", core.card_keymaster(req["station"]));
+        if (req["keymaster"] == "Y") reapply_pending(w, core, *me, req["station"]);
+        w.end_object();
         return w.str();
     }
     if (cmd == "card_keymaster") {
-        if (!core.set_card_keymaster(req["station"], req["keymaster"] != "N", &err)) return error_reply(err);
+        bool on = req["keymaster"] != "N";
+        auto row = core.card_for(req["station"]);
+        if (on && row && core.card_verified(req["station"])) {
+            if (!core.accept_keymaster(req["station"], station::fingerprint(*row), "earlier", &err))
+                return error_reply(err);
+        } else if (!core.set_card_keymaster(req["station"], on, &err)) {
+            return error_reply(err);
+        }
         JsonWriter w;
         w.begin_object()
             .field("ok", true)
             .field("station", req["station"])
-            .field("keymaster", core.card_keymaster(req["station"]))
-            .end_object();
+            .field("keymaster", core.card_keymaster(req["station"]));
+        if (on) reapply_pending(w, core, *me, req["station"]);
+        w.end_object();
         return w.str();
     }
     if (cmd == "handout_import") return handout_import(core, *me, req);
+    if (cmd == "bundle_make" || cmd == "bundle_load" || cmd == "bundle_send") return bundle_cmd(core, *me, cmd, req);
+    if (cmd == "keymaster_accept" || cmd == "keymaster_refuse" || cmd == "keymaster_list")
+        return keymaster_cmd(core, *me, cmd, req);
     if (cmd == "rally_status") return rally_status(core, *me);
     if (cmd == "card_send") {
         std::string id = send_block(core, req["to"], station::format_card(*me), &err);

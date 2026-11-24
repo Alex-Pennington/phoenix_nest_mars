@@ -199,23 +199,115 @@ opens only:
 
 A station that holds a card but hasn't named it keymaster won't take tapes
 from it. That stops any member whose card you checked from handing you keys.
+Naming a keymaster is the member's own choice: see the next section.
 
 The groups on the air are cipher. The key tape is never in the clear.
+
+## Choosing your keymasters
+
+A keymaster's tapes decide whose net a member is on, so the member chooses.
+Nothing names a keymaster for them: not a handout, a bundle, a card or a
+backup from someone else. Trust is given over the air, by a voice the member
+knows, or in person.
+
+- **Accept:** `keymaster accept CALL "FINGERPRINT"` (`keymaster_accept`),
+  after reading the fingerprint back by voice, or `--in-person`. The
+  fingerprint must match the card the box holds; a wrong one changes nothing.
+  `cards check CALL FP --keymaster` does the same in one step.
+- **Refuse:** `keymaster refuse CALL` (`keymaster_refuse`). The station's
+  tapes are not taken, its keymaster mark comes off, and any handout from it
+  waiting on the member is dropped. The refusal is kept against that card's
+  fingerprint, so a later handout from it says so instead of asking again. A
+  refused station can still be accepted later, by the same check.
+- **Not yet decided:** a handout from a station the member hasn't chosen waits
+  on the box. It opens no tape and installs no cipher module, and the
+  member cards it carries are held unchecked. Accepting the keymaster loads
+  every handout waiting on it.
+- `keymaster list` shows who was accepted, refused, and who is still waiting
+  on the member's answer. `rally` asks first when a keymaster is waiting.
+
+Signed plain traffic needs no keymaster at all: a member who has chosen no one
+yet, or refused everyone, still sends and checks signed messages.
 
 ## Building a net from nothing
 
 If everything has to be rebuilt, leadership needs only the appliances:
 
 1. Each station's box makes its keypair the first time it starts.
-2. Each member sends its card to the keymaster, over the air or on a stick.
+2. Whoever holds the startup data (roster, frequency card, schedules) loads it
+   with `import` and hands out a startup bundle (next section), so nobody types
+   it in.
+3. Each member sends its card to the keymaster, over the air or on a stick.
    The keymaster sends its own card back.
-3. Each pair reads its fingerprints back by voice and runs `cards check`.
-4. The keymaster runs `net_tape` with the members.
-5. Each member runs `keys open`.
+4. Each pair reads its fingerprints back by voice and runs `cards check`. The
+   member who chooses this keymaster runs `keymaster accept`.
+5. The keymaster runs `net_tape` with the members.
+6. Each member runs `keys open`.
 
 `test_station` does this with three stations: one over the air and one by USB.
 It then does it a second time from empty folders, and checks that nothing from
 the first net opens in the second.
+
+## Startup bundles
+
+A startup bundle carries what a box needs to work a net, so a member doesn't
+type it in: the station book, the channel plan by designator, the net
+schedules and how each station is reached (plain or PNA1). Any box can build
+one from what it holds, whether that came from `import` (leadership's roster,
+frequency card and schedule) or was typed in.
+
+    PNA STARTUP BUNDLE 1
+    LABEL PRACTICE REGION
+    BY NCS-A
+    MADE 202611240000Z
+    SIGNER NCS-A K7QM 2XRD 9FTA HW3C
+    STEP 1 CHECK THE SIGNER FINGERPRINT ABOVE BY VOICE OR IN PERSON.
+    ...
+    BOOK STA-B
+    KIND STATION
+    RI UHAAAB
+    CHANNEL P1
+    MODE USB
+    USE PRIMARY
+    SCHEDULE PRACTICE NET
+    DAYS TUE,THU
+    START 1900
+    CHAN P1
+    ...
+    LINK STA-D PLAIN
+    (the signer's card)
+    SIG ...
+    SIG ...
+    END BUNDLE
+
+- **Make:** `bundle make FILE --label "PRACTICE REGION"` (`bundle_make`)
+  writes it for a stick. The station signs it with its own key; its card is
+  inside.
+- **Send:** `bundle send STA-B,STA-C` (`bundle_send`) sends it over the air as
+  ordinary signed plain traffic, in parts of up to 6000 bytes when it is
+  large (`PNA BUNDLE PART 2 OF 3 TAG 4HNPQ2XR`).
+- **Load:** `bundle load FILE|ID` (`bundle_load`). From a message id, the box
+  gathers every part with the same tag and says which are missing. A bundle
+  that was changed on the way is refused, even with a yes.
+- **The member's yes:** a bundle signed by a station whose card this box has
+  checked loads at once. Any other signer's bundle loads only on the member's
+  `--yes`, and every entry it adds is marked "signer not checked".
+- **It is data, not trust.** Loading a bundle never adds, checks or names a
+  card, and never touches a key or a keymaster. Trust comes only from the
+  member's own choice (Choosing your keymasters).
+- **Nothing is removed.** Entries are added or replaced by name. A schedule
+  that is already the same is counted as same, and one that changed keeps the
+  sitting this box last opened.
+- **No frequencies.** Channels travel by designator only, and free text that
+  looks like a frequency is left out when the bundle is made (the reply lists
+  what was left out). A designator the box doesn't hold comes back in
+  `need_frequency`: load the frequency card for it. Personal columns in a
+  roster (names, email, phone) never reach the book, so never reach a bundle.
+- Everything is in the radio's character set, lines of 69 or fewer.
+
+A bundle is separate from a handout: the handout carries keys and the
+keymaster's cards for one member; the bundle carries operating data for
+anyone.
 
 ## Member handouts
 
@@ -249,10 +341,13 @@ the clear:
     SIG ...
     END HANDOUT
 
-- **KEYMASTER lines** name who may issue this net's tapes: the keymaster first,
-  then any alternates (`net_tape keymasters="ALT-K"`). Their cards are in the
-  handout, so a member who loads it holds them checked and named, with no
-  separate voice check.
+- **KEYMASTER lines** name who would issue this net's tapes: the keymaster
+  first, then any alternates (`net_tape keymasters="ALT-K"`). Their cards are
+  in the handout, but loading it names nobody. The reply asks the member about
+  each one ("NCS-A K7QM 2XRD 9FTA HW3C wants to be your keymaster. Accept?").
+  Until the member accepts the issuer, after a voice check or in person, the
+  handout waits: no tape is taken and no cipher module installed. A member who
+  refuses keeps none of it. See Choosing your keymasters.
 - **The KEY_CKR block** is laid out like leadership's passphrase list
   (KEY_CKR, KEYNAME, KEYDESC, KEYPASS, then a rule of `=`), so a member reads
   it where they expect. It holds no passphrase: KEYPASS says the tape opens
@@ -286,9 +381,11 @@ expire; only its tape does.
    card it held come back, with their checked and keymaster marks. Net keys are
    never in a backup. A member without one starts fresh, and the box makes new
    keys.
-2. **Load the old handout** (`handout import FILE`). The keymasters come back,
-   checked and named. Its tape has ended, or was sealed to the old keys, and
-   the reply says which.
+2. **Load the old handout** (`handout import FILE`). A keymaster the member
+   already accepted, or whose mark came back with the backup, isn't asked
+   about again. A member starting fresh is asked, and accepts after a voice
+   check. Its tape has ended, or was sealed to the old keys, and the reply
+   says which.
 3. **Signed plain traffic works at once.** It needs no tape, and the keymaster
    can check every signature.
 4. **New card, if the keys are new.** The member sends its card. The keymaster
@@ -303,7 +400,27 @@ one). 45 days later every box is wiped. NCS-A and STA-B restore. STA-C rallies
 from its stale handout and a new card. NCS-A issues a new tape, STA-B opens it
 over the air and STA-C from its new handout, and codress works again. Then
 NCS-A is lost: ALT-K restores, finds its own old tape ended, and issues the
-next tape. A station that never named ALT-K keymaster refuses that tape.
+next tape. A station that never accepted ALT-K refuses that tape.
+
+## Ground zero: the box from the can
+
+Each member keeps a sealed can with a computer and this appliance, likely
+never updated once sealed. `test_groundzero` runs two drills.
+
+- **Three empty boxes.** NCS-A imports a made-up roster, frequency card and
+  net schedule, makes a bundle, sends it to STA-B over the air and gives it to
+  STA-C on a stick. STA-B's box waits until STA-B checks NCS-A's card by
+  voice, then loads it; STA-C loads it on its own yes, and it stays marked so.
+  Neither box gains a card, key or keymaster from it. Then NCS-A hands out
+  tapes: STA-B refuses at first (no tape taken, signed plain traffic still
+  works), then accepts after a second voice check; STA-C accepts in person.
+- **The stale box.** STA-B's box is sealed with OLD-K as keymaster, a 31-day
+  tape, a bundle and a frequency card. Four years later (the clock is
+  injected) every key has ended and OLD-K is gone. Using only what's on the
+  box: signed plain traffic with a new keymaster NEW-K first; NEW-K's tape is
+  refused until STA-B accepts it; a stranger's handout is refused; STA-B
+  accepts NEW-K by voice, opens the tape, and codress works again. STA-B then
+  hands its old book and schedules to NEW-K as a bundle of its own.
 
 ## Backups
 
@@ -329,6 +446,10 @@ new card. The voice check catches anyone pretending to be the station.
   traffic. Signatures, not the cipher, prove who sent a message.
 - **No forward secrecy within a period.** If a day's key leaks, that day's
   traffic can be read. Short periods limit the damage.
+- **Sealed tapes over the air** must fit one message (8192 bytes): about two
+  weeks of 24-hour keys. A longer tape goes on a handout or a stick.
+- **Frequencies don't travel in a bundle.** Each member needs its own
+  frequency card on the box for the designators the bundle names.
 - **The keymaster box** holds every tape it made. Keep it offline when it
   isn't making tapes.
 
