@@ -28,6 +28,7 @@
 #include "../src/net.h"
 
 #include "../src/crypto.h"
+#include "../src/keys.h"
 
 #include <fstream>
 #include <iostream>
@@ -121,6 +122,18 @@ int main(int argc, char** argv) {
             std::ostringstream ss;
             ss << f.rdbuf();
             std::string text = ss.str();
+            // A framed key tape file is opened here, so plain text goes to
+            // the core; an MSC tape stops here, unopened.
+            if (keys::looks_framed(text)) {
+                std::string plain, err;
+                bool ok = keys::open_tape_file(text, plain, &err);
+                crypto::wipe(text);
+                if (!ok) {
+                    std::cerr << argv[i] << ": " << err << "\n";
+                    return 1;
+                }
+                text = std::move(plain);
+            }
             w = JsonWriter();
             w.begin_object().field("cmd", "key_import").field("text", text);
             crypto::wipe(text);

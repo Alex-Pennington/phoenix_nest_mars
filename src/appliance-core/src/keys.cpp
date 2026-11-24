@@ -224,12 +224,128 @@ std::string format_tape(const Tape& t) {
     b += "tape " + t.tape + "\n";
     b += "made " + time_text(t.made) + "\n";
     b += "period-hours " + std::to_string(t.period_hours) + "\n";
-    for (auto& k : t.keys) b += key_line(k, false) + "\n";
+    for (size_t i = 0; i < t.keys.size(); ++i) {
+        for (auto& l : label_lines(key_labels(t, i))) b += "# " + l + "\n";
+        b += key_line(t.keys[i], false) + "\n";
+    }
     return with_end(b);
 }
 
-bool parse_tape(const std::string& text, Tape& out, std::string* error) {
+namespace {
+
+const char* const kOurHead = "[PNA KEY TAPE]\n";
+const char* const kMscHead = "[ENCRYPTED KEY TAPE]\n";
+const char* const kWarning = "[WARNING] - Editing this file will corrupt the keys!\n\n";
+
+// One record: a 4-byte big-endian length, then the bytes. Labels carry their
+// closing NUL, as MSC's do.
+void put_record(std::string& out, const std::string& bytes) {
+    uint32_t n = static_cast<uint32_t>(bytes.size());
+    out += static_cast<char>((n >> 24) & 0xff);
+    out += static_cast<char>((n >> 16) & 0xff);
+    out += static_cast<char>((n >> 8) & 0xff);
+    out += static_cast<char>(n & 0xff);
+    out += bytes;
+}
+std::string label(const char* s) { return std::string(s) + std::string(1, '\0'); }
+
+bool get_record(const std::string& in, size_t& at, std::string& out) {
+    if (at + 4 > in.size()) return false;
+    uint32_t n = (static_cast<uint32_t>(static_cast<unsigned char>(in[at])) << 24) |
+                 (static_cast<uint32_t>(static_cast<unsigned char>(in[at + 1])) << 16) |
+                 (static_cast<uint32_t>(static_cast<unsigned char>(in[at + 2])) << 8) |
+                 static_cast<uint32_t>(static_cast<unsigned char>(in[at + 3]));
+    if (n > in.size() - at - 4) return false;
+    out = in.substr(at + 4, n);
+    at += 4 + n;
+    return true;
+}
+
+}  // namespace
+
+bool looks_framed(const std::string& bytes) {
+    size_t at = 0;
+    std::string head;
+    if (!get_record(bytes, at, head)) return false;
+    return head == label(kOurHead) || head == label(kMscHead);
+}
+
+std::string tape_file(const std::string& tape_text) {
+    std::string digest;
+    crypto::from_hex(crypto::sha256_hex(tape_text), digest);
+    std::string out;
+    put_record(out, label(kOurHead));
+    put_record(out, label(kWarning));
+    put_record(out, label("<CHECKSUM>"));
+    put_record(out, digest);
+    put_record(out, label("</CHECKSUM>\n\n"));
+    put_record(out, label("<KEYTAPE>"));
+    put_record(out, tape_text);
+    put_record(out, label("</KEYTAPE>\n\n"));
+    return out;
+}
+
+bool open_tape_file(const std::string& bytes, std::string& tape_text, std::string* error) {
+    size_t at = 0;
+    std::string head;
+    if (bytes.empty() || bytes[0] != '\0' || !get_record(bytes, at, head)) {
+        tape_text = bytes;  // plain tape text
+        return true;
+    }
+    if (head == label(kMscHead))
+        return fail(error, "this is an MSC key tape. It stays closed: this appliance uses its own keys and never "
+                           "opens MSC tapes. Load the tape your net's keymaster made with pna-keymaster");
+    if (head != label(kOurHead)) return fail(error, "not a key tape file");
+    std::string r[7];
+    for (auto& x : r)
+        if (!get_record(bytes, at, x)) return fail(error, "the key tape file is cut off");
+    if (at != bytes.size() || r[0] != label(kWarning) || r[1] != label("<CHECKSUM>") ||
+        r[3] != label("</CHECKSUM>\n\n") || r[4] != label("<KEYTAPE>") || r[6] != label("</KEYTAPE>\n\n"))
+        return fail(error, "the key tape file is damaged");
+    if (crypto::to_hex(r[2]) != crypto::sha256_hex(r[5])) {
+        crypto::wipe(r[5]);
+        return fail(error, "the key tape file's checksum does not match: it was changed or damaged");
+    }
+    tape_text = std::move(r[5]);
+    return true;
+}
+
+Labels key_labels(const Tape& t, size_t index) {
+    static const char* kMon[12] = {"Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"};
+    Labels l;
+    if (index >= t.keys.size()) return l;
+    const Key& k = t.keys[index];
+    auto utc = [](int64_t s) {
+        std::time_t tt = static_cast<std::time_t>(s);
+        std::tm u{};
+        gmtime_r(&tt, &u);
+        return u;
+    };
+    std::tm f = utc(k.from), m = utc(t.made);
+    l.ckr = k.indicator;
+    l.name = k.indicator + " " + t.tape + two(f.tm_mon + 1) + two(f.tm_year % 100);
+    l.desc = t.net + " KEY " + std::to_string(index + 1) + " OF " + std::to_string(t.keys.size());
+    int h = t.period_hours;
+    l.interval = h == 24 ? "Daily" : h == 24 * 7 ? "Weekly" : (h >= 24 * 28 && h <= 24 * 31) ? "Monthly"
+               : "Every " + std::to_string(h) + " hours";
+    l.created = two(m.tm_mday) + kMon[m.tm_mon] + std::to_string(m.tm_year + 1900) + "@" + two(m.tm_hour) + ":" +
+                two(m.tm_min) + ":" + two(m.tm_sec);
+    return l;
+}
+
+std::vector<std::string> label_lines(const Labels& l) {
+    return {"KEY_CKR:" + l.ckr, "KEYNAME:" + l.name, "KEYDESC:" + l.desc, "INTRVAL:" + l.interval,
+            "CREATED:" + l.created};
+}
+
+bool parse_tape(const std::string& bytes, Tape& out, std::string* error) {
     out = Tape{};
+    std::string text;
+    if (!open_tape_file(bytes, text, error)) return false;
+    struct Wipe {
+        std::string& s;
+        ~Wipe() { crypto::wipe(s); }
+    } wipe{text};
     auto L = lines_of(text);
     if (L.empty()) return fail(error, "not a key tape: it is empty");
     auto head = split_ws(L[0].text);

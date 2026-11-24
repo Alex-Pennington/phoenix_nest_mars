@@ -594,6 +594,20 @@ std::string format_handout(const Handout& h, const Identity& issuer) {
     if (!h.tape.empty()) {
         b.push_back("TAPE " + h.tape + " " + keys::time_text(h.valid_from) + " " + keys::time_text(h.valid_until));
         if (!h.first_key.empty()) b.push_back("CHECK " + h.first_key + " " + h.first_check);
+        // The block a member knows from leadership's passphrase list, filled
+        // with ours. There is no passphrase: the tape opens only on the
+        // appliance it was sealed to, and the check is read by voice.
+        if (!h.first_key.empty()) {
+            std::string from = keys::time_text(h.valid_from);  // YYYYMMDDHHMMZ
+            b.push_back("KEY_CKR:" + h.first_key);
+            b.push_back("KEYNAME:" + h.first_key + " " + h.tape + from.substr(4, 2) + from.substr(2, 2));
+            b.push_back("KEYDESC:" + h.net + " KEY TAPE " + h.tape);
+            b.push_back(h.sealed.empty()
+                            ? "KEYPASS:NONE. YOUR KEYMASTER SENDS THE TAPE SEALED TO " + h.for_station
+                            : "KEYPASS:NONE. THE TAPE BELOW OPENS ONLY ON " + h.for_station + ". CHECK " +
+                                  h.first_check);
+            b.push_back(std::string(43, '='));
+        }
     }
     for (auto& k : h.keymasters) b.push_back("KEYMASTER " + k.first + " " + k.second);
     for (auto& m : h.members) b.push_back("MEMBER " + m.first + " " + m.second);

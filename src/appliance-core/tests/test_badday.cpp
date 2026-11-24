@@ -175,6 +175,10 @@ int main() {
             CHECK(h->find("PNA KEY TAPE") == std::string::npos);
             CHECK(h->find("KEYMASTER NCS-A " + A.fp) != std::string::npos);
             CHECK(h->find("KEYMASTER ALT-K " + K.fp) != std::string::npos);
+            // The block leadership's passphrase list uses, with no passphrase in it.
+            CHECK(h->find("\nKEY_CKR:") != std::string::npos && h->find("\nKEYNAME:") != std::string::npos &&
+                  h->find("\nKEYPASS:NONE.") != std::string::npos);
+            CHECK(h->find("\n" + std::string(43, '=') + "\n") != std::string::npos);
         }
         // The alternate's handout carries every member's card; a member's doesn't.
         CHECK(hand_k.find("MEMBER STA-C " + C.fp) != std::string::npos);

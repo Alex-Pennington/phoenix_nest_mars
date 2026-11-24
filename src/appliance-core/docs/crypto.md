@@ -75,7 +75,7 @@ the outer digest and NNNN.
 
 A keymaster makes a tape for a net:
 
-    pna-keymaster --net "PRACTICE NET" --days 31 --out /media/usb/practice.tape
+    pna-keymaster --net "PRACTICE NET" --days 31 --out /media/usb/practice.ekt
 
 Each period, a day by default, gets a fresh random 256-bit key. A station
 loads the tape with `appliance-cli keys import FILE`.
@@ -89,8 +89,31 @@ loads the tape with `appliance-cli keys import FILE`.
   overwritten with zeros, and the new one takes its place.
 - A tape is plain text with a SHA-256 check at the end. Copy it by USB, and
   wipe the stick afterwards.
+- On the stick it travels as a **key tape file**, framed the way MSC frames
+  its `.ekt` tapes: a run of records, each a 4-byte big-endian length and its
+  bytes. The records are a head label (`[PNA KEY TAPE]`), the warning
+  `[WARNING] - Editing this file will corrupt the keys!`, `<CHECKSUM>` with
+  the SHA-256 of the tape, and `<KEYTAPE>` with the tape. `--text` writes the
+  plain tape instead; `keys import` takes either.
+- **An MSC tape is refused.** Its head label says `[ENCRYPTED KEY TAPE]`, and
+  the import stops at that first record: it never reads the rest, never opens
+  MSC's keys, and says to load the tape the net's keymaster made.
+- Each key carries the **five labels MSC's key list shows**, as notes on the
+  tape, so a keymaster used to MSC reads ours the same way:
 
-The tape format is ours. The December 2025 Intel HEX loader idea is not used.
+      # KEY_CKR:QXR01
+      # KEYNAME:QXR01 QXR1126
+      # KEYDESC:PRACTICE NET KEY 1 OF 31
+      # INTRVAL:Daily
+      # CREATED:23Nov2026@10:40:00
+      key QXR01 202611240000Z 202611250000Z ...
+
+  KEY_CKR is the key's indicator, KEYNAME adds the tape and the month and year
+  it starts, INTRVAL is Daily, Weekly, Monthly or Every N hours, and CREATED is
+  when the tape was made (UTC). They are not secrets.
+
+The tape and its cipher are ours; only the file's framing and labels follow
+MSC's. The December 2025 Intel HEX loader idea is not used.
 
 ## Station keys and cards
 
@@ -198,6 +221,11 @@ the clear:
     BY NCS-A
     TAPE QXR 202611230000Z 202612240000Z
     CHECK QXR01 4HNP
+    KEY_CKR:QXR01
+    KEYNAME:QXR01 QXR1126
+    KEYDESC:PRACTICE NET KEY TAPE QXR
+    KEYPASS:NONE. THE TAPE BELOW OPENS ONLY ON STA-B. CHECK 4HNP
+    ===========================================
     KEYMASTER NCS-A K7QM 2XRD 9FTA HW3C
     KEYMASTER ALT-K ...
     MEMBER STA-B ...
@@ -216,6 +244,10 @@ the clear:
   then any alternates (`net_tape keymasters="ALT-K"`). Their cards are in the
   handout, so a member who loads it holds them checked and named, with no
   separate voice check.
+- **The KEY_CKR block** is laid out like leadership's passphrase list
+  (KEY_CKR, KEYNAME, KEYDESC, KEYPASS, then a rule of `=`), so a member reads
+  it where they expect. It holds no passphrase: KEYPASS says the tape opens
+  only on this member's box, and gives the check to read by voice.
 - **CHECK** is a 4-character check value for the first key (from SHA-256 of
   the key, not the key). Read it to the keymaster by voice to confirm the tape
   loaded. `keys list` shows the check for every key.
@@ -227,9 +259,9 @@ the clear:
 - The keymaster signs the whole handout. A handout that was changed, or is for
   another station, is refused.
 
-The layout is ours for now. Once leadership's member handout style is in hand
-(with every key blanked), the handout follows its order and wording. The
-contents stay the same.
+The rest of the layout is ours. Leadership's key list and passphrase list were
+compared with every key and passphrase blanked; no key, passphrase or MSC
+cipher file is used here.
 
 ## BAD_DAY: rallying from stale material
 

@@ -25,6 +25,17 @@
 // keymaster signature) add lines and a higher version; a version 1 tape stays
 // valid. A version 1 reader refuses a newer tape by name.
 //
+// On a USB stick the tape travels as a key tape file, framed the way MSC
+// frames its .ekt tapes (a run of records, each a 4-byte big-endian length
+// and its bytes): a head label, a warning, <CHECKSUM> with the SHA-256 of the
+// tape, and <KEYTAPE> with the tape itself. Our head label is
+// "[PNA KEY TAPE]"; an MSC tape says "[ENCRYPTED KEY TAPE]" and is refused
+// at that first record: this appliance never opens MSC tapes or their keys.
+//
+// Each key also gets the five labels MSC's key list shows (KEY_CKR, KEYNAME,
+// KEYDESC, INTRVAL, CREATED), so a keymaster used to MSC reads ours the
+// same way. They are made from the tape; they are not secrets.
+//
 // Real keys never go in a repository. Tests make throwaway tapes.
 #pragma once
 
@@ -68,6 +79,27 @@ bool make_tape(const std::string& net, int64_t start, int count, int period_hour
                std::string* error);
 std::string format_tape(const Tape& t);
 bool parse_tape(const std::string& text, Tape& out, std::string* error);
+
+// The key tape file (above) around a tape's text, and back. open_tape_file
+// takes either a framed file or plain tape text, and gives the text. An MSC
+// tape is refused by its head label, before any other byte is read.
+std::string tape_file(const std::string& tape_text);
+bool open_tape_file(const std::string& bytes, std::string& tape_text, std::string* error);
+// Whether bytes start the way a framed tape file does (ours or MSC's).
+bool looks_framed(const std::string& bytes);
+
+// MSC's five key labels, for one key of a tape:
+//   KEY_CKR  QXR01                       the key's short title (its indicator)
+//   KEYNAME  QXR01 QXR1126               short title, the tape, and MMYY it starts
+//   KEYDESC  PRACTICE NET KEY 1 OF 31
+//   INTRVAL  Daily                       Daily, Weekly, Monthly or Every N hours
+//   CREATED  23Nov2026@10:40:00          when the tape was made, UTC
+struct Labels {
+    std::string ckr, name, desc, interval, created;
+};
+Labels key_labels(const Tape& t, size_t index);
+// "KEY_CKR:QXR01" ... "CREATED:23Nov2026@10:40:00", one label a line.
+std::vector<std::string> label_lines(const Labels& l);
 
 // A key's check value: four letters and figures (no I, O, 0 or 1) from
 // SHA-256 over the indicator and the key. Two stations read theirs to each

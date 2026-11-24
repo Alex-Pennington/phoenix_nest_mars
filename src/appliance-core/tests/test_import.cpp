@@ -301,6 +301,103 @@ int main() {
     r = call(core, {{"cmd", "mars_import"}, {"text", card}, {"kind", "roster"}});
     CHECK(!ok(r));
 
+    // 6. The shapes of the files MSC stations are handed, made up here: no
+    // real call, RI, name or frequency. Read straight through the importer.
+    auto imp = [&](const std::string& bytes) {
+        std::string err;
+        auto res = marsio::import_file(*ops, bytes, "auto", "shape test", &err);
+        return res.empty() ? marsio::SheetResult{} : res[0];
+    };
+    const std::string ab_head =
+        "PLA,RI,ALE ADDR,ALE NETWK,CALL SIGN,TACTICAL CALL SIGN,Org Name,Location,State,POC Name,POC Email,"
+        "POC Phone,Name At Domain Addr\r\n";
+    // An MSC address book: PLA first, a date stamp line, a notice line, a
+    // vacant billet, a PLA reached only by its RI, and an office title too
+    // long to be a call. The point-of-contact columns never land.
+    std::string ab = ab_head +
+        "TEST_AB 01JAN2026,,,,,,,,,,,,\r\n"
+        "***Test notice line***,,,,,,,,,,,,\r\n"
+        "TEST STATION DELTA,UHAAAD,STAD,TST,STA-D,DELTA,Test Org,Nowhere,ZZ,Test Poc,poc@example.invalid,(555) 555-0100,\r\n"
+        "TEST STATION ECHO,UHAAAE,STAE,TST,STAE1/M,,Test Org,Nowhere,ZZ,,,,\r\n"
+        "TEST VACANT BILLET,,,,TST1__,,,,ZZ,,,,\r\n"
+        "TEST HQ & STAFF (ALL),UHAAAH,,,,,Test Org,,,,,,\r\n"
+        "TEST OFFICE,UHAAAO,TOF,TST,TESTOFFICETITLEXX,,,,,,,,\r\n";
+    auto rb = imp(ab);
+    CHECK(rb.kind == "book" && rb.imported >= 4);
+    CHECK(rb.problems.size() == 1 && rb.problems[0].find("1 vacant billet") != std::string::npos);
+    CHECK(contains(rb.left_out, "POC Name") && contains(rb.left_out, "POC Email") && contains(rb.left_out, "POC Phone"));
+    auto d = ops->book_get("TEST STATION DELTA");
+    CHECK(d && d->call == "STA-D" && d->ri == "UHAAAD" && d->ale == "STAD");
+    CHECK(d && d->note.find("POC") == std::string::npos && d->note.find("555") == std::string::npos);
+    auto e = ops->book_get("TEST STATION ECHO");
+    CHECK(e && e->call == "STAE1");  // a /M suffix is the same station
+    auto hq = ops->book_get("TEST HQ STAFF ALL");
+    CHECK(hq && hq->call == "UHAAAH" && hq->note.rfind("BY RI", 0) == 0);
+    auto of = ops->book_get("TEST OFFICE");
+    CHECK(of && of->call == "UHAAAO");
+    CHECK(!ops->book_get("TEST AB 01JAN2026") && !ops->book_get("TEST NOTICE LINE"));
+    // One with no entries (MSC ships an empty personal book).
+    auto empty = imp(ab_head);
+    CHECK(empty.kind == "book" && empty.rows == 0 && empty.problems.empty());
+
+    // A roster in the regional roster shape: a quoted title over two lines, a date, then
+    // the header. Names and mail stay out.
+    std::string r4 =
+        "\"TEST MEMBER ROSTER 1 \r\nNOTE: NO REAL MEMBERS\"\r\nJUNE 1, 2026\r\n"
+        "\"CALL SIGNS ASGN/BILLET\",\"ABR\",\"MGR\",\"ST\",\"FIRST NAME\",\"LAST NAME\",\"EMAIL ADDRESS\",\"CITY\"\r\n"
+        "\"TST9ZZ\",\"9ZZ\",\"00AAA\",\"ZZ\",\"Test\",\"Person\",\"x@example.invalid\",\"Nowhere\"\r\n";
+    auto rr = imp(r4);
+    CHECK(rr.kind == "roster" && rr.imported == 1 && ops->book_get("TST9ZZ"));
+    CHECK(contains(rr.left_out, "FIRST NAME") && contains(rr.left_out, "EMAIL ADDRESS") && contains(rr.left_out, "MGR"));
+    // An old address list, with its header and without one.
+    auto al = imp("CALLSIGN,ABR,,,MGR,ST\r\nTST1AA,1AA,,,00AAA,ZZ\r\nTST1AB/P,1AB,,,00AAA,ZZ\r\n");
+    CHECK(al.kind == "roster" && al.imported == 2 && ops->book_get("TST1AB"));
+    auto nl = imp("TST2AA,2AA,,,00AAA,ZZ\r\nTST2AB,2AB,,,00AAA,ZZ\r\nTST2AC,2AC,,,00AAA,ZZ\r\n");
+    CHECK(nl.kind == "roster" && nl.imported == 3 && nl.header_row == 0 && ops->book_get("TST2AC"));
+
+    // A frequency annex: DES and FREQ, kHz with or without a decimal.
+    auto an = imp("DES,FREQ,Name,Assigned1,Assigned2,Assigned3,Assigned4\r\n"
+                  "T1,5000.0,,TestNet,,,\r\nT2,10000,,,,,\r\nTAA,2500.0,TEST NAME,,,,\r\n");
+    CHECK(an.kind == "freq" && an.imported == 3 && contains(an.left_out, "Assigned1"));
+    CHECK(ops->channels().get("T2") && ops->channels().get("T2")->hz == 10000000);
+    // MSC's channels.csv: no header, "DES kHz" a line.
+    auto cl = imp("T3 5000.0\r\nT4 2500.0 \r\nT5 10000.0\r\n");
+    CHECK(cl.kind == "freq" && cl.imported == 3 && ops->channels().get("T4")->hz == 2500000);
+
+    // A checkerboard in local time (one real shape): channel columns, then
+    // the days; the zone is in the corner. 8PM EDST is 0000Z the next day.
+    std::string board =
+        "Column 01,Column 02,Column 03,Column 04,Column 05,Column 06,Column 07,Column 08,Column 09,Column 10\r\n"
+        "EDST/CDST,TESTPRIMARY,TESTTRAFFIC,SUN,MON,TUE,WED,THU,FRI,SAT\r\n"
+        "7AM / 6AM,T101,T201,T301/T302/T303,T301/T302/T303,T301/T302/T303,T301/T302/T303,T301/T302/T303,"
+        "T301/T302/T303,T301/T302/T303\r\n"
+        "8AM / 7AM,T101,T202,,,,,,,\r\n"
+        "9AM / 8AM,T102,T202,TEST NET 1ST/T12 or T34,,(TAG),,,,\r\n"
+        "8PM / 7PM,T102,T202,,,,,,,T401/T402\r\n";
+    auto cb = imp(board);
+    CHECK(cb.kind == "schedule" && cb.imported >= 5);
+    CHECK(cb.problems.size() == 1 && cb.problems[0].find("UTC-4") != std::string::npos);
+    auto p1 = ops->sched_get("TESTPRIMARY 1100Z");
+    CHECK(p1 && p1->channel == "T101" && p1->minutes == 120 && p1->note == "CHANNEL PLAN");
+    auto n1 = ops->sched_get("NET 1100Z");
+    CHECK(n1 && n1->days == "SUN,MON,TUE,WED,THU,FRI,SAT" && n1->channel == "T301" && n1->note == "ALT T302 T303");
+    auto tn = ops->sched_get("TEST NET 1ST 1300Z");
+    CHECK(tn && tn->days == "SUN" && tn->channel == "T12" && tn->note == "ALT T34");
+    auto late = ops->sched_get("NET 0000Z");
+    CHECK(late && late->days == "SUN" && late->channel == "T401");  // Saturday evening local
+    // A checkerboard with a UTC column (the other real shape).
+    std::string xb = xlsx("TST", {{"TEST NET SCHEDULE"},
+                                  {"", "", "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"},
+                                  {"0600L", "1101Z", "", "S2/T094/T173", "", "", "", "", ""},
+                                  {"0700L", "1201Z", "", "", "", "", "", "", ""}});
+    auto xr = imp(xb);
+    CHECK(xr.kind == "schedule" && xr.imported == 1 && xr.problems.empty());
+    auto x1 = ops->sched_get("NET 1101Z");
+    CHECK(x1 && x1->days == "MON" && x1->channel == "S2" && x1->note == "ALT T094 T173" && x1->minutes == 60);
+    // Local times with no zone are not guessed at.
+    auto nz = imp(",SUN,MON,TUE,WED,THU,FRI,SAT\r\n7AM,T1,T1,T1,T1,T1,T1,T1\r\n");
+    CHECK(nz.kind == "schedule" && nz.imported == 0 && nz.problems.size() == 1);
+
     fs::remove_all(dir);
     return check::report("test_import");
 }

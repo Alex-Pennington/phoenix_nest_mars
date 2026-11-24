@@ -175,6 +175,17 @@ bool parse(const std::string& raw, Message& m, std::string* error) {
     // Format line 1: the first line that starts with VZCZC.
     size_t v = 0;
     while (v < L.size() && !starts_with(trim(L[v]), "VZCZC")) ++v;
+    if (v == L.size()) {
+        // Station Mapper saves an ALE link prefix ("FROM.TO.") on the same
+        // line, run straight into VZCZC: "STA-A.ALL.VZCZC".
+        for (v = 0; v < L.size(); ++v) {
+            size_t at = L[v].find(".VZCZC");
+            if (at == std::string::npos) continue;
+            L[v] = L[v].substr(at + 1);
+            warn.push_back("an ALE link prefix before VZCZC on the same line ignored");
+            break;
+        }
+    }
     if (v == L.size()) return fail(error, "format line 1: no line starts with VZCZC");
     for (size_t i = 0; i < v; ++i)
         if (!trim(L[i]).empty()) {

@@ -1,10 +1,11 @@
 // pna-keymaster: makes a key tape for one net (keys.h, docs/crypto.md).
 //
 //   pna-keymaster --net "PRACTICE NET" --start 20261124 [--days 31]
-//                 [--period-hours 24] --out /media/usb/practice-net.tape
+//                 [--period-hours 24] [--text] --out /media/usb/practice-net.ekt
 //
 // Each period gets a fresh random 256-bit key from OpenSSL. The tape is
-// written once, mode 0600, and never over an existing file. Copy it to a USB
+// written once, mode 0600, and never over an existing file, as a key tape
+// file framed like MSC's .ekt (keys.h); --text writes the plain tape text. Copy it to a USB
 // stick for each station of the net; each station loads it with
 // "appliance-cli keys import FILE". The keymaster keeps no copy: when the
 // tape is lost, make a new one.
@@ -25,11 +26,12 @@ namespace {
 
 int usage() {
     std::cerr << "usage: pna-keymaster --net NAME --start YYYYMMDD[HHMM] [--days N | --count N]\n"
-                 "                     [--period-hours H] --out FILE\n"
+                 "                     [--period-hours H] [--text] --out FILE\n"
                  "  --net           the net's name: A-Z, 0-9, space, - and / (up to 40)\n"
                  "  --start         when the first key starts, UTC (YYYYMMDD is 0000Z that day)\n"
                  "  --days/--count  how many keys (1 to 99); a key a day by default\n"
                  "  --period-hours  how long each key lasts (default 24)\n"
+                 "  --text          write the plain tape text, not the framed key tape file\n"
                  "  --out           the tape file to write; it must not exist yet\n";
     return 2;
 }
@@ -39,6 +41,7 @@ int usage() {
 int main(int argc, char** argv) {
     std::string net, start, out;
     int count = 31, period = 24;
+    bool plain = false;
     for (int i = 1; i < argc; ++i) {
         std::string a = argv[i];
         auto next = [&]() -> std::string { return i + 1 < argc ? argv[++i] : ""; };
@@ -48,6 +51,7 @@ int main(int argc, char** argv) {
             else if (a == "--days" || a == "--count") count = std::stoi(next());
             else if (a == "--period-hours") period = std::stoi(next());
             else if (a == "--out") out = next();
+            else if (a == "--text") plain = true;
             else return usage();
         } catch (...) {
             return usage();
@@ -70,6 +74,11 @@ int main(int argc, char** argv) {
         return 2;
     }
     std::string text = keys::format_tape(tape);
+    if (!plain) {
+        std::string framed = keys::tape_file(text);
+        crypto::wipe(text);
+        text = std::move(framed);
+    }
     for (auto& k : tape.keys) crypto::wipe(k.secret);
     int fd = ::open(out.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0600);
     if (fd < 0) {

@@ -307,12 +307,17 @@ bool read_text(const std::string& bytes, Table& t, std::string* error) {
         for (auto& [n, c] : counts) score = std::max(score, c);
         if (score > best_score) best = sep, best_score = score;
     }
+    // A file of one line (a header and no rows) needs only that line to agree.
+    size_t filled = static_cast<size_t>(std::count_if(lines.begin(), lines.end(), [](const std::string& l) {
+        return !trim(l).empty();
+    }));
+    size_t need = filled <= 1 ? 1 : 2;
     for (auto& l : lines) {
         if (trim(l).empty()) {
             t.rows.push_back({});
             continue;
         }
-        t.rows.push_back(best && best_score >= 2 ? split_delimited(l, best) : split_spaced(l));
+        t.rows.push_back(best && best_score >= need ? split_delimited(l, best) : split_spaced(l));
     }
     return true;
 }

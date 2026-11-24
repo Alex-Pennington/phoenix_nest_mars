@@ -176,6 +176,34 @@ static void tapes(const fs::path& dir) {
     v2.replace(0, 14, "PNA KEY TAPE 2");
     CHECK(!keys::parse_tape(v2, back, &err) && err.find("version 2") != std::string::npos);
     CHECK(!keys::parse_tape("hello", back, &err));
+    // Each key carries MSC's five labels, as notes on the tape.
+    CHECK(text.find("# KEY_CKR:" + tape.tape + "01\n") != std::string::npos);
+    keys::Labels lb = keys::key_labels(tape, 1);
+    CHECK(lb.ckr == tape.tape + "02" && lb.desc == "PRACTICE NET KEY 2 OF 3" && lb.interval == "Daily");
+    CHECK(lb.name.size() == 5 + 1 + 3 + 4 && lb.name.rfind(tape.tape + "02 " + tape.tape, 0) == 0);
+    CHECK(lb.created.size() == 18 && lb.created[9] == '@');
+    CHECK(keys::label_lines(lb)[3] == "INTRVAL:Daily");
+    // The key tape file: framed like an .ekt, with the tape's SHA-256 inside.
+    std::string file = keys::tape_file(text);
+    CHECK(file[0] == '\0' && keys::looks_framed(file) && !keys::looks_framed(text));
+    CHECK(file.find("[PNA KEY TAPE]\n") != std::string::npos && file.find("<KEYTAPE>") != std::string::npos);
+    CHECK(keys::parse_tape(file, back, &err) && back.keys.size() == 3 && back.keys[0].secret == tape.keys[0].secret);
+    std::string opened;
+    CHECK(keys::open_tape_file(file, opened, &err) && opened == text);
+    CHECK(keys::open_tape_file(text, opened, &err) && opened == text);  // plain text passes through
+    std::string flipped = file;
+    flipped[flipped.size() - 40] ^= 1;
+    CHECK(!keys::parse_tape(flipped, back, &err) && err.find("checksum") != std::string::npos);
+    CHECK(!keys::parse_tape(file.substr(0, file.size() - 10), back, &err));
+    // An MSC tape is refused at its head label; nothing after it is read.
+    std::string msc;
+    for (std::string rec : {std::string("[ENCRYPTED KEY TAPE]\n") + '\0', std::string("NOT A REAL TAPE")}) {
+        uint32_t n = static_cast<uint32_t>(rec.size());
+        msc += std::string{static_cast<char>(n >> 24), static_cast<char>(n >> 16), static_cast<char>(n >> 8),
+                           static_cast<char>(n)} + rec;
+    }
+    CHECK(keys::looks_framed(msc));
+    CHECK(!keys::parse_tape(msc, back, &err) && err.find("MSC key tape") != std::string::npos);
 
     // The keyring: import, list, choose, expire, zeroize, survive a restart.
     std::string path = (dir / "STA-B.keys").string();

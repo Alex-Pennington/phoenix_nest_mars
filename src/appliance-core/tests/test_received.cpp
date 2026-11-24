@@ -201,6 +201,8 @@ int main() {
         CHECK(!received::parse(swap("VZCZC", "VZC"), m, &err));
         CHECK(!received::parse(swap("TEXT\r\nBT\r\n", "TEXT\r\n"), m, &err));
         CHECK(!received::parse("", m, &err));
+        // Station Mapper saves the ALE link ahead of VZCZC on the same line.
+        CHECK(received::parse("STA-A.ALL." + ok, m, &err) && warned(m, "ALE link prefix"));
     }
 
     // The appliance's own ACP 127 messages read back the same way.
