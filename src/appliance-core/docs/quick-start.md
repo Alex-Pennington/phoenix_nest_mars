@@ -31,15 +31,33 @@ Running it again upgrades the programs and keeps your settings and data.
 
 ## 2. Set up your station
 
-Open `~/.config/phoenix-nest-mars/appliance.conf` and fill in three settings:
+A box with no call asks for one the first time it starts: appliance-core
+answers only the setup calls on its API port until the call is given. From
+the operator screen, or:
 
-- `station`: your station's call.
+    appliance-cli setup STA-B
+
+That sets the call, makes the station's keys and card, and prints the
+fingerprint to read to your keymaster. The call is kept in the data folder,
+never in the settings file, and can't be changed from the API once set. A
+`station` in the settings file still wins over it.
+
+On a box you set up yourself, open `~/.config/phoenix-nest-mars/appliance.conf`
+and fill in:
+
+- `station`: your station's call (leave it out to set it on first start).
 - `captures`: greybeard-ale's capture directory.
 - `tx-cmd`: the full path to gale-tx. The installer fills it in when gale-tx
   is on your PATH.
 
 Leave channel plans and frequencies out of this file. A frequency card is
-loaded with `appliance-cli import` (section 5b) and kept in its own file. Then check the file:
+loaded with `appliance-cli import` (section 5b), or entered by hand one
+channel at a time with no documents at all:
+
+    appliance-cli channels add P1 5000 --mode USB --use PRIMARY
+
+Either way it is kept in its own file, never shown back, and travels only
+sealed to a member's card in a startup bundle. Then check the file:
 
     appliance-core --config ~/.config/phoenix-nest-mars/appliance.conf --check
 

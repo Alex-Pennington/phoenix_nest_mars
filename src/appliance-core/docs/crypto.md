@@ -233,10 +233,12 @@ yet, or refused everyone, still sends and checks signed messages.
 
 If everything has to be rebuilt, leadership needs only the appliances:
 
-1. Each station's box makes its keypair the first time it starts.
+1. Each station's box asks for its call the first time it starts
+   (`setup_station`) and makes its keypair and card then.
 2. Whoever holds the startup data (roster, frequency card, schedules) loads it
    with `import` and hands out a startup bundle (next section), so nobody types
-   it in.
+   it in. With no documents at all, net control enters the channels by hand
+   (`channel_put`) and the bundle carries them like imported ones.
 3. Each member sends its card to the keymaster, over the air or on a stick.
    The keymaster sends its own card back.
 4. Each pair reads its fingerprints back by voice and runs `cards check`. The

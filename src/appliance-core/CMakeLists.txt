@@ -46,6 +46,7 @@ add_library(pna_core STATIC
   src/codress.cpp
   src/station.cpp
   src/bundle.cpp
+    src/first_start.cpp
   src/table.cpp
   src/channels.cpp
   src/mars_import.cpp
@@ -88,12 +89,14 @@ add_library(test_template_module MODULE sdk/cipher_template.c)
 set_target_properties(test_template_module PROPERTIES PREFIX "" C_VISIBILITY_PRESET hidden)
 target_include_directories(test_template_module PRIVATE sdk)
 
-foreach(t test_frame test_core test_greybeard test_acp127 test_received test_templates test_compose test_link test_ops test_sched test_config test_crypto test_codress test_station test_badday test_import test_s5066 test_appa test_appa_m110 test_cipher_slot test_cp_link test_acp127_ops test_groundzero)
+foreach(t test_frame test_core test_greybeard test_acp127 test_received test_templates test_compose test_link test_ops test_sched test_config test_crypto test_codress test_station test_badday test_import test_s5066 test_appa test_appa_m110 test_cipher_slot test_cp_link test_acp127_ops test_groundzero test_firststart)
   add_executable(${t} tests/${t}.cpp)
   target_link_libraries(${t} PRIVATE pna_core)
   target_compile_definitions(${t} PRIVATE PNA_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}" PNA_BUILD_DIR="${CMAKE_CURRENT_BINARY_DIR}")
   add_test(NAME ${t} COMMAND ${t})
 endforeach()
+# test_firststart runs the real service and CLI.
+add_dependencies(test_firststart appliance-core appliance-cli)
 
 # Installing: the programs, the example settings, the systemd user service
 # and the operator docs. packaging/install.sh does this for one user.

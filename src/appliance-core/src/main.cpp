@@ -7,6 +7,7 @@
 #include "api_server.h"
 #include "compose.h"
 #include "config.h"
+#include "first_start.h"
 #include "core.h"
 #include "station.h"
 #include "greybeard_modem.h"
@@ -21,6 +22,7 @@
 #include <csignal>
 #include <filesystem>
 #include <unistd.h>
+#include <atomic>
 #include <chrono>
 #include <cstdlib>
 #include <ctime>
@@ -37,7 +39,11 @@ using namespace pna;
 namespace {
 
 volatile std::sig_atomic_t g_stop = 0;
-void on_signal(int) { g_stop = 1; }
+std::atomic<bool> g_stop_flag{false};  // the same, for first-start setup (lock-free)
+void on_signal(int) {
+    g_stop = 1;
+    g_stop_flag.store(true);
+}
 
 std::mutex g_out_mu;
 void log_line(const std::string& station, const std::string& text) {
@@ -358,6 +364,15 @@ int main(int argc, char** argv) {
         return 2;
     }
 
+    // No call in the settings or on the command line: the one set at first
+    // start (first_start.h), if there is one.
+    bool first_start_needed = false;
+    if (pair.empty() && station.empty()) {
+        std::string saved;
+        if (first_start::saved_call(db_dir, saved)) station = saved;
+        else first_start_needed = true;
+    }
+
     if (check_only) {
         // Say what would run and what stands in the way, then stop.
         namespace fs = std::filesystem;
@@ -366,10 +381,15 @@ int main(int argc, char** argv) {
         if (!pair.empty()) {
             std::cout << "  practice pair  " << pair << " on the loopback modem, no radio\n"
                       << "  API            127.0.0.1:" << api_port << " and " << api_port + 1 << "\n";
-        } else if (!station.empty()) {
-            if (!valid_station(station) || is_broadcast(station))
+        } else if (!station.empty() || first_start_needed) {
+            if (first_start_needed) {
+                std::cout << "  station        (not set: the first start asks for it on the API)\n";
+                notes.push_back("no station call yet: appliance-core waits on 127.0.0.1:" + std::to_string(api_port) +
+                                " for setup_station (appliance-cli setup CALL), then starts");
+            } else if (!valid_station(station) || is_broadcast(station)) {
                 problems.push_back("station \"" + station + "\": use A-Z, digits and -, at most 16, not ALL");
-            std::cout << "  station        " << station << "\n";
+            }
+            if (!first_start_needed) std::cout << "  station        " << station << "\n";
             if (link_kind == "s5066") {
                 std::cout << "  link           STANAG 5066 node at 127.0.0.1:" << s5066.port << ", SAP "
                           << int(s5066.sap) << "\n";
@@ -431,6 +451,22 @@ int main(int argc, char** argv) {
     std::signal(SIGTERM, on_signal);
 
     std::vector<Station> stations;
+
+    if (first_start_needed) {
+        // First start: answer setup calls on the API port until the member
+        // gives this box its call. Nothing else runs until then.
+        std::error_code ec;
+        std::filesystem::create_directories(db_dir, ec);
+        log_line("SETUP", "no station call yet: waiting for setup_station on 127.0.0.1:" + std::to_string(api_port));
+        bool opened = false;
+        station = first_start::serve(db_dir, api_port, &g_stop_flag, &opened);
+        if (!opened) {
+            std::cerr << "cannot open API port " << api_port << " for first-start setup\n";
+            return 1;
+        }
+        if (station.empty()) return 0;  // stopped before setup
+        log_line(station, "call set at first start; starting the station");
+    }
 
     try {
         std::filesystem::create_directories(db_dir);

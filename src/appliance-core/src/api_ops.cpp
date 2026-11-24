@@ -6,6 +6,7 @@
 #include "json.h"
 #include "ops.h"
 #include "channels.h"
+#include "compose.h"
 #include "mars_import.h"
 #include "table.h"
 
@@ -147,7 +148,8 @@ std::optional<std::string> handle_ops(Core& core, const std::string& cmd, std::m
                                   "book_resolve", "net_open", "net_checkin", "net_checkout", "net_close", "net_status",
                                   "net_list", "duty_on", "duty_off", "duty_status", "log_add", "station_log",
                                   "report_monthly", "sched_put", "sched_remove", "sched_list", "sched_next",
-                                  "sched_open", "net_callup", "mars_import", "channels_list", "channel_remove"};
+                                  "sched_open", "net_callup", "mars_import", "channels_list", "channel_remove",
+                                  "channel_put"};
     bool ours = false;
     for (auto c : kCmds)
         if (cmd == c) ours = true;
@@ -241,6 +243,52 @@ std::optional<std::string> handle_ops(Core& core, const std::string& cmd, std::m
         for (auto& c : ops->channels().list())
             w.begin_object().field("name", c.name).field("mode", c.mode).field("use", c.use).field("source", c.source).end_object();
         w.end_array().end_object();
+        return w.str();
+    }
+    if (cmd == "channel_put") {
+        // One channel entered by hand: a region with no documents makes its
+        // first frequency card this way. The frequency is kept in the plan
+        // like an imported one and never comes back in a reply or the log.
+        const bool has_use = req.count("use") > 0;
+        Channel c;
+        c.name = req["name"];
+        for (auto& ch : c.name) ch = static_cast<char>(std::toupper(static_cast<unsigned char>(ch)));
+        std::string unit = req["unit"];
+        for (auto& ch : unit) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+        if (!unit.empty() && unit != "khz" && unit != "mhz" && unit != "hz")
+            return err_reply("unit: khz, mhz or hz (or leave it out: 7345.5 reads as kHz)");
+        if (req["frequency"].empty()) return err_reply("give the channel's frequency (frequency=7345.5, in kHz)");
+        c.hz = parse_frequency(req["frequency"], unit);
+        if (c.hz <= 0) return err_reply("the frequency can't be read: give it in kHz (7345.5), MHz or Hz");
+        c.mode = req["mode"];
+        for (auto& ch : c.mode) ch = static_cast<char>(std::toupper(static_cast<unsigned char>(ch)));
+        c.use = req["use"];
+        for (auto& ch : c.use) ch = static_cast<char>(std::toupper(static_cast<unsigned char>(ch)));
+        if (compose::looks_like_frequency(c.use)) c.use.clear();
+        c.source = "entered by hand";
+        auto old = ops->channels().get(c.name);
+        if (old) {
+            if (c.mode.empty()) c.mode = old->mode;
+            if (!has_use) c.use = old->use;
+        }
+        bool same = old && old->hz == c.hz && old->mode == c.mode && old->use == c.use;
+        if (!same && !ops->channels().put(c, &err)) {
+            c.hz = 0;
+            return err_reply(err);
+        }
+        auto now = ops->channels().get(c.name);
+        c.hz = 0;
+        std::string result = same ? "same" : old ? "replaced" : "added";
+        if (!same) core.note("channel " + c.name + " " + result + " by hand");
+        JsonWriter w;
+        w.begin_object()
+            .field("ok", true)
+            .field("name", now ? now->name : c.name)
+            .field("result", result)
+            .field("frequency_changed", old && !same && old->hz != (now ? now->hz : 0))
+            .field("mode", now ? now->mode : c.mode)
+            .field("use", now ? now->use : c.use)
+            .end_object();
         return w.str();
     }
     if (cmd == "channel_remove")

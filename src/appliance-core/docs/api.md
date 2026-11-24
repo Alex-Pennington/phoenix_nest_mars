@@ -23,6 +23,18 @@ booleans; multi-line values are strings with `\n`.
 `parse_traffic` stay as they were for tools that build the envelope
 themselves.
 
+## First start: setup_status, setup_station
+
+A box with no call (none in the settings, none set before) runs in setup
+mode: the API port answers only these two calls until the call is given.
+
+- `setup_status`: `setup_needed` (true or false), `call` once set, and `next`.
+- `setup_station {call}`: sets the call, makes the station's keys and card,
+  and starts the station on the same port. Returns `call`, `keys_made`,
+  `fingerprint` and `card` (the card text to send). Refused once a call is set.
+
+gale-term shows this as its first-run screen when `setup_needed` is true.
+
 ## status
 
 `{"cmd":"status"}` →
@@ -362,6 +374,12 @@ available to copy.
   imported, and frequencies go only to the channel plan's file.
 - `channels_list`: the channel plan as `channels`, each with `name` (the
   designator), `mode`, `use` and `source`. Never a frequency.
+- `channel_put {name, frequency, unit?, mode?, use?}`: enters one channel by
+  hand, for a region with no documents. `frequency` reads as kHz (5000),
+  unless `unit` is `khz`, `mhz` or `hz`. A mode or use left out keeps the old
+  one. Returns `name`, `result` (`added`, `replaced` or `same`),
+  `frequency_changed`, `mode` and `use`. The frequency is stored like an
+  imported one and never comes back in a reply or the log.
 - `channel_remove {name}`: takes a channel out of the plan.
 - `sched_put` also takes `channel`, a designator, and `sched_list` returns it.
   A frequency there is refused.

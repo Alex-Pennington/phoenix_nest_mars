@@ -1,6 +1,8 @@
 // appliance-cli: talk to a running appliance-core from the shell.
 //
 //   appliance-cli [--port 4100] status
+//   appliance-cli [--port 4100] setup [CALL]    first start: what the box needs, or give it its call
+//                                 (it then makes its station keys and card, and the station starts)
 //   appliance-cli [--port 4100] send --to B [--prec R] "message text"
 //   appliance-cli [--port 4100] list [N]
 //   appliance-cli [--port 4100] get ID
@@ -35,6 +37,9 @@
 //   appliance-cli [--port 4100] import FILE [--kind roster|book|freq|schedule]
 //                                 a roster, address book, frequency card or net schedule (.xlsx or text)
 //   appliance-cli [--port 4100] channels         the channel plan, by designator (never frequencies)
+//   appliance-cli [--port 4100] channels add NAME FREQ [--mode USB] [--use "PRIMARY"] [--unit khz|mhz|hz]
+//                                 enter one channel by hand (FREQ in kHz unless --unit says)
+//   appliance-cli [--port 4100] channels remove NAME
 //
 // "api" sends any call in docs/api.md: appliance-cli api net_callup who=all.
 // A value with spaces goes in quotes; \n in a value is a new line.
@@ -90,7 +95,9 @@ int main(int argc, char** argv) {
                      "                    | keymaster refuse CALL | bundle make [FILE] [--label NET] [--for CALL]\n"
                      "                    | bundle send CALL[,CALL...] [FILE] | bundle load FILE|ID [--yes]\n"
                      "                    | cipher | cipher install FOLDER | cipher remove\n"
-                     "                    | import FILE [--kind roster|book|freq|schedule] | channels\n";
+                     "                    | import FILE [--kind roster|book|freq|schedule] | channels\n"
+                     "                    | channels add NAME FREQ [--mode M] [--use TEXT] [--unit khz|mhz|hz]\n"
+                     "                    | channels remove NAME | setup [CALL]\n";
         return 2;
     }
     std::string cmd = argv[i++];
@@ -320,9 +327,31 @@ int main(int argc, char** argv) {
             .field("data", base64(ss.str()))
             .field("kind", kind)
             .field("source", "file " + name);
-    } else if (cmd == "channels") {
+    } else if (cmd == "setup") {
         w = JsonWriter();
-        w.begin_object().field("cmd", "channels_list");
+        if (i < argc) w.begin_object().field("cmd", "setup_station").field("call", std::string(argv[i]));
+        else w.begin_object().field("cmd", "setup_status");
+    } else if (cmd == "channels") {
+        std::string sub = i < argc ? argv[i++] : "";
+        w = JsonWriter();
+        if (sub.empty() || sub == "list") {
+            w.begin_object().field("cmd", "channels_list");
+        } else if (sub == "add" && i + 1 < argc) {
+            w.begin_object().field("cmd", "channel_put").field("name", std::string(argv[i])).field(
+                "frequency", std::string(argv[i + 1]));
+            for (i += 2; i + 1 < argc; i += 2) {
+                std::string a = argv[i];
+                if (a == "--mode") w.field("mode", std::string(argv[i + 1]));
+                else if (a == "--use") w.field("use", std::string(argv[i + 1]));
+                else if (a == "--unit") w.field("unit", std::string(argv[i + 1]));
+            }
+        } else if (sub == "remove" && i < argc) {
+            w.begin_object().field("cmd", "channel_remove").field("name", std::string(argv[i]));
+        } else {
+            std::cerr << "channels | channels add NAME FREQ [--mode M] [--use TEXT] [--unit khz|mhz|hz]"
+                         " | channels remove NAME\n";
+            return 2;
+        }
     } else if (cmd == "rally") {
         w = JsonWriter();
         w.begin_object().field("cmd", "rally_status");
