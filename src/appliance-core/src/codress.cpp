@@ -1,6 +1,7 @@
 // ACP 127 codress. See codress.h and docs/crypto.md.
 #include "codress.h"
 
+#include "cipher_slot.h"
 #include "crypto.h"
 #include "digest.h"
 
@@ -12,11 +13,7 @@ namespace codress {
 
 namespace {
 
-constexpr size_t kNonce = 12;
-constexpr size_t kTag = 16;
 constexpr size_t kGroupBytes = 5;
-const char* kInfo = "PNA CODRESS 1 AES-256-GCM ";
-const char* kAad = "PNA CODRESS 1|";
 
 bool fail(std::string* error, const std::string& why) {
     if (error) *error = why;
@@ -108,14 +105,6 @@ size_t find_fl5(const Lines& L) {
     return std::string::npos;
 }
 
-std::string aad_for(const std::string& indicator, const std::string& dtg) {
-    return std::string(kAad) + indicator + "|" + dtg;
-}
-
-std::string message_key(const std::string& key, const std::string& nonce, const std::string& indicator) {
-    return crypto::hkdf_sha256(key, nonce, std::string(kInfo) + indicator, 32);
-}
-
 const char* kDigits36 = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
 
 std::string group_of(const unsigned char* b) {
@@ -173,11 +162,11 @@ std::string indicator_of(const std::string& text) {
     return w[n];
 }
 
-bool encipher(const std::string& plaindress, const std::string& indicator, const std::string& key, std::string& out,
-              std::string* error) {
+bool encipher(const cipher::Slot& slot, const std::string& plaindress, const std::string& indicator,
+              const std::string& key, std::string& out, std::string* error) {
     out.clear();
+    if (!slot.usable()) return fail(error, slot.why_unusable());
     if (!is_indicator(indicator)) return fail(error, "bad key indicator");
-    if (key.size() != 32) return fail(error, "the key is not 32 bytes");
     Lines L = split(plaindress);
     size_t i5 = find_fl5(L);
     if (i5 == std::string::npos) return fail(error, "no date-time group line in the message");
@@ -194,29 +183,48 @@ bool encipher(const std::string& plaindress, const std::string& indicator, const
     while (last > i5 + 1 && L.v[last - 1].find_first_not_of(' ') == std::string::npos) --last;
     std::string plain;
     for (size_t i = i5 + 1; i < last; ++i) plain += L.v[i] + (i + 1 < last ? "\n" : "");
-    // Pad (0x80 then zeros) so nonce + ciphertext + tag fill whole groups.
-    plain += static_cast<char>(0x80);
-    while ((kNonce + plain.size() + kTag) % kGroupBytes) plain += '\0';
 
-    std::string nonce = crypto::random_bytes(kNonce);
-    std::string mk = message_key(key, nonce, indicator);
-    std::string sealed = crypto::aes256gcm_seal(mk, nonce, aad_for(indicator, dtg), plain);
-    crypto::wipe(mk);
+    std::string air;
+    bool ok = slot.encrypt(indicator, key, dtg, plain, air, error);
     crypto::wipe(plain);
-    if (sealed.empty()) return fail(error, "the cipher failed");
-    std::string air = nonce + sealed;
-    size_t ngroups = air.size() / kGroupBytes;
+    if (!ok) return false;
+
+    std::string body;
+    size_t ngroups = 0;
+    if (slot.info().text) {
+        // The module's own text: its lines as they are, the count in words.
+        std::string cur;
+        for (char c : air + "\n") {
+            if (c == '\n') {
+                auto w = words(cur);
+                if (!w.empty()) {
+                    body += join(w, 0, w.size()) + L.eol;
+                    ngroups += w.size();
+                }
+                cur.clear();
+            } else {
+                cur += c;
+            }
+        }
+    } else {
+        // Pad (0x80 then zeros) to whole groups.
+        air += static_cast<char>(0x80);
+        while (air.size() % kGroupBytes) air += '\0';
+        ngroups = air.size() / kGroupBytes;
+        for (size_t g = 0; g < ngroups; ++g) {
+            body += group_of(reinterpret_cast<const unsigned char*>(air.data()) + g * kGroupBytes);
+            bool line_end = (g + 1) % kGroupsPerLine == 0 || g + 1 == ngroups;
+            body += line_end ? L.eol : " ";
+        }
+    }
+    if (ngroups == 0) return fail(error, "the cipher gave no groups");
 
     std::string o;
     for (size_t i = 0; i < i5; ++i) o += L.v[i] + L.eol;
     o += dtg + " " + indicator + L.eol;
     o += "GR " + std::to_string(ngroups) + L.eol;
     o += "BT" + L.eol;
-    for (size_t g = 0; g < ngroups; ++g) {
-        o += group_of(reinterpret_cast<const unsigned char*>(air.data()) + g * kGroupBytes);
-        bool line_end = (g + 1) % kGroupsPerLine == 0 || g + 1 == ngroups;
-        o += line_end ? L.eol : " ";
-    }
+    o += body;
     o += "BT";
     // The same ending as the plaindress: its blank lines, then NNNN.
     o += L.eol == "\r\r\n" ? "\r\r\n\n\n\n\n\n\n\n" : L.eol;
@@ -225,9 +233,15 @@ bool encipher(const std::string& plaindress, const std::string& indicator, const
     return true;
 }
 
-bool decipher(const std::string& codress, const std::string& key, std::string& plaindress, std::string* error) {
+bool encipher(const std::string& plaindress, const std::string& indicator, const std::string& key, std::string& out,
+              std::string* error) {
+    return encipher(*cipher::Slot::builtin(), plaindress, indicator, key, out, error);
+}
+
+bool decipher(const cipher::Slot& slot, const std::string& codress, const std::string& key, std::string& plaindress,
+              std::string* error) {
     plaindress.clear();
-    if (key.size() != 32) return fail(error, "the key is not 32 bytes");
+    if (!slot.usable()) return fail(error, slot.why_unusable());
     Lines L = split(codress);
     size_t i5 = find_fl5(L);
     if (i5 == std::string::npos || i5 + 2 >= L.v.size()) return fail(error, "not a codress message");
@@ -244,12 +258,18 @@ bool decipher(const std::string& codress, const std::string& key, std::string& p
     size_t i = i5 + 2;
     while (i < L.v.size() && L.v[i].find_first_not_of(' ') == std::string::npos) ++i;
     if (i >= L.v.size() || !is_bt(L.v[i])) return fail(error, "no BT before the groups");
+    const bool text_form = slot.info().text;
     std::string air;
     size_t have = 0;
     for (++i; i < L.v.size() && !is_bt(L.v[i]); ++i) {
         auto w = words(L.v[i]);
         if (w.empty()) continue;
         if (w[0] == "PAGE") continue;  // page heading of a long message
+        if (text_form) {
+            air += join(w, 0, w.size()) + "\n";
+            have += w.size();
+            continue;
+        }
         for (auto& g : w) {
             ++have;
             if (!bytes_of(g, air)) {
@@ -261,20 +281,21 @@ bool decipher(const std::string& codress, const std::string& key, std::string& p
     if (i >= L.v.size()) return fail(error, "no BT after the groups");
     if (have != want)
         return fail(error, "the count says GR " + std::to_string(want) + " but " + std::to_string(have) + " groups came");
-    if (air.size() < kNonce + kTag + 1) return fail(error, "too few groups");
-    std::string nonce = air.substr(0, kNonce);
-    std::string sealed = air.substr(kNonce);
-    std::string mk = message_key(key, nonce, indicator);
-    std::string plain;
-    bool ok = crypto::aes256gcm_open(mk, nonce, aad_for(indicator, dtg), sealed, plain);
-    crypto::wipe(mk);
-    if (!ok) return fail(error, "the groups do not check with key " + indicator + ": damaged in transit, changed, or a different key");
-    while (!plain.empty() && plain.back() == '\0') plain.pop_back();
-    if (plain.empty() || static_cast<unsigned char>(plain.back()) != 0x80) {
-        crypto::wipe(plain);
-        return fail(error, "bad padding");
+    if (text_form) {
+        if (!air.empty()) air.pop_back();
+    } else {
+        while (!air.empty() && air.back() == '\0') air.pop_back();
+        if (air.empty() || static_cast<unsigned char>(air.back()) != 0x80) {
+            crypto::wipe(air);
+            return fail(error, "the groups do not end the way they should: damaged in transit, or from another cipher");
+        }
+        air.pop_back();
     }
-    plain.pop_back();
+    if (air.empty()) return fail(error, "too few groups");
+    std::string plain;
+    bool ok = slot.decrypt(indicator, key, dtg, air, plain, error);
+    crypto::wipe(air);
+    if (!ok) return false;
 
     std::string o;
     for (size_t k = 0; k < i5; ++k) o += L.v[k] + L.eol;
@@ -295,6 +316,10 @@ bool decipher(const std::string& codress, const std::string& key, std::string& p
     crypto::wipe(cur);
     plaindress = o;
     return true;
+}
+
+bool decipher(const std::string& codress, const std::string& key, std::string& plaindress, std::string* error) {
+    return decipher(*cipher::Slot::builtin(), codress, key, plaindress, error);
 }
 
 }  // namespace codress

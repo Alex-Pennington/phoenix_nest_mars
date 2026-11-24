@@ -70,6 +70,11 @@ the outer digest and NNNN.
   bytes to every message, about 6 groups.
 - With no key for today, codress isn't offered. A message for a key we don't
   hold is stored as received and listed with the reason.
+- All of this is our own module, `pna-aes`, in the **cipher slot**. A net can
+  run another module instead, handed out in the member's packet:
+  docs/cipher-slot.md is the spec and docs/cipher-adapter-guide.md the guide.
+  The layout above stays the appliance's; only the groups between the BT
+  lines come from the module.
 
 ## Key tapes
 
@@ -111,6 +116,10 @@ loads the tape with `appliance-cli keys import FILE`.
   KEY_CKR is the key's indicator, KEYNAME adds the tape and the month and year
   it starts, INTRVAL is Daily, Weekly, Monthly or Every N hours, and CREATED is
   when the tape was made (UTC). They are not secrets.
+
+- A tape for a cipher module other than `pna-aes` is version 2: a
+  `cipher NAME` line after the head, and keys of the module's size. Version 1
+  tapes are `pna-aes`. A tape for a module not in the slot is refused.
 
 The tape and its cipher are ours; only the file's framing and labels follow
 MSC's. The December 2025 Intel HEX loader idea is not used.
@@ -248,8 +257,12 @@ the clear:
   (KEY_CKR, KEYNAME, KEYDESC, KEYPASS, then a rule of `=`), so a member reads
   it where they expect. It holds no passphrase: KEYPASS says the tape opens
   only on this member's box, and gives the check to read by voice.
-- **CHECK** is a 4-character check value for the first key (from SHA-256 of
-  the key, not the key). Read it to the keymaster by voice to confirm the tape
+- **CIPHER**, when the net uses a module other than `pna-aes`, names it and
+  its set hash, and two step lines say to load the whole packet folder. The
+  packet (`pna-keymaster packet`) holds the handout and the module; see
+  docs/cipher-slot.md.
+- **CHECK** is a check value for the first key: 4 characters from SHA-256 of
+  the key with `pna-aes`, or whatever the net's module gives. Read it to the keymaster by voice to confirm the tape
   loaded. `keys list` shows the check for every key.
 - **The sealed tape** opens only on the box it was sealed to. A member with no
   card at the keymaster yet gets a handout with no tape, and steps that say to

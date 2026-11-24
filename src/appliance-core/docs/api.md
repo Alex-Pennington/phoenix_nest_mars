@@ -386,8 +386,9 @@ memory after use and never written to the log.
   pasted text) and loads it, if its sender is named a keymaster here. Returns
   the same as `key_import`, plus `from` (the keymaster) and `from_checked`.
 - `keys_list` also gives each key's `check`, to read by voice.
-- `keys_list`: `keys`, each with `indicator`, `net`, `tape`, `from`, `until`
-  and `state`.
+- `keys_list`: `keys`, each with `indicator`, `net`, `tape`, `from`, `until`,
+  `state`, `cipher` (the module the key is for) and `usable` (false when that
+  module isn't in the slot).
 - `key_zeroize {which}`: wipes one key (`QXR01`) or a whole tape (`QXR`).
   Returns `zeroized`, the count.
 
@@ -417,7 +418,11 @@ memory after use and never written to the log.
   `keymaster=Y` it also names the station a keymaster.
 - `card_keymaster {station, keymaster}`: names a checked card a keymaster
   (`keymaster=N` takes it back). Only a keymaster's sealed tapes open here.
-- `handout_import {text | id, replace}`: loads a member handout, new or stale.
+- `handout_import {text | id | packet, replace}`: loads a member handout, new or stale.
+  `packet` is the path of a packet folder (`handout.txt`, and `cipher/` when
+  the net uses another cipher module); the module is installed only when its
+  set hash matches the handout's signed `CIPHER` line. Also returns `cipher`
+  (the module the handout names, when it names one) and `cipher_installed`.
   It must be for this station and signed by its issuer. Its cards are held as
   checked and its keymasters named; a different card for a station already
   held needs `replace=Y`. Returns `net`, `by`, `issued`, `cards`, `stale`,
@@ -439,3 +444,17 @@ memory after use and never written to the log.
   (docs/crypto.md).
 - `tape_seal {text, to}`: seals a tape made with `pna-keymaster` to one
   station. Returns the same shape.
+
+### The cipher slot
+
+docs/cipher-slot.md is the spec.
+
+- `cipher_status`: what is in the slot. `usable`, `name`, `version`,
+  `builtin`, `output` (`bytes` or `text`), `key_bytes`, `source` and
+  `set_hash`; `why` when the slot is empty (an installed module changed or
+  won't load, so codress is off).
+- `cipher_install {path}`: installs the module in a folder (`module.so` and
+  `lib/`, or a packet folder holding `cipher/`). It must pass every slot
+  check. Returns the same as `cipher_status`.
+- `cipher_remove`: takes the installed module out; `pna-aes` is back in the
+  slot. Keys for the removed module stay held but aren't used.

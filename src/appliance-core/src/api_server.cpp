@@ -1,6 +1,7 @@
 #include "api_server.h"
 
 #include "api_ops.h"
+#include "cipher_slot.h"
 
 #include "acp126.h"
 #include "acp127.h"
@@ -24,6 +25,8 @@
 #include <ctime>
 #include <map>
 #include <set>
+#include <filesystem>
+#include <fstream>
 #include <sstream>
 
 namespace pna {
@@ -397,7 +400,7 @@ std::string compose_send(Core& core, std::map<std::string, std::string>& req) {
         std::string e, id;
         if (!codress_key.empty()) {
             std::string out;
-            if (!codress::encipher(r.message, r.codress_key, codress_key, out, &e)) {
+            if (!codress::encipher(*core.cipher(), r.message, r.codress_key, codress_key, out, &e)) {
                 refused.push_back(t + ": " + e);
                 err = e;
                 continue;
@@ -687,12 +690,43 @@ std::vector<std::string> call_list(const std::string& who) {
     return named;
 }
 
+// The check value of a tape's first key, from the cipher in the slot when
+// the tape is for it.
+std::string first_key_check(Core& core, const keys::Tape& t) {
+    if (t.keys.empty()) return "";
+    auto slot = core.cipher();
+    std::string c;
+    if (slot->usable() && keys::cipher_id(slot->info().name) == t.cipher &&
+        slot->key_check(t.keys.front().indicator, t.keys.front().secret, c, nullptr))
+        return c;
+    return t.cipher.empty() ? keys::key_check(t.keys.front().indicator, t.keys.front().secret) : "----";
+}
+
+std::string read_whole(const std::string& path, bool* ok) {
+    std::ifstream f(path, std::ios::binary);
+    *ok = static_cast<bool>(f);
+    std::ostringstream ss;
+    if (f) ss << f.rdbuf();
+    return ss.str();
+}
+
 // handout_import: a member handout (station.h), from a file or a stored
 // message. Its cards are held as checked (the handout came by hand), its
 // keymasters are named, and its sealed tape is opened when it is sealed to
 // this station's present keys. A stale handout still loads its cards.
+//
+// packet: a handout packet folder (docs/cipher-slot.md): handout.txt, and,
+// for a net that uses another cipher, cipher/ with its module. The module is
+// installed only when its SHA-256 matches the CIPHER line the keymaster
+// signed into the handout, and it passes the slot's checks.
 std::string handout_import(Core& core, const station::Identity& me, std::map<std::string, std::string>& req) {
     std::string text = req["text"], err;
+    const std::string packet = req["packet"];
+    if (!packet.empty()) {
+        bool ok = false;
+        text = read_whole(packet + "/handout.txt", &ok);
+        if (!ok) return error_reply("no handout.txt in the packet folder " + packet);
+    }
     if (!req["id"].empty()) {
         auto m = core.get(req["id"]);
         if (!m) return error_reply("no message with that id");
@@ -702,6 +736,38 @@ std::string handout_import(Core& core, const station::Identity& me, std::map<std
     if (!station::parse_handout(text, h, &err)) return error_reply("handout not loaded: " + err);
     if (h.for_station != me.station)
         return error_reply("this handout is for " + h.for_station + ", not this station");
+    // The net's cipher, when it isn't our own.
+    std::string cipher_next;
+    bool cipher_installed = false;
+    if (!h.cipher.empty()) {
+        auto cur = core.cipher();
+        bool have = cur->usable() && cur->info().name == h.cipher && cur->info().set_hash == h.cipher_hash;
+        namespace fs = std::filesystem;
+        std::error_code ec;
+        if (have) {
+        } else if (packet.empty() || !fs::exists(fs::path(packet) / "cipher" / "module.so", ec)) {
+            cipher_next = "this net uses the " + h.cipher +
+                          " cipher: load the whole packet folder (handout import FOLDER), which carries its module";
+        } else if (core.cipher_dir().empty()) {
+            cipher_next = "this station has no place to keep a cipher module";
+        } else {
+            std::string e;
+            auto slot = cipher::install((fs::path(packet) / "cipher").string(), core.cipher_dir(), h.cipher_hash, &e);
+            if (!slot) {
+                cipher_next = "the net's cipher module was not installed: " + e;
+            } else if (slot->info().name != h.cipher) {
+                cipher::remove_installed(core.cipher_dir(), nullptr);
+                core.set_cipher(cipher::Slot::builtin());
+                cipher_next = "the packet's cipher module calls itself " + slot->info().name + ", but the handout names " +
+                              h.cipher + ": not installed";
+            } else {
+                core.set_cipher(slot);
+                cipher_installed = true;
+                core.note("cipher module " + h.cipher + " " + slot->info().version + " installed from " + h.by +
+                          "'s handout packet");
+            }
+        }
+    }
     std::string source = "handout from " + h.by + " issued " + keys::time_text(h.issued);
     std::vector<std::string> refused;
     int loaded = 0;
@@ -730,10 +796,14 @@ std::string handout_import(Core& core, const station::Identity& me, std::map<std
     w.begin_array("keymasters");
     for (auto& k : h.keymasters) w.field("", k.first);
     w.end_array();
+    w.field("cipher", h.cipher.empty() ? std::string(cipher::kBuiltinName) : h.cipher)
+        .field("cipher_installed", cipher_installed);
     bool opened = false;
     std::string why;
     keys::ImportResult r;
-    if (h.sealed.empty()) {
+    if (!cipher_next.empty()) {
+        why = cipher_next;
+    } else if (h.sealed.empty()) {
         why = "this handout has no tape: send your card to a keymaster (card_send) and read the fingerprint by voice";
     } else if (!core.keyring()) {
         why = "this station has no keyring";
@@ -975,10 +1045,13 @@ std::optional<std::string> station_cmd(Core& core, const std::string& cmd, std::
             return error_reply("days and period_hours must be numbers");
         }
         keys::Tape t;
-        if (!keys::make_tape(net, start, days, period, now, t, &err)) return error_reply(err);
+        auto slot = core.cipher();
+        if (!slot->usable()) return error_reply(slot->why_unusable());
+        if (!keys::make_tape(net, start, days, period, now, t, &err, slot->info().name, slot->info().key_bytes))
+            return error_reply(err);
         tape_text = keys::format_tape(t);
         first_key = t.keys.front().indicator;
-        first_check = keys::key_check(first_key, t.keys.front().secret);
+        first_check = first_key_check(core, t);
         valid_from = t.keys.front().from;
         valid_until = t.keys.back().until;
         for (auto& k : t.keys) crypto::wipe(k.secret);
@@ -1011,7 +1084,7 @@ std::optional<std::string> station_cmd(Core& core, const std::string& cmd, std::
         if (!keys::parse_tape(tape_text, t, &err)) return error_reply("not a key tape: " + err);
         if (!t.keys.empty()) {
             first_key = t.keys.front().indicator;
-            first_check = keys::key_check(first_key, t.keys.front().secret);
+            first_check = first_key_check(core, t);
             valid_from = t.keys.front().from;
             valid_until = t.keys.back().until;
         }
@@ -1060,6 +1133,13 @@ std::optional<std::string> station_cmd(Core& core, const std::string& cmd, std::
         base.valid_until = valid_until;
         base.first_key = first_key;
         base.first_check = first_check;
+        {
+            auto slot = core.cipher();
+            if (slot->usable() && !slot->is_builtin()) {
+                base.cipher = slot->info().name;
+                base.cipher_hash = slot->info().set_hash;
+            }
+        }
         station::Card mine = station::card_of(*me);
         base.keymasters.push_back({me->station, station::fingerprint(mine)});
         base.cards.push_back(station::format_card(*me));
@@ -1309,6 +1389,45 @@ std::string ApiServer::handle(Core& core, const std::string& line) {
     }
 
     // Codress keys (keys.h). Key bytes never leave the core.
+    if (cmd == "cipher_status" || cmd == "cipher_install" || cmd == "cipher_remove") {
+        // The cipher slot (docs/cipher-slot.md).
+        std::string err;
+        if (cmd == "cipher_install") {
+            // A folder holding module.so (and lib/), or a packet folder with cipher/ in it.
+            namespace fs = std::filesystem;
+            std::string from = req["path"];
+            std::error_code ec;
+            if (from.empty()) return error_reply("give the folder that holds module.so");
+            if (!fs::exists(fs::path(from) / "module.so", ec) && fs::exists(fs::path(from) / "cipher" / "module.so", ec))
+                from = (fs::path(from) / "cipher").string();
+            if (core.cipher_dir().empty()) return error_reply("this station has no place to keep a cipher module");
+            auto slot = cipher::install(from, core.cipher_dir(), "", &err);
+            if (!slot) return error_reply("not installed: " + err);
+            core.set_cipher(slot);
+            core.note("cipher module " + slot->info().name + " " + slot->info().version + " installed by the operator");
+        } else if (cmd == "cipher_remove") {
+            if (core.cipher_dir().empty() || !cipher::remove_installed(core.cipher_dir(), &err))
+                return error_reply(err.empty() ? "no installed cipher module" : err);
+            core.set_cipher(cipher::Slot::builtin());
+            core.note("cipher module removed: the built-in pna-aes is in the slot");
+        }
+        auto slot = core.cipher();
+        const auto& in = slot->info();
+        JsonWriter w;
+        w.begin_object()
+            .field("ok", true)
+            .field("usable", slot->usable())
+            .field("name", in.name)
+            .field("version", in.version)
+            .field("builtin", slot->is_builtin())
+            .field("output", in.text ? "text" : "bytes")
+            .field("key_bytes", static_cast<long long>(in.key_bytes))
+            .field("source", in.source)
+            .field("set_hash", in.set_hash);
+        if (!slot->usable()) w.field("why", slot->why_unusable());
+        w.end_object();
+        return w.str();
+    }
     if (cmd == "key_import" || cmd == "keys_list" || cmd == "key_zeroize" || cmd == "key_open") {
         keys::Keyring* kr = core.keyring();
         if (!kr) return error_reply("this station has no keyring");
@@ -1388,6 +1507,8 @@ std::string ApiServer::handle(Core& core, const std::string& line) {
                 .field("until", keys::time_text(k.until))
                 .field("state", k.state)
                 .field("check", k.check)
+                .field("cipher", k.cipher)
+                .field("usable", k.usable)
                 .end_object();
         w.end_array().end_object();
         return w.str();
@@ -1399,7 +1520,7 @@ std::string ApiServer::handle(Core& core, const std::string& line) {
 
     return error_reply(
         "unknown cmd; use status, send, list, get, queue, log, send_acp127, send_acp126, send_chat, parse_acp127, "
-        "parse_traffic, compose_templates, compose_form, compose_check, compose_send, compose_advise, key_import, keys_list, key_zeroize, key_open, station_card, station_backup, station_restore, card_import, cards_list, card_check, card_send, net_tape, tape_seal, or the book's calls (docs/api.md): book_*, net_*, sched_*, duty_*, log_add, station_log, report_monthly");
+        "parse_traffic, compose_templates, compose_form, compose_check, compose_send, compose_advise, key_import, keys_list, key_zeroize, key_open, cipher_status, cipher_install, cipher_remove, station_card, station_backup, station_restore, card_import, cards_list, card_check, card_send, net_tape, tape_seal, or the book's calls (docs/api.md): book_*, net_*, sched_*, duty_*, log_add, station_log, report_monthly");
 }
 
 }  // namespace pna

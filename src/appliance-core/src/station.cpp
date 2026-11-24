@@ -609,6 +609,7 @@ std::string format_handout(const Handout& h, const Identity& issuer) {
             b.push_back(std::string(43, '='));
         }
     }
+    if (!h.cipher.empty()) b.push_back("CIPHER " + upper(h.cipher) + " " + upper(h.cipher_hash));
     for (auto& k : h.keymasters) b.push_back("KEYMASTER " + k.first + " " + k.second);
     for (auto& m : h.members) b.push_back("MEMBER " + m.first + " " + m.second);
     std::vector<std::string> steps;
@@ -623,6 +624,9 @@ std::string format_handout(const Handout& h, const Identity& issuer) {
                  "FINGERPRINT BY VOICE. THE KEYMASTER SENDS YOUR KEY TAPE.",
                  "MAKE A STATION BACKUP. KEEP IT OFF THE BOX WITH THIS HANDOUT."};
     }
+    if (!h.cipher.empty())
+        steps.insert(steps.begin(), {"THIS NET USES THE " + upper(h.cipher) + " CIPHER. LOAD THE WHOLE PACKET FOLDER,",
+                                     "NOT THIS PAGE ALONE: ITS CIPHER FOLDER HOLDS THE MODULE."});
     steps.push_back("BAD DAY: RESTORE YOUR BACKUP (OR START FRESH), LOAD THIS");
     steps.push_back("HANDOUT AGAIN, THEN ASK ANY KEYMASTER ABOVE FOR A NEW TAPE.");
     steps.push_back("STALE IS FINE: THE CARDS ABOVE STAY GOOD AFTER THE TAPE ENDS.");
@@ -683,6 +687,11 @@ bool parse_handout(const std::string& text, Handout& out, std::string* error) {
         } else if (w[0] == "CHECK" && w.size() == 3) {
             out.first_key = w[1];
             out.first_check = w[2];
+        } else if (w[0] == "CIPHER" && w.size() == 3) {
+            out.cipher = w[1];
+            out.cipher_hash = w[2];
+            for (auto& c : out.cipher) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+            for (auto& c : out.cipher_hash) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
         } else if ((w[0] == "KEYMASTER" || w[0] == "MEMBER") && w.size() == 6) {
             auto e = std::make_pair(w[1], w[2] + " " + w[3] + " " + w[4] + " " + w[5]);
             (w[0] == "KEYMASTER" ? out.keymasters : out.members).push_back(e);

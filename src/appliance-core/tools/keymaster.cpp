@@ -9,14 +9,31 @@
 // stick for each station of the net; each station loads it with
 // "appliance-cli keys import FILE". The keymaster keeps no copy: when the
 // tape is lost, make a new one.
+//
+// For a net that uses another cipher in the slot (docs/cipher-slot.md),
+// --cipher FOLDER (the folder holding the net's module.so) makes the tape
+// for that module: its name goes on the tape, and each key is as long as
+// the module's keys.
+//
+//   pna-keymaster packet --handout FILE [--tape FILE] [--cipher FOLDER] --out FOLDER
+//
+// builds a member's handout packet (docs/cipher-slot.md): handout.txt, the
+// tape if given, and for a net's own cipher, cipher/ with module.so, lib/,
+// module.sha256 and ABOUT.txt. The module's SHA-256 must be the one on the
+// handout's CIPHER line, or no packet is made.
+#include "../src/cipher_slot.h"
 #include "../src/crypto.h"
 #include "../src/keys.h"
+#include "../src/station.h"
 
 #include <cerrno>
 #include <cstring>
 #include <ctime>
 #include <fcntl.h>
+#include <filesystem>
+#include <fstream>
 #include <iostream>
+#include <sstream>
 #include <string>
 #include <unistd.h>
 
@@ -26,20 +43,123 @@ namespace {
 
 int usage() {
     std::cerr << "usage: pna-keymaster --net NAME --start YYYYMMDD[HHMM] [--days N | --count N]\n"
-                 "                     [--period-hours H] [--text] --out FILE\n"
+                 "                     [--period-hours H] [--cipher FOLDER] [--text] --out FILE\n"
+                 "       pna-keymaster packet --handout FILE [--tape FILE] [--cipher FOLDER] --out FOLDER\n"
                  "  --net           the net's name: A-Z, 0-9, space, - and / (up to 40)\n"
                  "  --start         when the first key starts, UTC (YYYYMMDD is 0000Z that day)\n"
                  "  --days/--count  how many keys (1 to 99); a key a day by default\n"
                  "  --period-hours  how long each key lasts (default 24)\n"
+                 "  --cipher        the folder with the net's cipher module (module.so), when the net\n"
+                 "                  doesn't use the built-in pna-aes\n"
                  "  --text          write the plain tape text, not the framed key tape file\n"
                  "  --out           the tape file to write; it must not exist yet\n";
     return 2;
 }
 
+std::string read_file(const std::string& path, bool* ok) {
+    std::ifstream f(path, std::ios::binary);
+    *ok = static_cast<bool>(f);
+    std::ostringstream ss;
+    if (f) ss << f.rdbuf();
+    return ss.str();
+}
+
+// The module in a folder (or a path to module.so itself), loaded to read its
+// name and key size.
+std::shared_ptr<cipher::Slot> module_in(std::string folder, std::string& dir, std::string* error) {
+    namespace fs = std::filesystem;
+    if (fs::path(folder).filename() == "module.so") folder = fs::path(folder).parent_path().string();
+    dir = folder.empty() ? "." : folder;
+    return cipher::Slot::open((fs::path(dir) / "module.so").string(), error);
+}
+
+int packet(int argc, char** argv) {
+    namespace fs = std::filesystem;
+    std::string handout, tape, cfolder, out;
+    for (int i = 2; i < argc; ++i) {
+        std::string a = argv[i];
+        auto next = [&]() -> std::string { return i + 1 < argc ? argv[++i] : ""; };
+        if (a == "--handout") handout = next();
+        else if (a == "--tape") tape = next();
+        else if (a == "--cipher") cfolder = next();
+        else if (a == "--out") out = next();
+        else return usage();
+    }
+    if (handout.empty() || out.empty()) return usage();
+    bool ok = false;
+    std::string text = read_file(handout, &ok), err;
+    if (!ok) {
+        std::cerr << "pna-keymaster: cannot read " << handout << "\n";
+        return 1;
+    }
+    station::Handout h;
+    if (!station::parse_handout(text, h, &err)) {
+        std::cerr << "pna-keymaster: " << handout << " is not a good handout: " << err << "\n";
+        return 1;
+    }
+    std::string dir;
+    std::string hash;
+    if (!h.cipher.empty()) {
+        if (cfolder.empty()) {
+            std::cerr << "pna-keymaster: this handout names the " << h.cipher
+                      << " cipher: give its module with --cipher FOLDER\n";
+            return 2;
+        }
+        auto s = module_in(cfolder, dir, &err);
+        if (!s) {
+            std::cerr << "pna-keymaster: " << err << "\n";
+            return 1;
+        }
+        hash = cipher::set_hash(dir, &err);
+        if (hash.empty() || hash != h.cipher_hash || s->info().name != h.cipher) {
+            std::cerr << "pna-keymaster: the module in " << dir << " is not the one this handout names ("
+                      << h.cipher << "); no packet made\n";
+            return 1;
+        }
+    } else if (!cfolder.empty()) {
+        std::cerr << "pna-keymaster: this handout is for the built-in pna-aes; it carries no module\n";
+        return 2;
+    }
+    std::error_code ec;
+    if (fs::exists(out, ec)) {
+        std::cerr << "pna-keymaster: " << out << " already exists; a packet is never written over\n";
+        return 1;
+    }
+    fs::create_directories(out, ec);
+    {
+        std::ofstream f(fs::path(out) / "handout.txt", std::ios::binary);
+        f << text;
+        if (!f) ec = std::make_error_code(std::errc::io_error);
+    }
+    if (!ec && !tape.empty()) fs::copy_file(tape, fs::path(out) / "tape.ekt", ec);
+    if (!ec && !h.cipher.empty()) {
+        fs::path c = fs::path(out) / "cipher";
+        fs::create_directories(c, ec);
+        if (!ec) fs::copy_file(fs::path(dir) / "module.so", c / "module.so", ec);
+        if (!ec && fs::exists(fs::path(dir) / "lib")) fs::copy(fs::path(dir) / "lib", c / "lib", fs::copy_options::recursive, ec);
+        if (!ec && fs::exists(fs::path(dir) / "ABOUT.txt")) fs::copy_file(fs::path(dir) / "ABOUT.txt", c / "ABOUT.txt", ec);
+        if (!ec) {
+            std::ofstream f(c / "module.sha256");
+            f << hash << "\n";
+        }
+        if (!ec && cipher::set_hash(c.string(), nullptr) != hash) ec = std::make_error_code(std::errc::io_error);
+    }
+    if (ec) {
+        std::cerr << "pna-keymaster: writing the packet failed: " << ec.message() << "\n";
+        fs::remove_all(out, ec);
+        return 1;
+    }
+    std::cout << "handout packet for " << h.for_station << " (" << h.net << ") written to " << out
+              << (h.cipher.empty() ? "" : ", with the " + h.cipher + " cipher module") << "\n"
+              << "The member loads it with: appliance-cli handout import " << out << "\n";
+    return 0;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
-    std::string net, start, out;
+    if (argc > 1 && std::string(argv[1]) == "packet") return packet(argc, argv);
+    std::string net, start, out, cfolder;
     int count = 31, period = 24;
     bool plain = false;
     for (int i = 1; i < argc; ++i) {
@@ -52,6 +172,7 @@ int main(int argc, char** argv) {
             else if (a == "--period-hours") period = std::stoi(next());
             else if (a == "--out") out = next();
             else if (a == "--text") plain = true;
+            else if (a == "--cipher") cfolder = next();
             else return usage();
         } catch (...) {
             return usage();
@@ -68,8 +189,19 @@ int main(int argc, char** argv) {
         return 2;
     }
     keys::Tape tape;
-    std::string err;
-    if (!keys::make_tape(net, t0, count, period, static_cast<int64_t>(std::time(nullptr)), tape, &err)) {
+    std::string err, cname;
+    size_t kbytes = 32;
+    if (!cfolder.empty()) {
+        std::string dir;
+        auto s = module_in(cfolder, dir, &err);
+        if (!s) {
+            std::cerr << "pna-keymaster: " << err << "\n";
+            return 1;
+        }
+        cname = s->info().name;
+        kbytes = s->info().key_bytes;
+    }
+    if (!keys::make_tape(net, t0, count, period, static_cast<int64_t>(std::time(nullptr)), tape, &err, cname, kbytes)) {
         std::cerr << "pna-keymaster: " << err << "\n";
         return 2;
     }

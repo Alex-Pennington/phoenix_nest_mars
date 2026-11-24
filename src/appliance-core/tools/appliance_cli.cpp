@@ -14,7 +14,11 @@
 //   appliance-cli [--port 4100] cards list
 //   appliance-cli [--port 4100] cards check CALL "FINGERPRINT" [--keymaster]   after reading it back by voice
 //   appliance-cli [--port 4100] cards keymaster CALL [--off]   name (or unname) a checked card as keymaster
-//   appliance-cli [--port 4100] handout import FILE|ID [--replace]   load a member handout, stale or new
+//   appliance-cli [--port 4100] handout import FILE|FOLDER|ID [--replace]   load a member handout, stale or new;
+//                                 a FOLDER is a handout packet (handout.txt, and cipher/ for a net's own cipher)
+//   appliance-cli [--port 4100] cipher           the cipher in the slot (docs/cipher-slot.md)
+//   appliance-cli [--port 4100] cipher install FOLDER   install a cipher module (a folder with module.so)
+//   appliance-cli [--port 4100] cipher remove    back to the built-in pna-aes
 //   appliance-cli [--port 4100] rally            what this box can do now, and the next step
 //   appliance-cli [--port 4100] import FILE [--kind roster|book|freq|schedule]
 //                                 a roster, address book, frequency card or net schedule (.xlsx or text)
@@ -30,6 +34,7 @@
 #include "../src/crypto.h"
 #include "../src/keys.h"
 
+#include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <sstream>
@@ -68,7 +73,8 @@ int main(int argc, char** argv) {
                      "                    | keys zeroize IND|TAPE | keys open FILE|ID\n"
                      "                    | station card | cards import FILE|ID [--replace] | cards list\n"
                      "                    | cards check CALL FINGERPRINT [--keymaster] | cards keymaster CALL [--off]\n"
-                     "                    | handout import FILE|ID [--replace] | rally\n"
+                     "                    | handout import FILE|FOLDER|ID [--replace] | rally\n"
+                     "                    | cipher | cipher install FOLDER | cipher remove\n"
                      "                    | import FILE [--kind roster|book|freq|schedule] | channels\n";
         return 2;
     }
@@ -197,8 +203,12 @@ int main(int argc, char** argv) {
         w = JsonWriter();
         if (sub == "import" && i < argc) {
             w.begin_object().field("cmd", "handout_import");
+            std::error_code ec;
             std::ifstream f(argv[i], std::ios::binary);
-            if (f) {
+            if (std::filesystem::is_directory(argv[i], ec)) {
+                // A handout packet: the core reads it from where it is.
+                w.field("packet", std::filesystem::absolute(argv[i], ec).string());
+            } else if (f) {
                 std::ostringstream ss;
                 ss << f.rdbuf();
                 w.field("text", ss.str());
@@ -207,7 +217,21 @@ int main(int argc, char** argv) {
             }
             if (i + 1 < argc && std::string(argv[i + 1]) == "--replace") w.field("replace", "Y");
         } else {
-            std::cerr << "handout import FILE|ID [--replace]\n";
+            std::cerr << "handout import FILE|FOLDER|ID [--replace]\n";
+            return 2;
+        }
+    } else if (cmd == "cipher") {
+        std::string sub = i < argc ? argv[i++] : "";
+        w = JsonWriter();
+        std::error_code ec;
+        if (sub.empty() || sub == "status") {
+            w.begin_object().field("cmd", "cipher_status");
+        } else if (sub == "install" && i < argc) {
+            w.begin_object().field("cmd", "cipher_install").field("path", std::filesystem::absolute(argv[i], ec).string());
+        } else if (sub == "remove") {
+            w.begin_object().field("cmd", "cipher_remove");
+        } else {
+            std::cerr << "cipher | cipher install FOLDER | cipher remove\n";
             return 2;
         }
     } else if (cmd == "import") {

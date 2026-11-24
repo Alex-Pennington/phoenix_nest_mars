@@ -50,7 +50,7 @@ bool valid_indicator(const std::string& ind, const std::string& tape) {
 }
 
 std::string two(int v) {
-    char b[8];
+    char b[16];
     std::snprintf(b, sizeof b, "%02d", v);
     return b;
 }
@@ -77,19 +77,29 @@ std::vector<Line> lines_of(const std::string& t) {
     return out;
 }
 
-// "key IND FROM UNTIL HEX" (a tape) or "key IND FROM UNTIL HEX TAPE NET..." (the keyring).
-bool read_key_line(const std::vector<std::string>& w, Key& k, bool keyring, std::string* error) {
+// "key IND FROM UNTIL HEX" (a tape) or "key IND FROM UNTIL HEX TAPE
+// [cipher=NAME] NET..." (the keyring). A version 1 tape's keys are 32 bytes;
+// a version 2 tape's and the keyring's may be any size up to kMaxKeyBytes.
+bool read_key_line(const std::vector<std::string>& w, Key& k, bool keyring, bool any_size, std::string* error) {
     if (w.size() < (keyring ? 7u : 5u)) return fail(error, "a key line is short");
     k.indicator = w[1];
     std::string secret;
     if (!parse_time(w[2], k.from) || !parse_time(w[3], k.until) || k.from >= k.until)
         return fail(error, "key " + k.indicator + ": bad start or end time");
-    if (w[4].size() != 64 || !crypto::from_hex(w[4], secret)) return fail(error, "key " + k.indicator + ": the key is not 64 hex digits");
+    if (!any_size && w[4].size() != 64) return fail(error, "key " + k.indicator + ": the key is not 64 hex digits");
+    if (w[4].empty() || w[4].size() > 2 * kMaxKeyBytes || !crypto::from_hex(w[4], secret))
+        return fail(error, "key " + k.indicator + ": the key is not hex digits");
     k.secret = std::move(secret);
     if (keyring) {
         k.tape = w[5];
-        k.net = w[6];
-        for (size_t i = 7; i < w.size(); ++i) k.net += " " + w[i];
+        size_t at = 6;
+        if (w[6].compare(0, 7, "cipher=") == 0) {
+            k.cipher = w[6].substr(7);
+            ++at;
+            if (at >= w.size()) return fail(error, "a key line is short");
+        }
+        k.net = w[at];
+        for (size_t i = at + 1; i < w.size(); ++i) k.net += " " + w[i];
     }
     return true;
 }
@@ -97,7 +107,7 @@ bool read_key_line(const std::vector<std::string>& w, Key& k, bool keyring, std:
 std::string key_line(const Key& k, bool keyring) {
     std::string l = "key " + k.indicator + " " + time_text(k.from) + " " + time_text(k.until) + " " +
                     crypto::to_hex(k.secret);
-    if (keyring) l += " " + k.tape + " " + k.net;
+    if (keyring) l += " " + k.tape + (k.cipher.empty() ? "" : " cipher=" + k.cipher) + " " + k.net;
     return l;
 }
 
@@ -153,7 +163,7 @@ bool parse_keyring(const std::string& text, std::vector<Key>& out, std::string* 
         auto w = split_ws(L[i].text);
         if (w.empty() || w[0] != "key") return fail(error, "unknown line in the station key file");
         Key k;
-        if (!read_key_line(w, k, true, error)) return false;
+        if (!read_key_line(w, k, true, true, error)) return false;
         out.push_back(std::move(k));
     }
     return true;
@@ -189,8 +199,13 @@ bool parse_time(const std::string& s, int64_t& t) {
 }
 
 bool make_tape(const std::string& net, int64_t start, int count, int period_hours, int64_t now, Tape& out,
-               std::string* error) {
+               std::string* error, const std::string& cipher, size_t key_bytes) {
     if (!valid_net(net)) return fail(error, "net name: 1 to 40 of A-Z, 0-9, space, - and /");
+    std::string cid = cipher_id(cipher);
+    if (!cipher.empty() && cid.empty() && cipher != "pna-aes" && cipher != "PNA-AES")
+        return fail(error, "cipher name: 1 to 32 of a-z, 0-9 and -");
+    if (cid.empty()) key_bytes = 32;
+    if (key_bytes < 1 || key_bytes > kMaxKeyBytes) return fail(error, "key size: 1 to 4096 bytes");
     if (count < 1 || count > kMaxKeys) return fail(error, "a tape holds 1 to 99 keys");
     if (period_hours < 1 || period_hours > 24 * 31) return fail(error, "period: 1 hour to 31 days");
     if (start % 60) return fail(error, "the start time must be on the minute");
@@ -198,6 +213,7 @@ bool make_tape(const std::string& net, int64_t start, int count, int period_hour
     out.net = net;
     out.made = now - now % 60;
     out.period_hours = period_hours;
+    out.cipher = cid;
     // Three random letters, without bias (rejection sampling).
     while (out.tape.size() < 3) {
         unsigned char c = static_cast<unsigned char>(crypto::random_bytes(1)[0]);
@@ -210,18 +226,20 @@ bool make_tape(const std::string& net, int64_t start, int count, int period_hour
         k.tape = out.tape;
         k.from = start + static_cast<int64_t>(i) * period_hours * 3600;
         k.until = k.from + static_cast<int64_t>(period_hours) * 3600;
-        k.secret = crypto::random_bytes(32);
+        k.secret = crypto::random_bytes(key_bytes);
+        k.cipher = cid;
         out.keys.push_back(std::move(k));
     }
     return true;
 }
 
 std::string format_tape(const Tape& t) {
-    std::string b = "PNA KEY TAPE " + std::to_string(kTapeVersion) + "\n";
+    std::string b = "PNA KEY TAPE " + std::to_string(t.cipher.empty() ? kTapeVersion : kTapeVersionCipher) + "\n";
     b += "# Key tape for one net. Handle it like the keys it holds: copy it only to the\n";
     b += "# stations of this net, and destroy every copy when its last key has ended.\n";
     b += "net " + t.net + "\n";
     b += "tape " + t.tape + "\n";
+    if (!t.cipher.empty()) b += "cipher " + t.cipher + "\n";
     b += "made " + time_text(t.made) + "\n";
     b += "period-hours " + std::to_string(t.period_hours) + "\n";
     for (size_t i = 0; i < t.keys.size(); ++i) {
@@ -351,8 +369,9 @@ bool parse_tape(const std::string& bytes, Tape& out, std::string* error) {
     auto head = split_ws(L[0].text);
     if (head.size() != 4 || head[0] != "PNA" || head[1] != "KEY" || head[2] != "TAPE")
         return fail(error, "not a key tape: the first line must be PNA KEY TAPE 1");
-    if (head[3] != std::to_string(kTapeVersion))
-        return fail(error, "a key tape version " + head[3] + " needs a newer appliance; this one reads version 1");
+    const bool v2 = head[3] == std::to_string(kTapeVersionCipher);
+    if (head[3] != std::to_string(kTapeVersion) && !v2)
+        return fail(error, "a key tape version " + head[3] + " needs a newer appliance; this one reads versions 1 and 2");
     if (!check_end(text, L, error)) return false;
     for (size_t i = 1; i + 1 < L.size(); ++i) {
         const std::string& l = L[i].text;
@@ -362,18 +381,22 @@ bool parse_tape(const std::string& bytes, Tape& out, std::string* error) {
             while (!out.net.empty() && out.net.back() == ' ') out.net.pop_back();
         } else if (w[0] == "tape" && w.size() == 2) {
             out.tape = w[1];
+        } else if (w[0] == "cipher" && w.size() == 2 && v2) {
+            out.cipher = cipher_id(w[1]);
+            if (out.cipher.empty()) return fail(error, "a version 2 tape must name a cipher other than pna-aes");
         } else if (w[0] == "made" && w.size() == 2) {
             if (!parse_time(w[1], out.made)) return fail(error, "bad made time");
         } else if (w[0] == "period-hours" && w.size() == 2) {
             out.period_hours = std::atoi(w[1].c_str());
         } else if (w[0] == "key") {
             Key k;
-            if (!read_key_line(w, k, false, error)) return false;
+            if (!read_key_line(w, k, false, v2, error)) return false;
             out.keys.push_back(std::move(k));
         } else {
             return fail(error, "unknown line on the key tape: " + w[0]);
         }
     }
+    if (v2 && out.cipher.empty()) return fail(error, "a version 2 tape must have a cipher line");
     if (!valid_net(out.net)) return fail(error, "the tape's net name is missing or not allowed");
     if (!valid_tape_id(out.tape)) return fail(error, "the tape's id must be three letters");
     if (out.keys.empty() || out.keys.size() > static_cast<size_t>(kMaxKeys)) return fail(error, "a tape holds 1 to 99 keys");
@@ -381,6 +404,7 @@ bool parse_tape(const std::string& bytes, Tape& out, std::string* error) {
         auto& k = out.keys[i];
         k.net = out.net;
         k.tape = out.tape;
+        k.cipher = out.cipher;
         if (!valid_indicator(k.indicator, out.tape))
             return fail(error, "key indicator " + k.indicator + " must be the tape's letters and two digits");
         for (size_t j = 0; j < i; ++j)
@@ -389,10 +413,30 @@ bool parse_tape(const std::string& bytes, Tape& out, std::string* error) {
     return true;
 }
 
+std::string cipher_id(const std::string& name) {
+    std::string o;
+    if (name.empty() || name.size() > 32) return "";
+    for (char c : name) {
+        char l = static_cast<char>(c >= 'A' && c <= 'Z' ? c - 'A' + 'a' : c);
+        if (!((l >= 'a' && l <= 'z') || (l >= '0' && l <= '9') || l == '-')) return "";
+        o += l;
+    }
+    return o == "pna-aes" ? "" : o;
+}
+
 // ---- Keyring
 
 Keyring::Keyring(std::string path) : path_(std::move(path)) {}
 Keyring::~Keyring() { wipe_keys(keys_); }
+
+void Keyring::set_cipher(const std::string& name, KeyTest accept, CheckFn check) {
+    std::lock_guard<std::mutex> g(mu_);
+    cipher_ = cipher_id(name);
+    accept_ = std::move(accept);
+    check_ = std::move(check);
+}
+
+std::string Keyring::cipher() const { return cipher_.empty() ? "pna-aes" : cipher_; }
 
 int64_t Keyring::now() const { return clock_ ? clock_() : static_cast<int64_t>(std::time(nullptr)); }
 
@@ -473,6 +517,20 @@ bool Keyring::import_tape(const std::string& text, ImportResult& r, std::string*
     r.tape = t.tape;
     const int64_t n = now();
     std::lock_guard<std::mutex> g(mu_);
+    if (t.cipher != cipher_) {
+        wipe_keys(t.keys);
+        return fail(error, "tape " + t.tape + " is for the cipher " + (t.cipher.empty() ? "pna-aes" : t.cipher) +
+                               ", but this appliance's cipher slot holds " + (cipher_.empty() ? "pna-aes" : cipher_) +
+                               ": load the net's packet with its cipher module first");
+    }
+    if (accept_)
+        for (auto& k : t.keys) {
+            std::string e;
+            if (!accept_(k.indicator, k.secret, &e)) {
+                wipe_keys(t.keys);
+                return fail(error, "tape " + t.tape + " not loaded: " + e);
+            }
+        }
     for (auto& k : t.keys)
         for (auto& h : keys_)
             if (h.indicator == k.indicator && (h.secret != k.secret || h.net != k.net)) {
@@ -525,7 +583,9 @@ std::vector<Info> Keyring::list() {
     std::lock_guard<std::mutex> g(mu_);
     std::vector<Info> out;
     for (auto& k : keys_) {
-        Info i{k.indicator, k.net, k.tape, k.from, k.until, "", key_check(k.indicator, k.secret)};
+        Info i{k.indicator, k.net, k.tape, k.from, k.until, "", "", k.cipher.empty() ? "pna-aes" : k.cipher,
+               k.cipher == cipher_};
+        if (i.usable) i.check = check_ ? check_(k.indicator, k.secret) : key_check(k.indicator, k.secret);
         i.state = n < k.from ? "next" : n < k.until ? "current" : "receive only";
         out.push_back(i);
     }
@@ -535,7 +595,7 @@ std::vector<Info> Keyring::list() {
 std::vector<Info> Keyring::for_sending() {
     std::vector<Info> out;
     for (auto& i : list())
-        if (i.state == "current") out.push_back(i);
+        if (i.state == "current" && i.usable) out.push_back(i);
     return out;
 }
 
@@ -544,6 +604,9 @@ bool Keyring::send_key(const std::string& indicator, std::string& secret, std::s
     std::lock_guard<std::mutex> g(mu_);
     for (auto& k : keys_)
         if (k.indicator == indicator) {
+            if (k.cipher != cipher_)
+                return fail(error, "key " + indicator + " is for the cipher " + (k.cipher.empty() ? "pna-aes" : k.cipher) +
+                                       ", which is not in this appliance's cipher slot");
             if (n < k.from) return fail(error, "key " + indicator + " starts at " + time_text(k.from));
             if (n >= k.until) return fail(error, "key " + indicator + " ended at " + time_text(k.until));
             secret = k.secret;
@@ -556,7 +619,7 @@ bool Keyring::receive_key(const std::string& indicator, std::string& secret) {
     const int64_t n = now();
     std::lock_guard<std::mutex> g(mu_);
     for (auto& k : keys_)
-        if (k.indicator == indicator && n < k.until + kReceiveHold && n >= k.from - kReceiveHold) {
+        if (k.indicator == indicator && k.cipher == cipher_ && n < k.until + kReceiveHold && n >= k.from - kReceiveHold) {
             secret = k.secret;
             return true;
         }

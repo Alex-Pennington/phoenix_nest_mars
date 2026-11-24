@@ -116,6 +116,15 @@ bool start_station(Station& s, CoreConfig cfg, std::unique_ptr<ModemDriver> mode
         std::string err;
         if (!kr->load(&err)) log_line(name, "codress keys not loaded (" + err + "): import the key tape again");
         s.core->set_keyring(kr);
+        // The cipher slot (cipher_slot.h): the net's module if one was
+        // installed from a handout packet, else our own pna-aes.
+        std::string cd = kp + ".cipher";
+        s.core->set_cipher_dir(cd);
+        auto slot = cipher::load_installed(cd);
+        if (!slot->usable()) log_line(name, slot->why_unusable());
+        else if (!slot->is_builtin())
+            log_line(name, "cipher slot: " + slot->info().name + " " + slot->info().version + " from the net's packet");
+        s.core->set_cipher(slot);
         // The station's own keypair (station.h): made here the first time.
         auto id = std::make_shared<station::Identity>();
         bool exists = false;

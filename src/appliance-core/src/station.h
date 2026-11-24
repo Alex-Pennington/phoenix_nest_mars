@@ -127,6 +127,11 @@ struct Handout {
     std::vector<std::pair<std::string, std::string>> members;     // call, fingerprint
     std::vector<std::string> cards;  // card texts: every keymaster's, and every member's in an alternate's handout
     std::string sealed;              // the sealed tape block, or ""
+    // The net's cipher when it isn't our own pna-aes: the module's name and
+    // the SHA-256 of its module set (cipher_slot.h). The module itself comes
+    // with the handout in the packet's cipher/ folder; this signed line is
+    // what lets a member's appliance trust it.
+    std::string cipher, cipher_hash;
 };
 std::string format_handout(const Handout& h, const Identity& issuer);
 // Checks the layout, every card's self-signature and fingerprint, and the

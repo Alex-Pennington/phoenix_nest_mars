@@ -172,9 +172,9 @@ static void tapes(const fs::path& dir) {
     CHECK(!keys::parse_tape(bad, back, &err) && err.find("end check") != std::string::npos);
     CHECK(!keys::parse_tape(text.substr(0, text.size() / 2), back, &err));
     // A newer version is refused by name.
-    std::string v2 = text;
-    v2.replace(0, 14, "PNA KEY TAPE 2");
-    CHECK(!keys::parse_tape(v2, back, &err) && err.find("version 2") != std::string::npos);
+    std::string v3 = text;
+    v3.replace(0, 14, "PNA KEY TAPE 3");
+    CHECK(!keys::parse_tape(v3, back, &err) && err.find("version 3") != std::string::npos);
     CHECK(!keys::parse_tape("hello", back, &err));
     // Each key carries MSC's five labels, as notes on the tape.
     CHECK(text.find("# KEY_CKR:" + tape.tape + "01\n") != std::string::npos);

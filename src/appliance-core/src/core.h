@@ -2,6 +2,7 @@
 // answers to whatever front end is attached through the local API.
 #pragma once
 
+#include "cipher_slot.h"
 #include "frame.h"
 #include "keys.h"
 #include "station.h"
@@ -75,8 +76,27 @@ public:
     Ops* ops() const { return ops_.get(); }
     // The station's codress keys (keys.h). Set before start(); none: codress
     // is neither sent nor read.
-    void set_keyring(std::shared_ptr<keys::Keyring> k) { keys_ = std::move(k); }
+    void set_keyring(std::shared_ptr<keys::Keyring> k) {
+        keys_ = std::move(k);
+        tie_cipher();
+    }
     keys::Keyring* keyring() const { return keys_.get(); }
+    // The cipher slot (cipher_slot.h): built-in pna-aes until a module is
+    // installed. dir is where an installed module lives (STATION.cipher).
+    // A new slot takes effect at once; the keyring follows it.
+    void set_cipher(std::shared_ptr<cipher::Slot> s) {
+        {
+            std::lock_guard<std::mutex> g(cipher_mu_);
+            cipher_ = s ? std::move(s) : cipher::Slot::builtin();
+        }
+        tie_cipher();
+    }
+    std::shared_ptr<cipher::Slot> cipher() const {
+        std::lock_guard<std::mutex> g(cipher_mu_);
+        return cipher_;
+    }
+    void set_cipher_dir(std::string d) { cipher_dir_ = std::move(d); }
+    const std::string& cipher_dir() const { return cipher_dir_; }
     // Queues a codress copy and keeps its plain copy beside it (Store::set_clear).
     std::string submit_codress(const std::string& to, char prec, const std::string& codress, const std::string& clear,
                                const std::string& key, std::string* error);
@@ -146,6 +166,10 @@ private:
     std::shared_ptr<LinkMonitor> link_;
     std::shared_ptr<Ops> ops_;
     std::shared_ptr<keys::Keyring> keys_;
+    void tie_cipher();
+    mutable std::mutex cipher_mu_;
+    std::shared_ptr<cipher::Slot> cipher_ = cipher::Slot::builtin();
+    std::string cipher_dir_;
     std::shared_ptr<station::Identity> id_;
     std::string id_path_;
     std::set<std::string> told_waiting_;  // messages already logged as waiting for a link

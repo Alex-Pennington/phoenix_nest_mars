@@ -36,6 +36,12 @@
 // KEYDESC, INTRVAL, CREATED), so a keymaster used to MSC reads ours the
 // same way. They are made from the tape; they are not secrets.
 //
+// A tape for a net that uses another cipher in the slot (cipher_slot.h) is
+// version 2: it adds "cipher NAME" after the tape line, and its keys are as
+// long as that cipher's keys (any whole number of bytes, up to 4096). A tape
+// with no cipher line is for our own pna-aes. A station loads only tapes for
+// the cipher in its slot, and sends only with keys for that cipher.
+//
 // Real keys never go in a repository. Tests make throwaway tapes.
 #pragma once
 
@@ -48,7 +54,9 @@
 namespace pna {
 namespace keys {
 
-constexpr int kTapeVersion = 1;
+constexpr int kTapeVersion = 1;         // our own cipher
+constexpr int kTapeVersionCipher = 2;   // a tape that names another cipher
+constexpr size_t kMaxKeyBytes = 4096;
 constexpr int64_t kReceiveHold = 6 * 3600;  // a key still reads traffic this long after its end
 constexpr int kMaxKeys = 99;
 
@@ -58,7 +66,8 @@ struct Key {
     std::string tape;       // "QXR"
     int64_t from = 0;       // unix seconds UTC; sends from here...
     int64_t until = 0;      // ...to here (exclusive)
-    std::string secret;     // 32 bytes
+    std::string secret;     // 32 bytes for pna-aes; the cipher's key size otherwise
+    std::string cipher;     // the module name, "" for our own pna-aes
 };
 
 struct Tape {
@@ -66,6 +75,7 @@ struct Tape {
     std::string tape;
     int64_t made = 0;
     int period_hours = 24;
+    std::string cipher;     // "" for our own pna-aes
     std::vector<Key> keys;
 };
 
@@ -75,8 +85,10 @@ bool parse_time(const std::string& s, int64_t& t);
 
 // A new tape with fresh random keys: `count` periods of `period_hours`, the
 // first starting at `start`. Net names: A-Z, 0-9, space, '-' and '/', 1 to 40.
+// `cipher` names the module the keys are for ("" or "pna-aes": our own, 32
+// bytes); key_bytes is that module's key size.
 bool make_tape(const std::string& net, int64_t start, int count, int period_hours, int64_t now, Tape& out,
-               std::string* error);
+               std::string* error, const std::string& cipher = "", size_t key_bytes = 32);
 std::string format_tape(const Tape& t);
 bool parse_tape(const std::string& text, Tape& out, std::string* error);
 
@@ -111,7 +123,9 @@ struct Info {
     std::string indicator, net, tape;
     int64_t from = 0, until = 0;
     std::string state;  // "current" (sends now), "next" (starts later), "receive only" (ended, still reads)
-    std::string check;  // key_check()
+    std::string check;  // the slot's key check (key_check() for pna-aes)
+    std::string cipher; // "pna-aes" or the module's name
+    bool usable = true; // false when the key is for a cipher not in the slot
 };
 
 struct ImportResult {
@@ -149,6 +163,13 @@ public:
     int zeroize(const std::string& which, std::string* error);
 
     void set_clock(std::function<int64_t()> c) { clock_ = std::move(c); }
+
+    // The cipher in the slot: its name, a test that a key loads in it, and
+    // its key check. Until set, our own pna-aes and key_check().
+    using KeyTest = std::function<bool(const std::string& indicator, const std::string& key, std::string* error)>;
+    using CheckFn = std::function<std::string(const std::string& indicator, const std::string& key)>;
+    void set_cipher(const std::string& name, KeyTest accept, CheckFn check);
+    std::string cipher() const;
     int64_t now() const;
 
 private:
@@ -157,7 +178,14 @@ private:
     std::mutex mu_;
     std::vector<Key> keys_;
     std::function<int64_t()> clock_;
+    std::string cipher_;  // "" = pna-aes
+    KeyTest accept_;
+    CheckFn check_;
 };
+
+// "" for our own cipher (any spelling of pna-aes, or none), else the
+// module's name in lower case.
+std::string cipher_id(const std::string& name);
 
 }  // namespace keys
 }  // namespace pna

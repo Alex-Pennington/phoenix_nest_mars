@@ -248,10 +248,16 @@ docs/crypto.md has the design and the operator's steps. In short:
   text block with a fingerprint to read aloud, goes out by USB or over the
   air. Messages are signed, and `parse_traffic` says whether the signature is
   good.
-- Codress uses AES-256-GCM with a net key from a dated key tape. A keymaster
-  makes tapes with `pna-keymaster`, or with `net_tape`, which seals a copy to
-  each member's card and can send it over the air.
-- It is not the MARS cipher, and it reads only traffic from other appliances.
+- Codress goes through a **cipher slot** (docs/cipher-slot.md). Our own
+  AES-256-GCM cipher, `pna-aes`, fills it unless a net's handout packet
+  brings another module. `pna-cipher-check MODULE.so` tests any module
+  against the slot, and docs/cipher-adapter-guide.md is the guide for writing
+  one.
+- Net keys come from a dated key tape. A keymaster makes tapes with
+  `pna-keymaster`, or with `net_tape`, which seals a copy to each member's
+  card and can send it over the air.
+- `pna-aes` is not the MARS cipher, and it reads only traffic from other
+  appliances.
 
 ## Composing with guidance
 

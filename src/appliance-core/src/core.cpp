@@ -232,16 +232,43 @@ std::optional<std::pair<std::string, std::string>> Core::clear(const std::string
     return store_.clear(id);
 }
 
+void Core::tie_cipher() {
+    auto s = cipher();
+    if (!keys_) return;
+    std::weak_ptr<cipher::Slot> w = s;
+    keys_->set_cipher(
+        s->info().name.empty() ? "none" : s->info().name,
+        [w](const std::string& ind, const std::string& key, std::string* e) {
+            auto sl = w.lock();
+            std::string ready;
+            if (!sl) return false;
+            bool ok = sl->load_key(ind, key, ready, e);
+            crypto::wipe(ready);
+            return ok;
+        },
+        [w](const std::string& ind, const std::string& key) {
+            auto sl = w.lock();
+            std::string c;
+            if (!sl || !sl->key_check(ind, key, c, nullptr)) return std::string("----");
+            return c;
+        });
+}
+
 void Core::read_codress(const std::string& id, const std::string& body) {
     std::string ind = codress::indicator_of(body);
     if (ind.empty()) return;
+    auto slot = cipher();
+    if (!slot->usable()) {
+        log(id, "codress in key " + ind + " not read: " + slot->why_unusable());
+        return;
+    }
     std::string key;
     if (!keys_ || !keys_->receive_key(ind, key)) {
         log(id, "codress in key " + ind + ": this station holds no such key, so it can't be read here");
         return;
     }
     std::string plain, err;
-    bool ok = codress::decipher(body, key, plain, &err);
+    bool ok = codress::decipher(*slot, body, key, plain, &err);
     crypto::wipe(key);
     if (!ok) {
         log(id, "codress in key " + ind + " could not be read: " + err);
