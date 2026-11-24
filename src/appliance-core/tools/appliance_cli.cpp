@@ -38,6 +38,8 @@
 //                                 a roster, address book, frequency card or net schedule (.xlsx or text)
 //   appliance-cli [--port 4100] channels         the channel plan, by designator (never frequencies)
 //   appliance-cli [--port 4100] channels add NAME FREQ [--mode USB] [--use "PRIMARY"] [--unit khz|mhz|hz]
+//   appliance-cli [--port 4100] form [list] | form show ID | form fill ID KEY=VALUE ... | form check ID ...
+//   appliance-cli [--port 4100] form template ID | form edit ID FILE | form reset ID
 //                                 enter one channel by hand (FREQ in kHz unless --unit says)
 //   appliance-cli [--port 4100] channels remove NAME
 //
@@ -97,6 +99,8 @@ int main(int argc, char** argv) {
                      "                    | cipher | cipher install FOLDER | cipher remove\n"
                      "                    | import FILE [--kind roster|book|freq|schedule] | channels\n"
                      "                    | channels add NAME FREQ [--mode M] [--use TEXT] [--unit khz|mhz|hz]\n"
+                     "                    | form [list] | form show ID | form fill ID KEY=VALUE ... | form check ID ...\n"
+                     "                    | form template ID | form edit ID FILE | form reset ID\n"
                      "                    | channels remove NAME | setup [CALL]\n";
         return 2;
     }
@@ -350,6 +354,43 @@ int main(int argc, char** argv) {
         } else {
             std::cerr << "channels | channels add NAME FREQ [--mode M] [--use TEXT] [--unit khz|mhz|hz]"
                          " | channels remove NAME\n";
+            return 2;
+        }
+    } else if (cmd == "form") {
+        // Forms from templates (docs/forms.md): what gale-term draws.
+        std::string sub = i < argc ? argv[i++] : "";
+        w = JsonWriter();
+        auto pairs = [&](int from) {
+            for (int k = from; k < argc; ++k) {
+                std::string a = argv[k];
+                size_t eq = a.find('=');
+                if (eq != std::string::npos) w.field(a.substr(0, eq), a.substr(eq + 1));
+            }
+        };
+        if (sub.empty() || sub == "list") {
+            w.begin_object().field("cmd", "form_list");
+        } else if (sub == "show" && i < argc) {
+            w.begin_object().field("cmd", "form_get").field("form", std::string(argv[i]));
+            pairs(i + 1);
+        } else if ((sub == "fill" || sub == "check") && i < argc) {
+            w.begin_object().field("cmd", sub == "fill" ? "form_submit" : "form_check").field("form", std::string(argv[i]));
+            pairs(i + 1);
+        } else if (sub == "template" && i < argc) {
+            w.begin_object().field("cmd", "form_template_get").field("form", std::string(argv[i]));
+        } else if (sub == "edit" && i + 1 < argc) {
+            std::ifstream f(argv[i + 1], std::ios::binary);
+            if (!f) {
+                std::cerr << "can't read " << argv[i + 1] << "\n";
+                return 1;
+            }
+            std::ostringstream ss;
+            ss << f.rdbuf();
+            w.begin_object().field("cmd", "form_template_put").field("form", std::string(argv[i])).field("text", ss.str());
+        } else if (sub == "reset" && i < argc) {
+            w.begin_object().field("cmd", "form_template_reset").field("form", std::string(argv[i]));
+        } else {
+            std::cerr << "form | form show ID [KEY=VALUE] | form fill ID KEY=VALUE ... | form check ID KEY=VALUE ...\n"
+                         "     | form template ID | form edit ID FILE | form reset ID\n";
             return 2;
         }
     } else if (cmd == "rally") {

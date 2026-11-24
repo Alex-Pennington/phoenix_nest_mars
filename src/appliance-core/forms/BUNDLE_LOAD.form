@@ -1,0 +1,19 @@
+; Load a bundle that came in, or from a stick.
+FORM BUNDLE_LOAD
+TITLE Load a startup bundle
+SUMMARY Loads a bundle into your book, channels, schedules and forms. It never changes a card, key or keymaster.
+LEVEL ZERO
+ORDER 62
+ACTION bundle_load
+FIELD id Bundle received(@msg_bundles)
+FIELD file Or from a file(X) check=path
+FIELD accept Load it though you haven't checked the signer(Y,N) default=N
+NEXT KEYMASTER
+BEGIN_HELP
+Bundle received:
+Bundles that came in over the air. All its parts are gathered.
+END
+
+Load it though you haven't checked the signer:
+The box first asks. Say Y only if you know where it came from. A bundle from a signer you haven't checked never changes a frequency you already hold, and brings no forms.
+END

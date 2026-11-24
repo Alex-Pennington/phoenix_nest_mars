@@ -100,6 +100,7 @@ public:
     int64_t next_counter(const std::string& key, int64_t wrap);
 
     const std::string& station() const { return cfg_.station; }
+    const std::string& db_path() const { return cfg_.db_path; }
 
     CoreStatus status();
     // greybeard-ale's link state (see link_monitor.h). Set before start().

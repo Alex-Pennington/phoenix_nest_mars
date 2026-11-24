@@ -196,6 +196,12 @@ static void first_start_service(const fs::path& dir) {
     CHECK(ok(r) && yes(r, "setup_needed"));
     out = cli(port, "status");
     CHECK(parse(out).get("setup_needed") && yes(parse(out), "setup_needed"));
+    // The same, as the setup form gale-term draws: only SETUP is open.
+    r = parse(cli(port, "form"));
+    const JsonValue* fl = r.get("forms");
+    CHECK(ok(r) && fl && fl->is_array() && fl->arr.size() == 1 && str(fl->arr[0], "id") == "SETUP");
+    r = parse(cli(port, "form check SETUP call=ALL"));
+    CHECK(ok(r) && !yes(r, "ready"));
     out = cli(port, "setup sta-b");
     r = parse(out);
     CHECK(ok(r) && str(r, "call") == "STA-B" && !str(r, "fingerprint").empty());
@@ -211,15 +217,22 @@ static void first_start_service(const fs::path& dir) {
     all += cli(port, "channels add p1 5000.0 --mode USB --use PRIMARY");
     all += cli(port, "channels add P2 10 --unit mhz --mode USB --use SECONDARY");
     all += cli(port, "channels add S1 2500000 --unit hz --mode ALE --use SCAN");
+    // And by the channel form: the CHU time signal, 3330 kHz.
+    std::string shown = cli(port, "form fill CHANNEL name=t1 frequency=3330 use=TIME");
+    r = parse(cli(port, "form show CHANNEL name=T1"));
+    CHECK(ok(r) && yes(r, "prefilled"));
+    shown += cli(port, "form show CHANNEL name=T1");  // lists the units, so no MHZ check
+    for (auto* never : {"3330", "5000"}) CHECK(!leaks(shown, never));
     r = parse(cli(port, "channels"));
     const JsonValue* chans = r.get("channels");
-    CHECK(ok(r) && chans && chans->is_array() && chans->arr.size() == 3);
+    CHECK(ok(r) && chans && chans->is_array() && chans->arr.size() == 4);
     all += cli(port, "channels");
-    for (auto* never : {"5000", "10000", "2500", "MHZ"}) CHECK(!leaks(all, never));
+for (auto* never : {"5000", "10000", "2500", "3330", "MHZ"}) CHECK(!leaks(all, never));
     stop_core(pid);
     std::string logged = slurp(log);
     CHECK(logged.find("channel P1 added by hand") != std::string::npos);
-    for (auto* never : {"5000", "10000", "2500"}) CHECK(!leaks(logged, never));
+    for (auto* never : {"5000", "10000", "2500", "3330"}) CHECK(!leaks(logged, never));
+    CHECK(logged.find("form CHANNEL submitted") != std::string::npos);
 
     // Setup wrote only its own files: the call, and the station's keys.
     CHECK(fs::exists(d / "station-call") && fs::exists(d / "STA-B.id"));

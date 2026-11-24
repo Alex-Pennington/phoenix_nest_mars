@@ -1,0 +1,13 @@
+; Send each member its own bundle over the air.
+FORM BUNDLE_SEND
+TITLE Send startup bundles
+SUMMARY Sends each station its own signed bundle over the air, frequencies sealed to its card when you have checked it.
+LEVEL ZERO
+ORDER 61
+ACTION bundle_send
+FIELD to Send to(@stations+) required
+FIELD label Label(X) upper max=40
+BEGIN_HELP
+Send to:
+One or more stations. A station whose card you haven't checked gets a bundle without frequencies and a step to send you its card.
+END

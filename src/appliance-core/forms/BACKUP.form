@@ -1,0 +1,14 @@
+; A backup of this station's keys and held cards.
+FORM BACKUP
+TITLE Back up this station
+SUMMARY Writes your station keys and the cards you hold to a file, enciphered with a passphrase you choose. Keep it apart from the box.
+LEVEL ZERO
+ORDER 90
+ACTION station_backup
+FIELD passphrase Passphrase(X) required secret check=passphrase
+FIELD again Passphrase again(X) required secret again=passphrase
+FIELD out Write it to(X) required check=path
+BEGIN_HELP
+Passphrase:
+12 characters or more. Without it the backup can't be read, by you or anyone.
+END

@@ -1,0 +1,21 @@
+; The member's own choice of keymaster.
+FORM KEYMASTER
+TITLE Accept or refuse a keymaster
+SUMMARY Your choice of whose authority this box takes key tapes from. Accepting needs the fingerprint read to you by voice or in person.
+LEVEL ZERO
+ORDER 70
+ACTION keymaster_accept WHEN answer=ACCEPT
+ACTION keymaster_refuse WHEN answer=REFUSE
+FIELD station Station(@cards) required
+FIELD answer Your answer(ACCEPT,REFUSE) required
+FIELD fingerprint Fingerprint read to you(X) upper check=fingerprint
+FIELD how How you checked it(BY VOICE,IN PERSON) default=BY VOICE
+NEXT KEY_OPEN HANDOUT_LOAD
+BEGIN_HELP
+Your answer:
+This is yours to decide. Refusing keeps their cards and plain traffic, but this box takes no tape from them.
+END
+
+Fingerprint read to you:
+Needed to accept: four groups of four, read off their screen.
+END

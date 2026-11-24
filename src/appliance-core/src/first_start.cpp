@@ -1,5 +1,6 @@
 // First start: see first_start.h and docs/quick-start.md.
 #include "first_start.h"
+#include "forms.h"
 
 #include "frame.h"
 #include "json.h"
@@ -54,6 +55,17 @@ std::string handle(const std::string& db_dir, int64_t now, const std::string& li
     JsonValue req;
     if (!parse_json(line, req) || !req.get("cmd")) return error_reply("send one JSON object with \"cmd\"");
     std::string cmd = str_of(req, "cmd");
+    if (cmd.rfind("form_", 0) == 0) {
+        // Only the setup form, as it came with the box, until the call is set.
+        std::map<std::string, std::string> flat;
+        if (!parse_flat_object(line, flat)) return error_reply("request must be one flat JSON object");
+        forms::Library lib("");
+        forms::Context ctx;
+        ctx.only = {"SETUP"};
+        ctx.builtin_only = true;
+        ctx.run = [&](const std::string& r) { return handle(db_dir, now, r, call_set); };
+        if (auto out = forms::handle(lib, ctx, cmd, flat)) return *out;
+    }
     std::string have;
     bool set = saved_call(db_dir, have);
     if (cmd == "setup_status" || cmd == "status") {
@@ -61,13 +73,13 @@ std::string handle(const std::string& db_dir, int64_t now, const std::string& li
         w.begin_object().field("ok", true).field("setup_needed", !set);
         if (set) w.field("call", have);
         w.field("next", set ? "The call is set. The station is starting."
-                            : "This box has no station call yet. Give it with setup_station call=YOUR-CALL "
+                            : "This box has no station call yet. Fill in form SETUP (or setup_station call=YOUR-CALL) "
                               "(letters A-Z, digits and -, at most 16). The box then makes its station keys and card.");
         w.end_object();
         return w.str();
     }
     if (cmd != "setup_station")
-        return error_reply("this box has no station call yet: run setup_station with its call first");
+        return error_reply("this box has no station call yet: fill in form SETUP (or setup_station) first");
     if (set) return error_reply("this box's call is already set to " + have);
     std::string call = str_of(req, "call");
     for (auto& c : call) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));

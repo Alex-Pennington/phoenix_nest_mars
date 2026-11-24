@@ -1,4 +1,6 @@
 #include "api_server.h"
+#include "api_forms.h"
+#include "forms.h"
 
 #include "api_ops.h"
 #include "cipher_slot.h"
@@ -909,6 +911,11 @@ std::string handout_import(Core& core, const station::Identity& me, std::map<std
         if (!m) return error_reply("no message with that id");
         text = m->body;
     }
+    if (!req["file"].empty()) {
+        bool ok = false;
+        text = read_whole(req["file"], &ok);
+        if (!ok) return error_reply("can't read " + req["file"]);
+    }
     station::Handout h;
     if (!station::parse_handout(text, h, &err)) return error_reply("handout not loaded: " + err);
     if (h.for_station != me.station)
@@ -1031,6 +1038,7 @@ std::string bundle_cmd(Core& core, const station::Identity& me, const std::strin
     // "none_held" (the plan has none), or "not_sealed" (no member named).
     auto make = [&](std::vector<std::string>* changed, const std::string& member, std::string* freqs, int* sealed_n) {
         bundle::Bundle b = bundle::collect(*ops, core.link_formats(), req["label"], changed);
+        b.forms = forms::Library(forms_dir(core)).changed();
         b.made = ops->now();
         std::string state = "not_sealed";
         std::string text;
@@ -1091,6 +1099,7 @@ std::string bundle_cmd(Core& core, const station::Identity& me, const std::strin
             .field("channels", static_cast<int>(b.channels.size()))
             .field("schedules", static_cast<int>(b.schedules.size()))
             .field("links", static_cast<int>(b.links.size()))
+            .field("forms", static_cast<int>(b.forms.size()))
             .field("bytes", static_cast<int>(text.size()))
             .field("parts", static_cast<int>(bundle::split(text, kBundlePart).size()))
             .field("for", b.for_station)
@@ -1219,7 +1228,8 @@ std::string bundle_cmd(Core& core, const station::Identity& me, const std::strin
             .field("book", static_cast<int>(b.book.size()))
             .field("channels", static_cast<int>(b.channels.size()))
             .field("schedules", static_cast<int>(b.schedules.size()))
-            .field("links", static_cast<int>(b.links.size()));
+            .field("links", static_cast<int>(b.links.size()))
+            .field("forms", static_cast<int>(b.forms.size()));
     };
     if (!trusted && req["accept"] != "Y") {
         std::string what = std::to_string(b.book.size()) + " book entries, " + std::to_string(b.channels.size()) +
@@ -1268,6 +1278,31 @@ std::string bundle_cmd(Core& core, const station::Identity& me, const std::strin
             if (!ops->channels().get(c)) still.push_back(c);
         a.need_frequency = still;
     }
+    // Forms: only from a signer checked here, and never over a form this
+    // member changed on the box.
+    int forms_added = 0, forms_replaced = 0, forms_same = 0, forms_kept = 0, forms_held = 0;
+    {
+        forms::Library lib(forms_dir(core));
+        for (auto& [fid, ftext] : b.forms) {
+            if (!trusted) {
+                ++forms_held;
+                continue;
+            }
+            auto have = lib.get(fid);
+            if (have && have->changed && have->origin == "edited here") {
+                ++forms_kept;
+                continue;
+            }
+            std::string res, got, ferr;
+            if (!lib.put(ftext, "from bundle " + b.by, &res, &got, &ferr)) {
+                a.problems.push_back("form " + fid + ": " + ferr);
+                continue;
+            }
+            if (res == "added") ++forms_added;
+            else if (res == "replaced") ++forms_replaced;
+            else ++forms_same;
+        }
+    }
     int links = 0;
     for (auto& l : b.links) {
         if (l.first == me.station) continue;
@@ -1296,7 +1331,12 @@ std::string bundle_cmd(Core& core, const station::Identity& me, const std::strin
         .field("frequencies_added", fa.added)
         .field("frequencies_changed", fa.changed)
         .field("frequencies_same", fa.same)
-        .field("frequencies_kept", fa.kept);
+        .field("frequencies_kept", fa.kept)
+        .field("forms_added", forms_added)
+        .field("forms_replaced", forms_replaced)
+        .field("forms_same", forms_same)
+        .field("forms_kept", forms_kept)
+        .field("forms_held", forms_held);
     w.begin_array("need_frequency");
     for (auto& c : a.need_frequency) w.field("", c);
     w.end_array();
@@ -1386,8 +1426,15 @@ std::optional<std::string> station_cmd(Core& core, const std::string& cmd, std::
             .field("ok", true)
             .field("station", me->station)
             .field("fingerprint", station::fingerprint(station::card_of(*me)))
-            .field("card", station::format_card(*me))
-            .end_object();
+            .field("card", station::format_card(*me));
+        if (!req["out"].empty()) {
+            // On a stick, for a keymaster met in person.
+            std::ofstream f(req["out"], std::ios::binary | std::ios::trunc);
+            f << station::format_card(*me);
+            if (!f) return error_reply("can't write " + req["out"]);
+            w.field("written", req["out"]);
+        }
+        w.end_object();
         return w.str();
     }
     if (cmd == "station_backup") {
@@ -1400,14 +1447,30 @@ std::optional<std::string> station_cmd(Core& core, const std::string& cmd, std::
         if (!ok) return error_reply(err);
         core.note("an encrypted backup of the station keys and " + std::to_string(held.size()) + " held card(s) was made");
         JsonWriter w;
-        w.begin_object().field("ok", true).field("backup", out).field("cards", static_cast<int>(held.size())).end_object();
+        w.begin_object().field("ok", true).field("backup", out).field("cards", static_cast<int>(held.size()));
+        if (!req["out"].empty()) {
+            std::ofstream f(req["out"], std::ios::binary | std::ios::trunc);
+            f << out;
+            if (!f) return error_reply("the backup was made but can't be written to " + req["out"]);
+            w.field("written", req["out"]);
+        }
+        w.end_object();
         return w.str();
     }
     if (cmd == "station_restore") {
         station::Identity id;
         std::vector<station::HeldCard> held;
         int64_t saved = 0;
-        bool ok = station::restore(req["text"], req["passphrase"], id, &held, &saved, &err);
+        std::string btext = req["text"];
+        if (!req["file"].empty()) {
+            bool read = false;
+            btext = read_whole(req["file"], &read);
+            if (!read) {
+                crypto::wipe(req["passphrase"]);
+                return error_reply("can't read " + req["file"]);
+            }
+        }
+        bool ok = station::restore(btext, req["passphrase"], id, &held, &saved, &err);
         crypto::wipe(req["passphrase"]);
         if (!ok) return error_reply(err);
         if (id.station != core.station()) {
@@ -1449,6 +1512,12 @@ std::optional<std::string> station_cmd(Core& core, const std::string& cmd, std::
             if (!m) return error_reply("no message with that id");
             text = m->body;
             source = "message " + m->id + " from " + m->src;
+        }
+        if (!req["file"].empty()) {
+            bool read = false;
+            text = read_whole(req["file"], &read);
+            if (!read) return error_reply("can't read " + req["file"]);
+            if (req["source"].empty()) source = "file " + req["file"];
         }
         station::Card c;
         std::string what;
@@ -1632,7 +1701,8 @@ std::optional<std::string> station_cmd(Core& core, const std::string& cmd, std::
     w.end_array().begin_array("no_card");
     for (auto& n : no_card) w.field("", n);
     w.end_array();
-    if (req["handouts"] == "Y") {
+    const std::string handout_dir = req["out"];
+    if (req["handouts"] == "Y" || !handout_dir.empty()) {
         // One handout per member: no secret in it, only cards, fingerprints,
         // the tape sealed to that member and the steps.
         station::Handout base;
@@ -1680,12 +1750,21 @@ std::optional<std::string> station_cmd(Core& core, const std::string& cmd, std::
             if (alt)
                 for (auto& c : member_cards)
                     if (std::find(h.cards.begin(), h.cards.end(), c) == h.cards.end()) h.cards.push_back(c);
+            std::string text = station::format_handout(h, *me);
             w.begin_object()
                 .field("station", m)
                 .field("has_tape", !h.sealed.empty())
                 .field("alternate", alt)
-                .field("text", station::format_handout(h, *me))
-                .end_object();
+                .field("text", text);
+            if (!handout_dir.empty()) {
+                // On a stick: one file per member, HANDOUT-STA-B.TXT.
+                std::string path = handout_dir + "/HANDOUT-" + m + ".TXT";
+                std::ofstream f(path, std::ios::binary | std::ios::trunc);
+                f << text;
+                w.field("file", f ? path : std::string());
+                if (!f) w.field("problem", "can't write " + path);
+            }
+            w.end_object();
         }
         w.end_array();
     }
@@ -1760,6 +1839,7 @@ std::string ApiServer::handle(Core& core, const std::string& line) {
     std::map<std::string, std::string> req;
     if (!parse_flat_object(line, req)) return error_reply("request must be one flat JSON object");
     const std::string cmd = req["cmd"];
+    if (auto r = handle_forms(core, cmd, req)) return *r;
 
     if (cmd == "status") {
         CoreStatus s = core.status();

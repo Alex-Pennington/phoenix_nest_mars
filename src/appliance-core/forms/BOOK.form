@@ -1,0 +1,28 @@
+; One station-book entry.
+FORM BOOK
+TITLE Station book entry
+SUMMARY Adds or changes one entry in the station book: a station, or a collective that sends to several.
+LEVEL ZERO
+ORDER 30
+ACTION book_put
+PREFILL book name
+FIELD name Name(X) required upper max=40
+FIELD kind Kind(STATION,COLLECTIVE) default=STATION
+FIELD call Call(X) upper max=16 check=station
+FIELD ri Routing indicator(AAAAAAA) upper
+FIELD ale ALE address(X) upper max=15
+FIELD members Members(X) upper
+FIELD note Note(X) max=60
+NEXT BOOK CHANNEL
+BEGIN_HELP
+Name:
+What you call this station or group in messages: NET CONTROL, STA-B.
+END
+
+Members:
+For a collective: the names or calls it sends to, separated by commas.
+END
+
+Note:
+No personal details: no names, phone numbers or addresses. The book travels in startup bundles.
+END

@@ -1,0 +1,14 @@
+; First start: the station's call. Replaces editing the settings file.
+FORM SETUP
+TITLE Your station
+SUMMARY The first thing a box out of the can asks: your call. The box then makes its keys and card.
+LEVEL ZERO
+ORDER 10
+ACTION setup_station
+FIELD call Station call(X) required upper max=16 check=station
+NEXT CARD_SEND BOOK CHANNEL
+BEGIN_HELP
+Station call:
+Your MARS call, as the net knows you (STA-B). Letters, digits and -.
+It can't be changed here once set, so check it before you send.
+END

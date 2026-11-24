@@ -1,0 +1,26 @@
+; One channel of the frequency card, entered by hand.
+FORM CHANNEL
+TITLE Channel and frequency
+SUMMARY Enters one channel of your frequency card by hand, for a region with no documents. The frequency is kept like an imported one and never shown again.
+LEVEL ZERO
+ORDER 40
+ACTION channel_put
+PREFILL channel name
+FIELD name Designator(X) required upper max=12 check=designator
+FIELD frequency Frequency(X) required secret check=frequency
+FIELD unit Unit(KHZ,MHZ,HZ) default=KHZ
+FIELD mode Mode(USB,LSB,ALE,DATA,AM,FM,CW) default=USB
+FIELD use What it is for(X) upper max=40
+NEXT CHANNEL SCHEDULE
+BEGIN_HELP
+Designator:
+The name everyone uses for the channel, as on the card: P1, S1. Only the designator is ever sent in the clear.
+END
+
+Frequency:
+As on the card. It is kept on this box and goes out only sealed to a checked member's card.
+END
+
+What it is for:
+PRIMARY, SECONDARY, SCAN. No frequency here.
+END

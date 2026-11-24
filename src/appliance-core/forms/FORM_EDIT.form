@@ -1,0 +1,17 @@
+; Change a form, or add one.
+FORM FORM_EDIT
+TITLE Change a form
+SUMMARY Changes the template behind a form, or adds a new one. It takes effect at once. FORM_RESET puts a form back as it came.
+ORDER 95
+ACTION form_template_put
+PREFILL template template
+FIELD template Form(XXXXXXXXXXXXXXXXXXXXXXXX) required upper as=form
+FIELD text Template(TEXT) required
+BEGIN_HELP
+Form:
+The form to change, as form_list names it. A new name adds a form.
+END
+
+Template:
+The template as text. docs/forms.md has the lines a template can hold.
+END

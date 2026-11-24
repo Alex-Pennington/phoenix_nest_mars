@@ -72,6 +72,11 @@ struct Bundle {
     // Filled by collect() and used by format() to seal; never formatted in
     // the clear. Designator and frequency in Hz.
     std::vector<std::pair<std::string, int64_t>> freqs;
+    // Form templates (forms.h) that differ from the ones a box comes with,
+    // as (id, template text). They go signed, packed into radio-safe lines:
+    //   FORM CHANNEL
+    //   FORMDATA (base32 of the compressed template)
+    std::vector<std::pair<std::string, std::string>> forms;
 };
 
 // What this station holds now, as a bundle (book, channel designators,

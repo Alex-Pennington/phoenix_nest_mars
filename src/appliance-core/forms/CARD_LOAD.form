@@ -1,0 +1,19 @@
+; Take a card that came in over the air.
+FORM CARD_LOAD
+TITLE Take a card that came in
+SUMMARY Keeps a station card that arrived over the air or on a stick. Keeping it trusts nothing yet: check it by voice next.
+LEVEL ZERO
+ORDER 21
+ACTION card_import
+FIELD id Card received(@msg_cards)
+FIELD file Or from a file(X) check=path
+FIELD replace Replace the card held for that station(Y,N) default=N
+NEXT CARD_CHECK
+BEGIN_HELP
+Card received:
+The messages that hold a station card, newest first. For a card on a stick, give the file instead.
+END
+
+Replace the card held for that station:
+Only Y when the station told you it was rebuilt. A different card for a station you already hold is refused otherwise.
+END

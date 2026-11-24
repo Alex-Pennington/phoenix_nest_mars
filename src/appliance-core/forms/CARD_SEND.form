@@ -1,0 +1,14 @@
+; Send this station's card to another station over the air.
+FORM CARD_SEND
+TITLE Send your card
+SUMMARY Sends your station card to another station, so it can read your fingerprint back to you and seal frequencies and keys to you.
+LEVEL ZERO
+ORDER 20
+ACTION card_send
+FIELD to Send to(X) required upper max=16 check=station
+NEXT CARD_CHECK
+BEGIN_HELP
+Send to:
+The call of the station that should hold your card: your net control or keymaster.
+Then read your fingerprint to them by voice, or in person.
+END

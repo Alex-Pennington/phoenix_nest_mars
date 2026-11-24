@@ -1,0 +1,24 @@
+; Key tape for a net, sealed to each member, with handouts.
+FORM NET_TAPE
+TITLE Issue a key tape
+SUMMARY Makes a key tape for a net (our own cipher), loads it here, and seals a copy to each member whose card you checked. Handouts go on a stick for members met in person.
+LEVEL ZERO
+ORDER 80
+ACTION net_tape
+FIELD net Net(X) required upper max=40
+FIELD members Members(@stations+) required
+FIELD keymasters Alternate keymasters(@cards+)
+FIELD days Days(###) default=31 check=number
+FIELD start First day(YYYYMMDD)
+FIELD send Send the sealed tapes now(Y,N) default=Y
+FIELD handouts Make handouts(Y,N) default=N
+FIELD out Write handouts to(X) check=path
+NEXT KEY_OPEN
+BEGIN_HELP
+Days:
+How many daily keys. Over the air a sealed tape holds about two weeks; longer tapes go by handout on a stick.
+END
+
+Write handouts to:
+A folder on a stick, such as /media/stick. Each member's handout is its own file.
+END

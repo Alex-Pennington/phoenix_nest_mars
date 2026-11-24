@@ -1,0 +1,9 @@
+; Put a backup back.
+FORM RESTORE
+TITLE Restore from a backup
+SUMMARY Puts this station's keys and held cards back from a backup file. It must be this station's backup.
+LEVEL ZERO
+ORDER 91
+ACTION station_restore
+FIELD file Backup file(X) required check=path
+FIELD passphrase Passphrase(X) required secret

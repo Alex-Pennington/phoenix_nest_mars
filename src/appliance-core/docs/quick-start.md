@@ -31,11 +31,12 @@ Running it again upgrades the programs and keeps your settings and data.
 
 ## 2. Set up your station
 
-A box with no call asks for one the first time it starts: appliance-core
-answers only the setup calls on its API port until the call is given. From
-the operator screen, or:
+Everything a box needs is entered through forms on the operator screen, so
+a member with only this box never edits a file (docs/forms.md). A box with
+no call shows one form the first time it starts: Your station. From the
+operator screen, or:
 
-    appliance-cli setup STA-B
+    appliance-cli form fill SETUP call=STA-B     # or: appliance-cli setup STA-B
 
 That sets the call, makes the station's keys and card, and prints the
 fingerprint to read to your keymaster. The call is kept in the data folder,
@@ -54,7 +55,12 @@ Leave channel plans and frequencies out of this file. A frequency card is
 loaded with `appliance-cli import` (section 5b), or entered by hand one
 channel at a time with no documents at all:
 
-    appliance-cli channels add P1 5000 --mode USB --use PRIMARY
+    appliance-cli form fill CHANNEL name=P1 frequency=5000 use=PRIMARY
+
+The other forms work the same way: `appliance-cli form` lists them (station
+book, net schedule, cards, startup bundle, keymaster, key tape, handout,
+backup, restore), `form show ID` shows one with its help, and `form edit`
+changes a form for your region.
 
 Either way it is kept in its own file, never shown back, and travels only
 sealed to a member's card in a startup bundle. Then check the file:

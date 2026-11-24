@@ -19,6 +19,21 @@ find_package(OpenSSL 3.0 REQUIRED COMPONENTS Crypto)
 find_package(ZLIB REQUIRED)
 find_package(EXPAT REQUIRED)
 
+# The forms built into the program (forms/*.form, docs/forms.md). A member's
+# own changes live beside the station's database and need no rebuild; these
+# are the ones a box comes with.
+file(GLOB PNA_FORM_FILES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/forms/*.form)
+list(SORT PNA_FORM_FILES)
+set(PNA_FORMS_CPP ${CMAKE_CURRENT_BINARY_DIR}/builtin_forms.cpp)
+set(_pna_forms_body "")
+foreach(_f ${PNA_FORM_FILES})
+  file(READ ${_f} _t)
+  get_filename_component(_n ${_f} NAME_WE)
+  string(APPEND _pna_forms_body "        {\"${_n}\", R\"PNAFORM(${_t})PNAFORM\"},\n")
+endforeach()
+file(WRITE ${PNA_FORMS_CPP}.new "// Made by CMake from forms/*.form. Don't edit.\n#include \"${CMAKE_CURRENT_SOURCE_DIR}/src/forms.h\"\nnamespace pna {\nnamespace forms {\nconst std::vector<std::pair<std::string, std::string>>& builtin_texts() {\n    static const std::vector<std::pair<std::string, std::string>> t = {\n${_pna_forms_body}    };\n    return t;\n}\n}  // namespace forms\n}  // namespace pna\n")
+configure_file(${PNA_FORMS_CPP}.new ${PNA_FORMS_CPP} COPYONLY)
+
 add_library(pna_core STATIC
   src/frame.cpp
   src/store.cpp
@@ -47,6 +62,9 @@ add_library(pna_core STATIC
   src/station.cpp
   src/bundle.cpp
     src/first_start.cpp
+    src/forms.cpp
+    src/api_forms.cpp
+    ${PNA_FORMS_CPP}
   src/table.cpp
   src/channels.cpp
   src/mars_import.cpp
@@ -89,7 +107,7 @@ add_library(test_template_module MODULE sdk/cipher_template.c)
 set_target_properties(test_template_module PROPERTIES PREFIX "" C_VISIBILITY_PRESET hidden)
 target_include_directories(test_template_module PRIVATE sdk)
 
-foreach(t test_frame test_core test_greybeard test_acp127 test_received test_templates test_compose test_link test_ops test_sched test_config test_crypto test_codress test_station test_badday test_import test_s5066 test_appa test_appa_m110 test_cipher_slot test_cp_link test_acp127_ops test_groundzero test_firststart)
+foreach(t test_frame test_core test_greybeard test_acp127 test_received test_templates test_compose test_link test_ops test_sched test_config test_crypto test_codress test_station test_badday test_import test_s5066 test_appa test_appa_m110 test_cipher_slot test_cp_link test_acp127_ops test_groundzero test_firststart test_forms)
   add_executable(${t} tests/${t}.cpp)
   target_link_libraries(${t} PRIVATE pna_core)
   target_compile_definitions(${t} PRIVATE PNA_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}" PNA_BUILD_DIR="${CMAKE_CURRENT_BINARY_DIR}")

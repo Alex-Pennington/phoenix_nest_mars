@@ -1,0 +1,12 @@
+; This station's card on a stick, for a keymaster met in person.
+FORM CARD_SAVE
+TITLE Put your card on a stick
+SUMMARY Writes your station card to a file, for a keymaster or net control you meet in person. Read them your fingerprint while you're there.
+LEVEL ZERO
+ORDER 23
+ACTION station_card
+FIELD out Write it to(X) required check=path
+BEGIN_HELP
+Write it to:
+A file on a stick, such as /media/stick/MY-CARD.TXT.
+END

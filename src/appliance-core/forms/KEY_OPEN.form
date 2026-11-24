@@ -1,0 +1,8 @@
+; Open a key tape sealed to this station.
+FORM KEY_OPEN
+TITLE Open a key tape
+SUMMARY Opens a sealed key tape that came in, if it is from a keymaster you accepted.
+LEVEL ZERO
+ORDER 81
+ACTION key_open
+FIELD id Tape received(@msg_tapes) required

@@ -1,0 +1,7 @@
+; Put a form back as it came.
+FORM FORM_RESET
+TITLE Put a form back
+SUMMARY Drops this box's own copy of a form: the form is back as it came (one that didn't come with the box goes).
+ORDER 96
+ACTION form_template_reset
+FIELD template Form(@forms) required as=form

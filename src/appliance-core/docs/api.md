@@ -18,6 +18,7 @@ booleans; multi-line values are strings with `\n`.
 | Messages waiting to go, in sending order | `queue` |
 | The activity log, new lines only | `log` with `after` |
 | A message's history and body | `list`, `get` |
+| Any level-zero form (setup, book, channels, schedules, bundles, keymasters, tapes, backups) | `form_list`, `form_get`, `form_check`, `form_submit` |
 
 `send`, `send_acp127`, `send_acp126`, `send_chat`, `parse_acp127` and
 `parse_traffic` stay as they were for tools that build the envelope
@@ -34,6 +35,39 @@ mode: the API port answers only these two calls until the call is given.
   `fingerprint` and `card` (the card text to send). Refused once a call is set.
 
 gale-term shows this as its first-run screen when `setup_needed` is true.
+In setup mode the form calls below also answer, for the SETUP form only.
+
+## Forms
+
+Every document a box needs from level zero is entered by a form drawn from
+a template (docs/forms.md). gale-term needs no code per form: it draws what
+`form_get` returns and sends it back with `form_submit`. Field values go at
+the top level of the request, beside `cmd` and `form`.
+
+- `form_list {level}`: `forms`, each `id`, `title`, `summary`, `level_zero`,
+  `order`, `origin` (`built in`, `edited here`, `from bundle NCS-A`) and
+  `changed`. `level=zero` lists only level-zero forms.
+- `form_get {form, <prefill key>}`: the form to draw. `title`, `summary`,
+  `origin`, `prefilled` and `fields`, each with `key`, `label`, `kind`
+  (`text`, `textblock`, `choice`, `yesno`, `time`, `pattern`), `mask`,
+  `suffix`, `required`, `upper`, `secret`, `multi`, `check`, `max`, `again`,
+  `source`, `default`, `choices` (each `value`, `label`), `help` and `value`.
+  A secret field never has a value; `has_value` says one is held. Also
+  `fixed` (values the template sets, each `key`, `value`, to show the
+  member), `actions` and `next_forms`. With the prefill key given (`name=P1`
+  for CHANNEL), the fields are filled from what the station holds.
+- `form_check {form, fields...}`: `ready`, and `problems`, each `field` and
+  `problem` in plain words. Changes nothing. Call it as the member types.
+- `form_submit {form, fields...}`: checks, then runs the form's call. Returns
+  `ok`, `form`, `action` (the call run), `error`, `problems` (nothing was
+  run), `not_done` (stations a send missed), `next`, `next_forms` and
+  `result`, the call's own reply.
+- `form_template_get {form}`: `text`, `origin`, `builtin`, `changed`.
+- `form_template_put {form, text}`: checks and keeps a template. `result` is
+  `added`, `replaced` or `same`; a bad template returns `error` naming the
+  line. In use at once.
+- `form_template_reset {form}`: drops the local copy. `result`: `built in
+  again`, or `removed` for a form that isn't built in.
 
 ## status
 
@@ -418,11 +452,13 @@ memory after use and never written to the log.
 
 ### This station's keys
 
-- `station_card`: `station`, `fingerprint` and `card`, the text to hand out.
-- `station_backup {passphrase}`: `backup`, the station keys and held cards
+- `station_card {out}`: `station`, `fingerprint` and `card`, the text to
+  hand out. `out` writes the card to a file too (a stick) and returns
+  `written`.
+- `station_backup {passphrase, out}`: `backup`, the station keys and held cards
   enciphered with the passphrase (12 characters or more), and `cards`, the
-  count.
-- `station_restore {text, passphrase}`: puts a backup back. It must be this
+  count. `out` writes it to a file and returns `written`.
+- `station_restore {text | file, passphrase}`: puts a backup back. It must be this
   station's. Returns `fingerprint`, `cards` (restored), `saved` and `age_days`
   (for dated backups) and `refused`.
 - `rally_status`: for a box coming back on a bad day. `station`,
@@ -434,8 +470,8 @@ memory after use and never written to the log.
 
 ### Other stations' cards
 
-- `card_import {text | id, source, replace}`: loads a card from text or a
-  stored message. Returns `station`, `fingerprint`, `result` (`added`, `same`
+- `card_import {text | id | file, source, replace}`: loads a card from text,
+  a stored message or a file. Returns `station`, `fingerprint`, `result` (`added`, `same`
   or `replaced`), `checked` and `next`. A different card for a station already
   held is refused unless `replace` is `Y`.
 - `cards_list`: this station and its `fingerprint`, and `cards`, each with
@@ -446,7 +482,7 @@ memory after use and never written to the log.
   `keymaster_accept`, and returns `handouts` the same way.
 - `card_keymaster {station, keymaster}`: names a checked card a keymaster
   (`keymaster=N` takes it back). Only a keymaster's sealed tapes open here.
-- `handout_import {text | id | packet, replace}`: loads a member handout, new or stale.
+- `handout_import {text | id | file | packet, replace}`: loads a member handout, new or stale.
   `packet` is the path of a packet folder (`handout.txt`, and `cipher/` when
   the net uses another cipher module); the module is installed only when its
   set hash matches the handout's signed `CIPHER` line. Also returns `cipher`
@@ -498,7 +534,8 @@ card, key or keymaster.
   path to write it to (a stick). `for` makes that member's copy, with the
   frequencies sealed to its card when the card is held and checked here.
   Returns `tag`, `by`, `fingerprint`, `made`, `book`, `channels`,
-  `schedules`, `links` (counts), `bytes`, `parts` (on the air), `for`,
+  `schedules`, `links`, `forms` (counts; forms changed from the built-ins
+  ride along), `bytes`, `parts` (on the air), `for`,
   `frequencies` (`sealed`, `no_card`, `card_not_checked`, `none_held`, or
   `not_sealed` with no `for`), `frequencies_sealed` (count), `text`,
   `written` when `out` was given, `next` when the copy has no frequencies,
@@ -525,13 +562,15 @@ card, key or keymaster.
   station without them, or `none`), `frequencies_added`,
   `frequencies_changed`, `frequencies_same`, `frequencies_kept` (held here
   on another frequency and kept, because the signer isn't checked),
+  `forms_added`, `forms_replaced`, `forms_same`, `forms_kept` (changed on
+  this box, so kept) and `forms_held` (not taken: the signer isn't checked),
   `need_frequency` (designators this box still has no frequency for),
   `problems` and `next`. A bundle that was changed is
   an error.
 
 ### Keymaster
 
-- `net_tape {net, start, days, period_hours, members, keymasters, send, handouts}`:
+- `net_tape {net, start, days, period_hours, members, keymasters, send, handouts, out}`:
   makes a tape for `net` (`start` is YYYYMMDD or YYYYMMDDHHMM UTC, default
   today 0000Z; 31 days of 24-hour keys by default), loads it here, and seals a
   copy to each station in `members` (calls or station-book names, spaces or
@@ -540,7 +579,9 @@ card, key or keymaster.
   `station`, `checked` and `text`, plus `id` when `send` is `Y`) and `no_card`
   (members whose card isn't held). With `handouts=Y` it also returns
   `handouts`, each with `station`, `has_tape`, `alternate` and `text`
-  (docs/crypto.md).
+  (docs/crypto.md). `out` is a folder (a stick): each handout is written
+  there as `HANDOUT-<STATION>.TXT`, given as `file`, and implies
+  `handouts=Y`.
 - `tape_seal {text, to}`: seals a tape made with `pna-keymaster` to one
   station. Returns the same shape.
 

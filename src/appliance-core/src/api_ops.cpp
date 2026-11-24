@@ -10,6 +10,7 @@
 #include "mars_import.h"
 #include "table.h"
 
+#include <algorithm>
 #include <cstdio>
 #include <ctime>
 
@@ -165,8 +166,10 @@ std::optional<std::string> handle_ops(Core& core, const std::string& cmd, std::m
         e.call = req["call"];
         e.ri = req["ri"];
         e.ale = req["ale"];
-        e.members = list_of(req["members"], ';');
-        if (e.members.empty()) e.members = list_of(req["members"], ',');
+        // Members split on ; or , (STA-B;STA-C or STA-B, STA-C).
+        std::string members = req["members"];
+        std::replace(members.begin(), members.end(), ',', ';');
+        e.members = list_of(members, ';');
         e.note = req["note"];
         if (!ops->book_put(e, &err)) return err_reply(err);
         return ok_reply();

@@ -1,0 +1,9 @@
+; A member handout from a stick.
+FORM HANDOUT_LOAD
+TITLE Load a handout
+SUMMARY Loads a member handout from a stick: cards, and a sealed tape. Nothing opens until you accept its keymaster.
+LEVEL ZERO
+ORDER 82
+ACTION handout_import
+FIELD file Handout file(X) required check=path
+NEXT KEYMASTER

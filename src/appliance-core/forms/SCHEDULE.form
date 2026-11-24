@@ -1,0 +1,29 @@
+; One net schedule.
+FORM SCHEDULE
+TITLE Net schedule
+SUMMARY Adds or changes a net that meets on set days, so the box reminds you and can open it.
+LEVEL ZERO
+ORDER 50
+ACTION sched_put
+PREFILL schedule name
+FIELD name Net name(X) required upper max=40
+FIELD days Days(X) required upper
+FIELD time Start(HHMM)Z required
+FIELD minutes Minutes(###) default=60 check=number
+FIELD channel Channel(@channels)
+FIELD ncs Net control(X) upper max=16 check=station
+FIELD roster Roster(X) upper
+FIELD note Note(X) max=60
+NEXT SCHEDULE BUNDLE_SEND
+BEGIN_HELP
+Days:
+DAILY, WEEKDAYS, WEEKENDS, or days like TUE,THU. 1SAT is the first Saturday of the month, LSUN the last Sunday.
+END
+
+Start:
+UTC, 24 hour: 1900.
+END
+
+Roster:
+The stations or collectives expected, separated by commas.
+END

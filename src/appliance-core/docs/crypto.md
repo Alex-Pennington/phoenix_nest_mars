@@ -246,6 +246,11 @@ If everything has to be rebuilt, leadership needs only the appliances:
 5. The keymaster runs `net_tape` with the members.
 6. Each member runs `keys open`.
 
+Every step is also a form on the operator screen (docs/forms.md): SETUP,
+CHANNEL, BOOK, SCHEDULE, CARD_SEND, CARD_CHECK, BUNDLE_SEND, KEYMASTER,
+NET_TAPE, KEY_OPEN. `test_forms` builds a net from empty boxes that way,
+with form calls only.
+
 `test_station` does this with three stations: one over the air and one by USB.
 It then does it a second time from empty folders, and checks that nothing from
 the first net opens in the second.

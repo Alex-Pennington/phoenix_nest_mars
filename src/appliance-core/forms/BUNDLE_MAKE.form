@@ -1,0 +1,19 @@
+; A startup bundle for one member, or for anyone, on a stick.
+FORM BUNDLE_MAKE
+TITLE Make a startup bundle
+SUMMARY Builds a signed bundle of the station book, channels, schedules and forms. Made for one member whose card you checked, it carries the frequencies sealed to that member.
+LEVEL ZERO
+ORDER 60
+ACTION bundle_make
+FIELD for For member(@cards)
+FIELD label Label(X) upper max=40
+FIELD out Write it to(X) check=path
+NEXT BUNDLE_SEND
+BEGIN_HELP
+For member:
+Leave it empty for a bundle anyone can load, with no frequencies.
+END
+
+Write it to:
+A file on a stick, such as /media/stick/region.pnb. Leave it empty to only see it.
+END

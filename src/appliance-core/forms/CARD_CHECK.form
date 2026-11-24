@@ -1,0 +1,19 @@
+; Check a card by the fingerprint read back by voice.
+FORM CARD_CHECK
+TITLE Check a card by voice
+SUMMARY Marks a card checked when the fingerprint the station reads to you matches. Only checked cards get sealed frequencies and keys.
+LEVEL ZERO
+ORDER 22
+ACTION card_check
+FIELD station Station(@cards_unchecked) required
+FIELD fingerprint Fingerprint read to you(X) required upper check=fingerprint
+FIELD keymaster Also accept them as your keymaster(Y,N) default=N
+NEXT KEYMASTER BUNDLE_SEND
+BEGIN_HELP
+Fingerprint read to you:
+Four groups of four, as the other operator reads them off their screen. Spaces don't matter.
+END
+
+Also accept them as your keymaster:
+Your choice alone: whose key tapes this box takes. Say Y only for the station whose authority you accept.
+END

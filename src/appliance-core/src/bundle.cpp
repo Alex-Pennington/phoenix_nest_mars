@@ -1,5 +1,6 @@
 // Startup bundles. See bundle.h and docs/crypto.md.
 #include "bundle.h"
+#include "forms.h"
 
 #include "compose.h"
 #include "crypto.h"
@@ -276,6 +277,13 @@ std::string format(const Bundle& b, const station::Identity& signer, const stati
         if (!s.note.empty()) text_lines(L, "NOTE", s.note);
     }
     for (auto& l : b.links) L.push_back("LINK " + l.first + " " + upper(l.second));
+    for (auto& [id, text] : b.forms) {
+        // _ can't go in plaindress: the id travels with - (form ids hold no -).
+        std::string sent = id;
+        std::replace(sent.begin(), sent.end(), '_', '-');
+        L.push_back("FORM " + sent);
+        for (auto& d : forms::pack(text)) L.push_back("FORMDATA " + d);
+    }
     for (auto& l : lines_of(sealed))
         if (!simplified(l).empty()) L.push_back(simplified(l));
     for (auto& l : lines_of(station::format_card(signer)))
@@ -330,7 +338,8 @@ bool parse(const std::string& text, Bundle& out, std::string* error) {
     out.signer_card = station::card_text(ct);
     out.signer_fp = station::fingerprint(card);
 
-    enum { NONE, BOOK, CHAN, SCHED } cur = NONE;
+    enum { NONE, BOOK, CHAN, SCHED, FORMREC } cur = NONE;
+    std::vector<std::vector<std::string>> form_data;
     std::string v;
     for (size_t i = 1; i < card_at; ++i) {
         const std::string& l = body[i];
@@ -362,6 +371,13 @@ bool parse(const std::string& text, Bundle& out, std::string* error) {
             s.minutes = 60;
             out.schedules.push_back(s);
             cur = SCHED;
+        } else if (field(l, "FORM", v)) {
+            std::replace(v.begin(), v.end(), '-', '_');
+            out.forms.push_back({v, ""});
+            form_data.emplace_back();
+            cur = FORMREC;
+        } else if (cur == FORMREC && field(l, "FORMDATA", v)) {
+            form_data.back().push_back(v);
         } else if (field(l, "LINK", v)) {
             size_t sp = v.find(' ');
             if (sp != std::string::npos) {
@@ -404,6 +420,9 @@ bool parse(const std::string& text, Bundle& out, std::string* error) {
             else if (field(l, "NOTE", v)) s.note += (s.note.empty() ? "" : " ") + v;
         }
     }
+    for (size_t i = 0; i < out.forms.size(); ++i)
+        if (!forms::unpack(form_data[i], out.forms[i].second))
+            return fail(error, "form " + out.forms[i].first + " in the bundle is damaged");
     for (auto& e : out.book)
         if (e.kind == "station" && e.call.empty()) e.call = e.name;
     if (out.by.empty() || out.made == 0 || card.station != out.by)
