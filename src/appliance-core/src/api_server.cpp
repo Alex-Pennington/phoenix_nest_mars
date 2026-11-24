@@ -409,6 +409,14 @@ std::string compose_send(Core& core, std::map<std::string, std::string>& req) {
     for (auto& t : r.to_targets) {
         std::string e, id;
         if (!codress_key.empty()) {
+            // ---- CIPHER HAND-OFF (send) ------------------------------------
+            // The finished message text leaves our flow here, at the same
+            // point where MSC's CP hands a message to its cipher library. Do
+            // not move this line. Everything CP leaves to its library stays
+            // on the far side: the enciphered-traffic header, its checksum
+            // and compression. None of that is built here. Our own cipher
+            // fills the slot; docs/cp-link.md, "The cipher hand-off".
+            // ------------------------------------------------------------------
             std::string out;
             if (!codress::encipher(*core.cipher(), r.message, r.codress_key, codress_key, out, &e)) {
                 refused.push_back(t + ": " + e);

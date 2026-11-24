@@ -4,7 +4,7 @@ The MSC Communications Processor (CP, in `src/cp`) is the program that moves
 MSC traffic on and off the air. This page says what the core took from it,
 what it left alone, and why. CP's cipher library was not opened or read;
 where CP enciphers or deciphers, that step is a closed box and our cipher
-slot (`docs/cipher-slot.md`) stands in its place.
+slot (`docs/cipher-slot.md`) stands in its place, at the hand-off below.
 
 ## What the core now does, as CP does
 
@@ -39,16 +39,30 @@ slot (`docs/cipher-slot.md`) stands in its place.
 Formal traffic sent plain has no on-air ack, as with CP, so it is marked
 sent once it is on the air.
 
+## The cipher hand-off
+
+The core hands a message to the cipher at the same point where CP hands one
+to its cipher library, and the line stays there:
+
+- **Sending:** the finished message text, after the form is checked, the
+  serials are taken and the station's signature is added, goes to the slot
+  one copy per station (`src/api_server.cpp`, marked CIPHER HAND-OFF (send)).
+- **Receiving:** codress text as heard goes to the slot and comes back as the
+  clear message (`src/core.cpp`, marked CIPHER HAND-OFF (receive)).
+
+Everything on our side of that line works like MSC: the message format, the
+plain-traffic framing, send, receive, ack and resend. Everything on the far
+side is the cipher's. The slot's interface is our own (`docs/cipher-slot.md`)
+and is not shaped to any other library's calls.
+
 ## What the core left alone, and why
 
-- **CP's cipher library and its header.** CP puts a header in front of
-  enciphered traffic inside its cipher step. That is part of the closed box,
-  so the core neither reads nor writes it. That library is fitted later,
-  once CP has been studied.
-- **Compression and CP's digest check.** CP may squeeze traffic before it
-  goes and checks a digest after it comes in. Matching these needs a
-  recording of a CP station sending in the clear; until there is one, the
-  core sends and reads plain text as it stands.
+- **CP's cipher library and what it does.** Everything CP leaves to its
+  cipher library stays on the library's side of the hand-off below: the
+  header CP puts in front of enciphered traffic, its checksum, and
+  compression (CP passes its compression choice into the library call). The
+  core neither builds nor reads any of it. The core runs our own cipher in
+  the slot.
 - **CP's TCP and UDP ports, its XML files and outside modem programs.**
   Out of scope: the appliance meets other stations only over the air.
 - **Things CP does that the core does better already:** its queue order,

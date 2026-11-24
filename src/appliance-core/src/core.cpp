@@ -276,6 +276,13 @@ void Core::read_codress(const std::string& id, const std::string& body) {
         log(id, "codress in key " + ind + ": this station holds no such key, so it can't be read here");
         return;
     }
+    // ---- CIPHER HAND-OFF (receive) -----------------------------------------
+    // The text as heard goes to the cipher here, at the same point where MSC's
+    // CP hands received traffic to its cipher library, and comes back as the
+    // clear message. Do not move this line. The enciphered-traffic header, its
+    // checksum and compression are the library's side and are not read here.
+    // docs/cp-link.md, "The cipher hand-off".
+    // --------------------------------------------------------------------------
     std::string plain, err;
     bool ok = codress::decipher(*slot, body, key, plain, &err);
     crypto::wipe(key);
