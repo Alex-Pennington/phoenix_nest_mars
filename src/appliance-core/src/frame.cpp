@@ -118,10 +118,14 @@ std::vector<Frame> FrameParser::feed(const std::string& bytes) {
     for (;;) {
         size_t soh = buf_.find(SOH);
         if (soh == std::string::npos) {
+            loose_ += buf_;
             buf_.clear();
             break;
         }
-        if (soh) buf_.erase(0, soh);
+        if (soh) {
+            loose_ += buf_.substr(0, soh);
+            buf_.erase(0, soh);
+        }
 
         size_t nl = buf_.find('\n');
         if (nl == std::string::npos || nl > kMaxHeader) {
@@ -159,7 +163,17 @@ std::vector<Frame> FrameParser::feed(const std::string& bytes) {
         bool good = buf_[nl + 1 + len] == EOT &&
                     crc32(body.data(), body.size(), crc32(head.data(), head.size())) == crc;
         if (!good) {
-            buf_.erase(0, 1);
+            // The header checked, so the length is right: keep the damaged
+            // copy and skip past it whole.
+            Frame g;
+            g.type = type == "ACK" ? FrameType::Ack : FrameType::Msg;
+            g.id = id;
+            g.src = src;
+            g.dst = dst;
+            g.prec = prec[0];
+            g.body = printable(body);
+            if (g.type == FrameType::Msg) garbled_.push_back(std::move(g));
+            buf_.erase(0, total);
             ++dropped_;
             continue;
         }
@@ -173,6 +187,27 @@ std::vector<Frame> FrameParser::feed(const std::string& bytes) {
         f.body = body;
         out.push_back(std::move(f));
         buf_.erase(0, total);
+    }
+    return out;
+}
+
+std::vector<Frame> FrameParser::take_garbled() {
+    std::vector<Frame> out;
+    out.swap(garbled_);
+    return out;
+}
+
+std::string FrameParser::take_loose() {
+    std::string out;
+    out.swap(loose_);
+    return out;
+}
+
+std::string printable(const std::string& bytes) {
+    std::string out = bytes;
+    for (char& c : out) {
+        unsigned char u = static_cast<unsigned char>(c);
+        if (!(u == '\r' || u == '\n' || u == '\t' || (u >= 0x20 && u < 0x7f))) c = '.';
     }
     return out;
 }

@@ -27,7 +27,11 @@ themselves.
 
 `{"cmd":"status"}` →
 `{"ok":true,"station":"AAR4XX","modem":"...","modem_ready":true,"modem_busy":false,"sending":"",
-"queued":0,"sent":0,"acked":0,"failed":0,"received":0,"acks_waiting":0,"frames_dropped":0,"advisor":""}`
+"queued":0,"sent":0,"acked":0,"failed":0,"received":0,"unacked":0,"held":0,"cancelled":0,
+"overheard":0,"garbled":0,"acks_waiting":0,"frames_dropped":0,"emcon":false,"advisor":""}`
+
+`unacked`, `held`, `cancelled`, `overheard`, `garbled` and `emcon` are
+explained under "Working with MSC stations" below.
 
 `advisor` names the helper plugged in with `--advisor`, or is empty.
 
@@ -229,7 +233,9 @@ lines.
 
 `{"cmd":"list","limit":50}` and `{"cmd":"get","id":"AAR4XX-17"}` →
 `{"ok":true,"messages":[{"id","direction","from","to","prec","precedence","state","attempts",
-"created_at","updated_at","body","last_error"?}]}`
+"created_at","updated_at","body","sends","last_error"?}]}`
+
+`sends` counts how many times a message went out whole on the air.
 
 ## The station book: address book, nets, duty, log, monthly report
 
@@ -458,3 +464,49 @@ docs/cipher-slot.md is the spec.
   check. Returns the same as `cipher_status`.
 - `cipher_remove`: takes the installed module out; `pna-aes` is back in the
   slot. Keys for the removed module stay held but aren't used.
+
+## Working with MSC stations
+
+See `docs/cp-link.md` for what these follow from.
+
+### States
+
+Outgoing: `queued`, `sending`, `sent`, `acked`, `failed`, and:
+
+- `unacked`: went out 1 + `ack_retries` times with no ack. Goes again by
+  itself when its station is heard.
+- `held`: the operator held it.
+- `cancelled`: the operator cancelled it.
+
+Incoming: `received`, and:
+
+- `overheard`: traffic for another station.
+- `garbled`: a copy that failed its check, or was cut short. Not acked.
+
+### emcon
+
+`{"cmd":"emcon","on":"Y"}` → `{"ok":true,"emcon":true}`. Nothing is sent,
+acks included, until `{"cmd":"emcon","on":"N"}`. Without `on` it only reports.
+It holds across a restart.
+
+### hold, release, cancel, requeue
+
+`{"cmd":"hold","id":"NCS-A-12"}` → `{"ok":true,"id":"NCS-A-12","state":"held"}`
+
+- `hold`: a queued message waits until released.
+- `release`: a held message goes back in the queue.
+- `cancel`: a queued, held, sent, unacked or failed message never goes again.
+  Not while it is on the air.
+- `requeue`: an unacked, failed, cancelled or held message goes again with
+  fresh counts.
+
+Each gives `"ok":false` with an `error` when the message can't take that step.
+
+### link_format
+
+`{"cmd":"link_format","station":"STA-C","format":"plain"}` →
+`{"ok":true,"station":"STA-C","format":"plain","links":[{"station":"STA-C","format":"plain"}]}`
+
+How the core talks to a station: `pna1` (the default, framed and acked) or
+`plain` (the message text alone, for an MSC station). Without `format` it
+reports. ALL can't be set.

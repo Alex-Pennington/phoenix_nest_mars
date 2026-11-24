@@ -53,15 +53,29 @@ const char* prec_name(char p);
 std::string encode(const Frame& f);
 
 // Feeds received bytes in any chunking and returns each complete frame whose
-// CRC checks. Damaged or partial frames are skipped.
+// CRC checks. Two other kinds of bytes are kept for the core to collect:
+//  - a frame whose header checks but whose body doesn't (garbled()): its
+//    body with every byte outside printable ASCII, CR, LF and tab shown as
+//    '.', so the operator sees what came and can ask for a repeat;
+//  - bytes outside any frame (loose()): bare traffic from a station that
+//    doesn't use PNA1 frames, such as an MSC CP station's ACP 127 text or
+//    chat. The core cuts it into messages (core.h).
 class FrameParser {
 public:
     std::vector<Frame> feed(const std::string& bytes);
     size_t dropped() const { return dropped_; }
+    std::vector<Frame> take_garbled();
+    std::string take_loose();
 
 private:
     std::string buf_;
     size_t dropped_ = 0;
+    std::vector<Frame> garbled_;
+    std::string loose_;
 };
+
+// Every byte outside printable ASCII, CR, LF and tab as '.' (as CP shows a
+// damaged copy).
+std::string printable(const std::string& bytes);
 
 }  // namespace pna

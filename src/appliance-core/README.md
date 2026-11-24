@@ -209,6 +209,29 @@ ends in it). Drawn from the batch 2 samples; no ACP 201 edition was read.
 
 `parse_traffic` reads a chat line as well as an enveloped message.
 
+To a station whose link format is `plain` (an MSC station), `send_chat` builds
+the MSC CP form instead, `chat|ID|STA-C DE NCS-A // text // K 24-0155Z`, and
+waits for that station's `ack|ID`. See "Working with MSC stations".
+
+## Working with MSC stations
+
+The core now handles traffic the way the MSC Communications Processor does,
+apart from its cipher, which stays a closed box behind our cipher slot:
+
+- A message with no ack goes again after `--ack-timeout` seconds (120), up to
+  `--ack-retries` more times (2), then waits as `unacked` and goes again when
+  its station is heard.
+- It waits `--tx-gap` seconds (6) after the channel goes quiet before keying up.
+- `emcon`, `hold`, `release`, `cancel` and `requeue` give the operator a hand
+  on the queue.
+- Garbled copies and traffic for other stations are kept, as `garbled` and
+  `overheard`, and not acked.
+- `link_format` set to `plain` sends an MSC station the bare text and reads
+  its bare text back, several messages to a burst.
+
+docs/cp-link.md says what was taken from CP and what was left alone;
+docs/api.md has the calls. tests/test_cp_link.cpp covers it.
+
 ## Reading received traffic
 
 `src/received.h` reads traffic in the forms MARS stations actually send, which

@@ -22,6 +22,7 @@
 #include <cctype>
 #include <cstdio>
 #include <optional>
+#include <chrono>
 #include <ctime>
 #include <map>
 #include <set>
@@ -78,6 +79,7 @@ void write_message(JsonWriter& w, const Message& m, bool waiting_for_link = fals
         .field("precedence", prec_name(m.prec))
         .field("state", m.state)
         .field("attempts", m.attempts)
+        .field("sends", m.sends)
         .field("created_at", static_cast<long long>(m.created_at))
         .field("updated_at", static_cast<long long>(m.updated_at))
         .field("body", m.body);
@@ -218,6 +220,14 @@ std::string send_chat(Core& core, std::map<std::string, std::string>& req) {
     gmtime_r(&t, &u);
     c.hour = u.tm_hour;
     c.minute = u.tm_min;
+    // A station reached as plain text is an MSC CP station: its chat window
+    // takes CP's chat form, with an ID it answers "ack|ID".
+    if (!req["to_station"].empty() && core.link_format(req["to_station"]) == "plain") {
+        c.day = u.tm_mday;
+        c.cp_id = acp201::cp_chat_id(c.from, static_cast<int64_t>(t) * 1000 +
+                                                  static_cast<int64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                                                      std::chrono::system_clock::now().time_since_epoch()).count() % 1000));
+    }
     std::string err, line = acp201::build(c, &err);
     if (line.empty()) return error_reply(err);
     std::string id = core.submit(req["to_station"], 'R', line, &err);
@@ -1265,6 +1275,12 @@ std::string ApiServer::handle(Core& core, const std::string& line) {
             .field("acked", s.counts.acked)
             .field("failed", s.counts.failed)
             .field("received", s.counts.received)
+            .field("unacked", s.counts.unacked)
+            .field("held", s.counts.held)
+            .field("cancelled", s.counts.cancelled)
+            .field("overheard", s.counts.overheard)
+            .field("garbled", s.counts.garbled)
+            .field("emcon", s.emcon)
             .field("acks_waiting", s.acks_waiting)
             .field("frames_dropped", static_cast<long long>(s.frames_dropped));
         auto adv = compose::advisor();
@@ -1352,6 +1368,43 @@ std::string ApiServer::handle(Core& core, const std::string& line) {
     if (cmd == "compose_send") return compose_send(core, req);
     if (cmd == "compose_advise") return compose_advise(core, req);
 
+    // The operator's hand on the queue, EMCON and link formats (docs/api.md).
+    if (cmd == "emcon") {
+        const std::string v = req["on"];
+        if (v == "Y" || v == "y" || v == "on" || v == "1") core.set_emcon(true);
+        else if (v == "N" || v == "n" || v == "off" || v == "0") core.set_emcon(false);
+        else if (!v.empty()) return error_reply("on must be Y or N");
+        JsonWriter w;
+        w.begin_object().field("ok", true).field("emcon", core.emcon()).end_object();
+        return w.str();
+    }
+    if (cmd == "cancel" || cmd == "hold" || cmd == "release" || cmd == "requeue") {
+        const std::string id = req["id"];
+        if (id.empty()) return error_reply("give the message id");
+        std::string err;
+        bool done = cmd == "cancel"    ? core.cancel(id, &err)
+                    : cmd == "hold"    ? core.hold(id, &err)
+                    : cmd == "release" ? core.release(id, &err)
+                                       : core.requeue(id, &err);
+        if (!done) return error_reply(err);
+        auto m = core.get(id);
+        JsonWriter w;
+        w.begin_object().field("ok", true).field("id", id).field("state", m ? m->state : "").end_object();
+        return w.str();
+    }
+    if (cmd == "link_format") {
+        std::string err;
+        if (!req["station"].empty() && !req["format"].empty() &&
+            !core.set_link_format(req["station"], req["format"], &err))
+            return error_reply(err);
+        JsonWriter w;
+        w.begin_object().field("ok", true);
+        if (!req["station"].empty()) w.field("station", req["station"]).field("format", core.link_format(req["station"]));
+        w.begin_array("links");
+        for (auto& [st, f] : core.link_formats()) w.begin_object().field("station", st).field("format", f).end_object();
+        w.end_array().end_object();
+        return w.str();
+    }
     if (cmd == "queue") {
         bool bad = false;
         int limit = limit_of(req, 100, 1000, &bad);
@@ -1519,7 +1572,7 @@ std::string ApiServer::handle(Core& core, const std::string& line) {
     if (auto r = handle_ops(core, cmd, req)) return *r;
 
     return error_reply(
-        "unknown cmd; use status, send, list, get, queue, log, send_acp127, send_acp126, send_chat, parse_acp127, "
+        "unknown cmd; use status, send, list, get, queue, log, emcon, cancel, hold, release, requeue, link_format, send_acp127, send_acp126, send_chat, parse_acp127, "
         "parse_traffic, compose_templates, compose_form, compose_check, compose_send, compose_advise, key_import, keys_list, key_zeroize, key_open, cipher_status, cipher_install, cipher_remove, station_card, station_backup, station_restore, card_import, cards_list, card_check, card_send, net_tape, tape_seal, or the book's calls (docs/api.md): book_*, net_*, sched_*, duty_*, log_add, station_log, report_monthly");
 }
 

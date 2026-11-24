@@ -23,8 +23,20 @@
 //   SqlQuery         "SQL SELECT ...": a remote query of another station's
 //                    MSC database. Read and named, never run.
 //   Text             anything else (a strip, a checklist, a test, plain chat)
+//
+// The MSC Communications Processor's own chat window (src/cp, dialogchat.cpp
+// and classipchatxml.cpp) sends person-to-person chat in a longer form, with
+// an ID so the far end can answer it:
+//
+//   chat|<ID>|<to> DE <from> // CRLF CRLF <text> CRLF CRLF // <instr> K DD-HHMMZ
+//
+// The ID is the sender's call and DDHHMMSSzzz; the ending is K (or AR) and
+// day-hour-minute. The far end answers "ack|<ID>" (or "ack|<ID>|<from>" when
+// it relays) or "nack|<ID>" for a damaged copy; "canx|<ID>" cancels one. The
+// text may run over several lines.
 #pragma once
 
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -50,7 +62,24 @@ struct Chat {
     std::string receipt_time;       // "3051616", Julian DDDHHMM
     std::vector<std::string> receipt_by;  // receiving station calls
     std::vector<std::string> warnings;
+    // CP's chat form.
+    std::string cp_id;              // non-empty: "chat|<ID>|..."
+    std::string instructions;       // CP's operator instructions before K
+    bool over = false;              // ended AR rather than K
+    int day = -1;                   // CP: the day of the month before the time
 };
+
+// A CP chat answer: "ack|ID", "ack|ID|FROM", "nack|ID" or "canx|ID".
+struct CpReply {
+    enum class Kind { Ack, Nack, Canx } kind = Kind::Ack;
+    std::string id;
+    std::string from;  // ack via a relay only
+};
+bool parse_cp_reply(const std::string& line, CpReply& out);
+std::string build_cp_reply(const CpReply& r);
+
+// A CP chat ID: the call and DDHHMMSSzzz from unix milliseconds, UTC.
+std::string cp_chat_id(const std::string& call, int64_t unix_ms);
 
 // Reads one chat line (trailing CR/LF and spaces allowed). False with *error
 // when it has no " DE ", fewer than two "//", or no time and K at the end.
@@ -61,7 +90,9 @@ bool parse(const std::string& line, Chat& out, std::string* error);
 bool looks_like_chat(const std::string& raw);
 
 // Writes "<to> DE <from> // <text> // HHMMZ K" (no line end). For a Receipt
-// the text is made from the receipt fields, in MSC's compact spacing.
+// the text is made from the receipt fields, in MSC's compact spacing. With
+// cp_id set it writes CP's chat form instead (above; day must be set), with
+// CRLF line ends.
 // Returns "" and sets *error when a field breaks the form.
 std::string build(const Chat& c, std::string* error);
 

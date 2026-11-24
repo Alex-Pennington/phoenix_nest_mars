@@ -1,16 +1,24 @@
 #include "core.h"
 
+#include "acp201.h"
 #include "codress.h"
 #include "crypto.h"
+#include "received.h"
 
 #include <cctype>
+#include <regex>
+#include <sstream>
 
 #include <chrono>
 
 namespace pna {
 
 Core::Core(CoreConfig cfg, std::unique_ptr<ModemDriver> modem)
-    : cfg_(std::move(cfg)), modem_(std::move(modem)), store_(cfg_.db_path) {}
+    : cfg_(std::move(cfg)), modem_(std::move(modem)), store_(cfg_.db_path) {
+    emcon_ = store_.flag("emcon");
+}
+
+bool valid_link_format(const std::string& f) { return f == "pna1" || f == "plain"; }
 
 Core::~Core() { stop(); }
 
@@ -26,6 +34,7 @@ void Core::start() {
         int n = store_.requeue_interrupted();
         if (n) log("", std::to_string(n) + " interrupted message(s) put back in the queue");
         log("", "station " + cfg_.station + " starting on " + modem_->describe());
+        if (emcon_) log("", "EMCON is on: nothing will be sent until it is turned off");
     }
     ModemDriver::Callbacks cb;
     cb.on_rx = [this](const std::string& b) { handle_rx(b); };
@@ -295,6 +304,7 @@ CoreStatus Core::status() {
     s.frames_dropped = parser_.dropped();
     s.acks_waiting = static_cast<int>(acks_.size());
     s.link_gate = cfg_.link_gate;
+    s.emcon = emcon_;
     if (link_) {
         s.link = link_->state();
         if (cfg_.link_gate)
@@ -349,14 +359,28 @@ void Core::tick() {
         next_sched_ = std::chrono::steady_clock::now() + std::chrono::seconds(30);
         for (auto& line : ops_->sched_tick()) log("", line);
     }
+    // Messages whose ack is overdue go again, or wait as unacked.
+    if (cfg_.ack_timeout_s > 0)
+        for (auto& m : store_.overdue_acks(now_utc()))
+            no_ack(m, "no ack from " + m.dst + " after " + std::to_string(cfg_.ack_timeout_s) + " s");
+    // Bare text that stopped part-way is taken as it stands.
+    if (!loose_.empty() &&
+        std::chrono::steady_clock::now() - last_loose_ >= std::chrono::seconds(cfg_.loose_quiet_s))
+        cut_loose(true);
+
+    if (emcon_) return;
     if (on_air_ || !modem_->ready() || modem_->busy()) return;
+    if (cfg_.tx_gap_s > 0 && std::chrono::steady_clock::now() - last_air_ < std::chrono::seconds(cfg_.tx_gap_s))
+        return;
 
     if (!acks_.empty()) {
-        Frame a = acks_.front();
-        if (modem_->send(encode(a))) {
+        Answer a = acks_.front();
+        if (modem_->send(a.raw.empty() ? encode(a.f) : a.raw + "\r\n")) {
             acks_.pop_front();
-            on_air_ = a;
-            log(a.id, "sending ack to " + a.dst);
+            on_air_ = a.f;
+            on_air_plain_ = !a.raw.empty();
+            log(a.f.id, (a.raw.empty() ? "sending ack to " : "sending " + a.raw.substr(0, a.raw.find('|')) + " to ") +
+                            a.f.dst);
         }
         return;
     }
@@ -382,10 +406,14 @@ void Core::tick() {
     f.dst = next->dst;
     f.prec = next->prec;
     f.body = next->body;
+    const bool plain = !is_broadcast(f.dst) && store_.link_format(f.dst) == "plain";
     store_.mark_sending(f.id);
-    if (modem_->send(encode(f))) {
+    if (modem_->send(plain ? f.body : encode(f))) {
         on_air_ = f;
-        log(f.id, "sending, attempt " + std::to_string(next->attempts + 1));
+        on_air_plain_ = plain;
+        log(f.id, std::string(plain ? "sending as plain text" : "sending") + ", attempt " +
+                      std::to_string(next->attempts + 1) +
+                      (next->sends ? " (sent " + std::to_string(next->sends) + " time(s) before)" : ""));
     } else {
         store_.schedule_retry(f.id, now_utc() + 2, "modem would not start the send");
     }
@@ -402,16 +430,29 @@ void Core::handle_tx_done(bool ok, const std::string& err) {
     std::lock_guard<std::mutex> g(mu_);
     if (!on_air_) return;
     Frame f = *on_air_;
+    const bool plain = on_air_plain_;
     on_air_.reset();
+    on_air_plain_ = false;
+    last_air_ = std::chrono::steady_clock::now();
 
     if (f.type == FrameType::Ack) {
         if (!ok) log(f.id, "ack to " + f.dst + " failed: " + err);
         return;
     }
     if (ok) {
-        store_.set_state(f.id, "sent");
+        auto now_m = store_.get(f.id);
+        if (now_m && now_m->state == "acked") {
+            log(f.id, "sent again, but it was acked meanwhile");
+            return;
+        }
+        if (now_m && now_m->state == "cancelled") return;
+        // Only our own frames and CP's chat form are answered on the air.
+        const bool cp_chat = plain && f.body.compare(0, 5, "chat|") == 0;
+        const bool awaits = !is_broadcast(f.dst) && cfg_.send_acks && (!plain || cp_chat);
+        store_.mark_sent(f.id, awaits && cfg_.ack_timeout_s > 0 ? now_utc() + cfg_.ack_timeout_s : 0);
         if (is_broadcast(f.dst)) log(f.id, "sent to all stations, no ack expected");
-        else log(f.id, cfg_.send_acks ? "sent, waiting for ack" : "sent");
+        else if (plain && !cp_chat) log(f.id, "sent as plain text; this link has no ack on the air");
+        else log(f.id, awaits ? "sent, waiting for ack" : "sent");
         return;
     }
     auto m = store_.get(f.id);
@@ -428,12 +469,29 @@ void Core::handle_tx_done(bool ok, const std::string& err) {
 
 void Core::handle_rx(const std::string& bytes) {
     std::lock_guard<std::mutex> g(mu_);
-    for (const Frame& f : parser_.feed(bytes)) {
-        // Any frame from a station puts it on frequency: open nets check it in.
-        if (ops_ && !f.src.empty()) ops_->heard(f.src);
+    if (!bytes.empty()) last_air_ = std::chrono::steady_clock::now();
+    auto frames = parser_.feed(bytes);
+    for (const Frame& f : parser_.take_garbled()) {
+        // The header checked, the body didn't: keep what came, ack nothing,
+        // so the sender's ack timer sends it again.
+        if (f.dst != cfg_.station && !is_broadcast(f.dst)) continue;
+        heard(f.src);
+        if (store_.exists(f.id)) continue;
+        store_in(f.id + "-G" + std::to_string(now_utc()), f.src, f.dst, f.prec, f.body, "garbled",
+                 "garbled copy of " + f.id + " from " + f.src + ": not acked, so it should come again; or ask for a repeat");
+    }
+    loose_in(parser_.take_loose());
+    for (const Frame& f : frames) {
+        // Any frame from a station puts it on frequency: open nets check it in,
+        // and its unacked traffic goes again.
+        heard(f.src);
         const bool to_all = is_broadcast(f.dst);
         if (f.dst != cfg_.station && !to_all) {
-            log(f.id, "heard traffic for " + f.dst + ", not for us");
+            if (f.type == FrameType::Msg && !store_.exists(f.id))
+                store_in(f.id, f.src, f.dst, f.prec, f.body, "overheard",
+                         std::string("overheard ") + prec_name(f.prec) + " from " + f.src + " for " + f.dst);
+            else
+                log(f.id, "heard traffic for " + f.dst + ", not for us");
             continue;
         }
         if (to_all && f.type == FrameType::Ack) {
@@ -478,15 +536,365 @@ void Core::handle_rx(const std::string& bytes) {
         }
         // Nobody acks a broadcast: every station on the net would answer at once.
         if (cfg_.send_acks && !to_all) {
-            Frame a;
-            a.type = FrameType::Ack;
-            a.id = f.id;
-            a.src = cfg_.station;
-            a.dst = f.src;
-            a.prec = f.prec;
+            Answer a;
+            a.f.type = FrameType::Ack;
+            a.f.id = f.id;
+            a.f.src = cfg_.station;
+            a.f.dst = f.src;
+            a.f.prec = f.prec;
             acks_.push_back(a);
         }
     }
+}
+
+// ---- the operator's hand on the queue, EMCON and link formats ----
+
+void Core::set_emcon(bool on) {
+    std::lock_guard<std::mutex> g(mu_);
+    if (emcon_ == on) return;
+    emcon_ = on;
+    store_.set_flag("emcon", on);
+    log("", on ? "EMCON on: nothing is sent, acks included, until it is turned off"
+               : "EMCON off: the queue goes out again");
+}
+
+bool Core::emcon() {
+    std::lock_guard<std::mutex> g(mu_);
+    return emcon_;
+}
+
+namespace {
+bool refuse(std::string* error, const std::string& why) {
+    if (error) *error = why;
+    return false;
+}
+}  // namespace
+
+bool Core::cancel(const std::string& id, std::string* error) {
+    std::lock_guard<std::mutex> g(mu_);
+    auto m = store_.get(id);
+    if (!m || m->direction != "out") return refuse(error, "no message " + id + " of ours");
+    if (on_air_ && on_air_->id == id && on_air_->type == FrameType::Msg)
+        return refuse(error, id + " is on the air now; cancel it when the send ends");
+    if (m->state != "queued" && m->state != "held" && m->state != "sent" && m->state != "unacked" &&
+        m->state != "failed")
+        return refuse(error, id + " is " + m->state + "; only queued, held, sent, unacked or failed traffic can be cancelled");
+    store_.set_state(id, "cancelled", "cancelled by the operator");
+    log(id, "cancelled by the operator (was " + m->state + ")");
+    return true;
+}
+
+bool Core::hold(const std::string& id, std::string* error) {
+    std::lock_guard<std::mutex> g(mu_);
+    auto m = store_.get(id);
+    if (!m || m->direction != "out") return refuse(error, "no message " + id + " of ours");
+    if (m->state != "queued") return refuse(error, id + " is " + m->state + "; only queued traffic can be held");
+    store_.set_state(id, "held", "held by the operator");
+    log(id, "held by the operator");
+    return true;
+}
+
+bool Core::release(const std::string& id, std::string* error) {
+    std::lock_guard<std::mutex> g(mu_);
+    auto m = store_.get(id);
+    if (!m || m->direction != "out") return refuse(error, "no message " + id + " of ours");
+    if (m->state != "held") return refuse(error, id + " is " + m->state + ", not held");
+    store_.set_state(id, "queued");
+    log(id, "released to the queue");
+    return true;
+}
+
+bool Core::requeue(const std::string& id, std::string* error) {
+    std::lock_guard<std::mutex> g(mu_);
+    auto m = store_.get(id);
+    if (!m || m->direction != "out") return refuse(error, "no message " + id + " of ours");
+    if (m->state != "failed" && m->state != "unacked" && m->state != "cancelled" && m->state != "held")
+        return refuse(error, id + " is " + m->state + "; only failed, unacked, cancelled or held traffic can be requeued");
+    store_.requeue(id, false);
+    log(id, "put back in the queue by the operator (was " + m->state + ")");
+    return true;
+}
+
+bool Core::set_link_format(const std::string& station, const std::string& format, std::string* error) {
+    if (!valid_station(station) || is_broadcast(station)) return refuse(error, "give one station, not ALL");
+    if (!valid_link_format(format)) return refuse(error, "link format must be pna1 or plain");
+    std::lock_guard<std::mutex> g(mu_);
+    store_.set_link_format(station, format);
+    log("", station + (format == "plain" ? " is reached as plain text (an MSC CP station)" : " is reached with PNA1 frames"));
+    return true;
+}
+
+std::string Core::link_format(const std::string& station) {
+    std::lock_guard<std::mutex> g(mu_);
+    return store_.link_format(station);
+}
+
+std::vector<std::pair<std::string, std::string>> Core::link_formats() {
+    std::lock_guard<std::mutex> g(mu_);
+    return store_.link_formats();
+}
+
+// ---- receiving: what helps the far station and the operator ----
+
+void Core::heard(const std::string& who) {
+    std::string src = who;
+    if (src.size() > 3 && src.compare(src.size() - 3, 3, "-CM") == 0) src.resize(src.size() - 3);
+    if (src.empty() || src == cfg_.station || is_broadcast(src)) return;
+    if (ops_) ops_->heard(src);
+    // Traffic that went unanswered goes again now the station is on frequency.
+    auto un = store_.out_to(src, "unacked");
+    if (un.empty()) return;
+    for (auto& m : un) store_.requeue(m.id, false);
+    log("", "heard " + src + ": sending its " + std::to_string(un.size()) + " unacked message(s) again");
+}
+
+void Core::no_ack(const Message& m, const std::string& why) {
+    if (m.sends <= cfg_.ack_retries) {
+        store_.requeue(m.id, true);
+        log(m.id, why + ", sending again (" + std::to_string(m.sends + 1) + " of " +
+                      std::to_string(cfg_.ack_retries + 1) + ")");
+    } else {
+        store_.set_state(m.id, "unacked", why);
+        log(m.id, why + ", after " + std::to_string(m.sends) + " sends: unacked. It goes again when " + m.dst +
+                      " is heard, or requeue it");
+    }
+}
+
+bool Core::for_us(const std::string& call) const {
+    return call == cfg_.station || (call.size() > cfg_.station.size() && call.compare(0, cfg_.station.size(), cfg_.station) == 0 &&
+                                    call[cfg_.station.size()] == '-');
+}
+
+void Core::store_in(const std::string& id, const std::string& src, const std::string& dst, char prec,
+                    const std::string& body, const std::string& state, const std::string& what) {
+    Message m;
+    m.id = id;
+    m.direction = "in";
+    m.src = src.empty() ? "UNKNOWN" : src;
+    m.dst = dst.empty() ? "UNKNOWN" : dst;
+    m.prec = valid_prec(prec) ? prec : 'R';
+    m.body = body;
+    m.state = state;
+    m.created_at = m.updated_at = now_utc();
+    store_.insert(m);
+    log(id, what);
+}
+
+namespace {
+const char* const kStarts[] = {"chat|", "nack|", "ack|", "canx|", "ZCZC"};
+
+std::string crc_id(const std::string& prefix, const std::string& text) {
+    char buf[16];
+    std::snprintf(buf, sizeof buf, "%08X", crc32(text.data(), text.size()));
+    return prefix + buf;
+}
+
+std::string first_word(const std::string& s) {
+    std::istringstream in(s);
+    std::string w;
+    in >> w;
+    return w;
+}
+}  // namespace
+
+void Core::loose_in(const std::string& bytes) {
+    if (bytes.empty()) return;
+    loose_ += bytes;
+    last_loose_ = std::chrono::steady_clock::now();
+    if (loose_.size() > 2 * kMaxBody) loose_.erase(0, loose_.size() - 2 * kMaxBody);
+    cut_loose(false);
+}
+
+// Cuts bare text into messages, as an MSC CP station sends them: ACP 127
+// traffic from ZCZC to NNNN (several may come in one burst), CP chat from
+// "chat|" to its "K DD-HHMMZ", CP's "ack|ID" answers, and older MARS chat
+// lines. Anything else is noise between them.
+void Core::cut_loose(bool flush) {
+    static const std::regex cp_end(R"((K|AR) \d\d-\d{4}Z)");
+    for (;;) {
+        size_t best = std::string::npos;
+        int which = -1;
+        for (int i = 0; i < 5; ++i) {
+            size_t p = loose_.find(kStarts[i]);
+            if (p < best) best = p, which = i;
+        }
+        if (which == 4 && best > 0 && loose_[best - 1] == 'V') --best;
+        // Whole lines before the first start: older MARS chat lines are chat.
+        std::string head = loose_.substr(0, best == std::string::npos ? loose_.size() : best);
+        size_t used = 0;
+        for (size_t nl; (nl = head.find('\n', used)) != std::string::npos; used = nl + 1) {
+            std::string line = head.substr(used, nl - used);
+            acp201::Chat c;
+            if (acp201::parse(line, c, nullptr)) plain_chat(line);
+        }
+        if (best == std::string::npos) {
+            if (flush) {
+                acp201::Chat c;
+                if (acp201::parse(head.substr(used), c, nullptr)) plain_chat(head.substr(used));
+                loose_.clear();
+            } else {
+                loose_.erase(0, used);
+            }
+            return;
+        }
+        loose_.erase(0, best);
+        size_t end = std::string::npos;
+        if (which == 0) {
+            std::smatch mm;
+            if (std::regex_search(loose_, mm, cp_end)) end = static_cast<size_t>(mm.position(0) + mm.length(0));
+        } else if (which <= 3) {
+            end = loose_.find_first_of("\r\n");
+        } else {
+            size_t n = loose_.find("NNNN");
+            if (n != std::string::npos) end = n + 4;
+        }
+        // Another start before this one's end: this one was cut off.
+        size_t next = std::string::npos;
+        for (auto* m : kStarts) {
+            size_t p = loose_.find(m, 6);
+            if (p != std::string::npos && std::string(m) == "ZCZC" && loose_[p - 1] == 'V') --p;
+            if (p < next && p > 0) next = p;
+        }
+        if (next != std::string::npos && (end == std::string::npos || next < end)) {
+            plain_unit(loose_.substr(0, next), false);
+            loose_.erase(0, next);
+            continue;
+        }
+        if (end == std::string::npos) {
+            if (!flush) return;
+            plain_unit(loose_, which >= 1 && which <= 3);
+            loose_.clear();
+            return;
+        }
+        plain_unit(loose_.substr(0, end), true);
+        loose_.erase(0, end);
+    }
+}
+
+void Core::plain_chat(const std::string& text) {
+    acp201::Chat c;
+    if (!acp201::parse(text, c, nullptr)) return;
+    std::string dst = first_word(c.to);
+    const bool mine = for_us(dst) || is_broadcast(dst) || dst.compare(0, 4, "ALL-") == 0;
+    std::string id = c.cp_id.empty() ? crc_id("CHAT-", text) : "CHAT-" + c.cp_id;
+    if (store_.exists(id)) {
+        log(id, "heard the chat from " + c.from + " again");
+    } else {
+        store_in(id, c.from, dst, 'R', text, mine ? "received" : "overheard",
+                 std::string(mine ? "received chat from " : "overheard chat from ") + c.from +
+                     (mine ? "" : " for " + dst) + (c.cp_id.empty() ? "" : " (CP chat form)"));
+    }
+    heard(c.from);
+    // CP answers chat to its own call, never to ALL, and answers a repeat again.
+    if (!c.cp_id.empty() && dst == cfg_.station && cfg_.send_acks) {
+        Answer a;
+        a.f.type = FrameType::Ack;
+        a.f.id = id;
+        a.f.src = cfg_.station;
+        a.f.dst = c.from;
+        a.f.prec = 'P';
+        a.raw = acp201::build_cp_reply({acp201::CpReply::Kind::Ack, c.cp_id, ""});
+        acks_.push_back(a);
+    }
+}
+
+void Core::plain_unit(const std::string& raw, bool complete) {
+    std::string u = printable(raw);
+    size_t a = u.find_first_not_of(" \t\r\n");
+    if (a == std::string::npos) return;
+    u.erase(0, a);
+
+    if (u.compare(0, 4, "ack|") == 0 || u.compare(0, 5, "nack|") == 0 || u.compare(0, 5, "canx|") == 0) {
+        acp201::CpReply r;
+        if (!acp201::parse_cp_reply(u.substr(0, u.find_first_of("\r\n")), r)) return;
+        auto m = store_.out_with_prefix("chat|" + r.id + "|");
+        const char* what = r.kind == acp201::CpReply::Kind::Ack ? "ack" : r.kind == acp201::CpReply::Kind::Nack ? "nack" : "canx";
+        if (!m) {
+            log("", std::string("heard ") + what + " for chat " + r.id + ", which we did not send");
+            return;
+        }
+        heard(m->dst);
+        if (r.kind == acp201::CpReply::Kind::Ack) {
+            if (m->state != "acked") {
+                store_.set_state(m->id, "acked");
+                log(m->id, "acked by " + m->dst + (r.from.empty() ? "" : " via " + r.from));
+            }
+        } else if (r.kind == acp201::CpReply::Kind::Nack) {
+            if (m->state == "sent") no_ack(*m, m->dst + " answered nack: its copy came garbled");
+            else log(m->id, m->dst + " answered nack");
+        } else {
+            log(m->id, m->dst + " sent canx for this chat");
+        }
+        return;
+    }
+
+    if (u.compare(0, 5, "chat|") == 0) {
+        acp201::Chat c;
+        if (complete && acp201::parse(u, c, nullptr)) {
+            plain_chat(u);
+            return;
+        }
+        // A chat cut short: keep it, and answer nack if it was for us.
+        size_t bar = u.find('|', 5);
+        std::string cp_id = bar == std::string::npos ? "" : u.substr(5, bar - 5);
+        size_t de = u.find(" DE ");
+        std::string dst = bar != std::string::npos && de != std::string::npos && de > bar ? first_word(u.substr(bar + 1, de - bar - 1)) : "";
+        std::string src = de != std::string::npos ? first_word(u.substr(de + 4)) : "";
+        store_in(crc_id("CHAT-G", u), src, dst, 'R', u, "garbled",
+                 "garbled chat" + (src.empty() ? std::string() : " from " + src) + ": ask for a repeat");
+        if (!cp_id.empty() && dst == cfg_.station && !src.empty() && cfg_.send_acks) {
+            Answer n;
+            n.f.type = FrameType::Ack;
+            n.f.id = "CHAT-" + cp_id;
+            n.f.src = cfg_.station;
+            n.f.dst = src;
+            n.f.prec = 'P';
+            n.raw = acp201::build_cp_reply({acp201::CpReply::Kind::Nack, cp_id, ""});
+            acks_.push_back(n);
+        }
+        return;
+    }
+
+    // ACP 127 traffic, ZCZC to NNNN.
+    received::Message rm;
+    std::string err;
+    const bool ok = complete && received::parse(u, rm, &err);
+    std::string src = rm.originator;
+    std::string id = crc_id("PLAIN-", u);
+    if (store_.exists(id)) {
+        log(id, "heard the plain traffic from " + (src.empty() ? std::string("UNKNOWN") : src) + " again");
+        return;
+    }
+    if (!ok) {
+        store_in(id, src, "", 'R', u, "garbled",
+                 "garbled plain traffic" + (src.empty() ? std::string() : " from " + src) + " (" +
+                     (complete ? err : "it stopped before NNNN") + "): ask for a repeat");
+        return;
+    }
+    // Ours when any address on it names this station.
+    auto names_us = [&](const std::string& s) {
+        std::istringstream in(s);
+        for (std::string w; in >> w;) {
+            while (!w.empty() && (w.back() == '/' || w.back() == ',' || w.back() == '.')) w.pop_back();
+            if (for_us(w)) return true;
+        }
+        return false;
+    };
+    bool mine = false;
+    std::string dst;
+    for (auto& r : rm.routing) mine = mine || names_us(r);
+    for (auto* list : {&rm.to, &rm.info, &rm.xmt})
+        for (auto& ad : *list) {
+            if (dst.empty()) dst = first_word(ad.plain.empty() ? ad.ri : ad.plain);
+            mine = mine || names_us(ad.ri) || names_us(ad.plain);
+        }
+    if (mine) dst = cfg_.station;
+    char prec = rm.prec ? rm.prec : 'R';
+    store_in(id, src, dst, prec, u, mine ? "received" : "overheard",
+             std::string(mine ? "received " : "overheard ") + prec_name(prec) + " plain traffic from " +
+                 (src.empty() ? std::string("UNKNOWN") : src));
+    if (mine) read_codress(id, u);
+    if (!src.empty()) heard(src);
 }
 
 }  // namespace pna

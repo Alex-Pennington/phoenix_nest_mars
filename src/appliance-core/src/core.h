@@ -33,7 +33,27 @@ struct CoreConfig {
     // Hold each message until greybeard-ale reports a link to its station
     // (needs a link monitor). ACKs are not held: they answer a station just heard.
     bool link_gate = false;
+    // A message that went out and got no ack goes again after this long, up
+    // to ack_retries more times, then waits as unacked (as CP's chat does,
+    // src/cp dialogchat.cpp). It goes again by itself when its station is
+    // heard. 0: no timer.
+    int ack_timeout_s = 120;
+    int ack_retries = 2;
+    // Seconds to wait after the last send or the last received byte before
+    // keying up again, ACKs included, so a half-duplex far end has turned
+    // round (CP waits 6 s). 0: none.
+    int tx_gap_s = 0;
+    // Bare text with no PNA1 frame (an MSC station's traffic) that stops
+    // part-way is taken as it stands after this many quiet seconds.
+    int loose_quiet_s = 5;
 };
+
+// How a station is reached on the air.
+//  pna1   our own frame and ACK (appliance to appliance; the default)
+//  plain  the message text alone, as an MSC CP station sends it. Chat goes
+//         in CP's chat form and is answered "ack|ID"; other traffic gets no
+//         ack on the air.
+bool valid_link_format(const std::string& f);
 
 struct CoreStatus {
     std::string station;
@@ -45,6 +65,7 @@ struct CoreStatus {
     size_t frames_dropped = 0;
     int acks_waiting = 0;
     bool link_gate = false;
+    bool emcon = false;       // transmit hold: nothing goes on the air
     int held_for_link = 0;    // queued messages waiting for a link
     LinkState link;           // socket empty: no link source
 };
@@ -142,6 +163,21 @@ public:
     // Called for each event line (also written to the store's event table).
     void on_log(std::function<void(const std::string&)> fn) { log_fn_ = std::move(fn); }
 
+    // Transmit hold (EMCON): nothing goes on the air, ACKs included, until
+    // it is turned off. Kept across a restart.
+    void set_emcon(bool on);
+    bool emcon();
+    // The operator's hand on the queue. Each returns false with *error when
+    // the message isn't one of ours or isn't in a state it can leave.
+    bool cancel(const std::string& id, std::string* error);   // not while on the air
+    bool hold(const std::string& id, std::string* error);     // queued -> held
+    bool release(const std::string& id, std::string* error);  // held -> queued
+    bool requeue(const std::string& id, std::string* error);  // failed, unacked, cancelled -> queued
+    // How a station is reached (LinkFormat above).
+    bool set_link_format(const std::string& station, const std::string& format, std::string* error);
+    std::string link_format(const std::string& station);
+    std::vector<std::pair<std::string, std::string>> link_formats();
+
     // For tests: run one scheduler pass now.
     void tick();
 
@@ -151,6 +187,16 @@ private:
     void handle_tx_done(bool ok, const std::string& err);
     void log(const std::string& msg_id, const std::string& text);
     void read_codress(const std::string& id, const std::string& body);  // caller holds mu_
+    // caller holds mu_ for these:
+    void heard(const std::string& src);
+    void no_ack(const Message& m, const std::string& why);
+    void loose_in(const std::string& bytes);
+    void cut_loose(bool flush);
+    void plain_unit(const std::string& unit, bool complete);
+    void plain_chat(const std::string& text);
+    bool for_us(const std::string& call) const;
+    void store_in(const std::string& id, const std::string& src, const std::string& dst, char prec,
+                  const std::string& body, const std::string& state, const std::string& what);
 
     CoreConfig cfg_;
     std::unique_ptr<ModemDriver> modem_;
@@ -158,8 +204,19 @@ private:
     FrameParser parser_;
 
     std::mutex mu_;
-    std::deque<Frame> acks_;           // ACK frames waiting to go out
+    // An answer waiting to go out: a PNA1 ACK frame, or (raw set) CP's
+    // "ack|ID" text for a plain station.
+    struct Answer {
+        Frame f;
+        std::string raw;
+    };
+    std::deque<Answer> acks_;
     std::optional<Frame> on_air_;      // what the modem is sending now
+    bool on_air_plain_ = false;        // ... as bare text, no PNA1 frame
+    bool emcon_ = false;
+    std::chrono::steady_clock::time_point last_air_{};    // last send done or byte heard
+    std::string loose_;                                   // bare text not yet cut into messages
+    std::chrono::steady_clock::time_point last_loose_{};
     std::thread thread_;
     std::atomic<bool> running_{false};
     std::function<void(const std::string&)> log_fn_;

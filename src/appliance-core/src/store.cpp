@@ -19,7 +19,7 @@ namespace {
 
 
 constexpr const char* kCols =
-    "id, direction, src, dst, prec, body, state, attempts, created_at, updated_at, next_try_at, last_error";
+    "id, direction, src, dst, prec, body, state, attempts, created_at, updated_at, next_try_at, last_error, sends";
 
 Message row(Stmt& s) {
     Message m;
@@ -36,6 +36,7 @@ Message row(Stmt& s) {
     m.updated_at = s.i64(9);
     m.next_try_at = s.i64(10);
     m.last_error = s.text(11);
+    m.sends = static_cast<int>(s.i64(12));
     return m;
 }
 
@@ -73,6 +74,14 @@ Store::Store(const std::string& path) {
             if (t.text(1) == "keymaster") has = true;
         if (!has) exec("ALTER TABLE cards ADD COLUMN keymaster INTEGER NOT NULL DEFAULT 0");
     }
+    {
+        bool has = false;
+        Stmt t(db_, "PRAGMA table_info(messages)");
+        while (t.step())
+            if (t.text(1) == "sends") has = true;
+        if (!has) exec("ALTER TABLE messages ADD COLUMN sends INTEGER NOT NULL DEFAULT 0");
+    }
+    exec("CREATE TABLE IF NOT EXISTS links (station TEXT PRIMARY KEY, format TEXT NOT NULL)");
     exec("CREATE INDEX IF NOT EXISTS messages_queue ON messages(direction, state, prec, created_at)");
 }
 
@@ -224,8 +233,94 @@ QueueCounts Store::counts() {
         else if (st == "acked") c.acked = n;
         else if (st == "failed") c.failed = n;
         else if (st == "received") c.received = n;
+        else if (st == "unacked") c.unacked = n;
+        else if (st == "held") c.held = n;
+        else if (st == "cancelled") c.cancelled = n;
+        else if (st == "overheard") c.overheard = n;
+        else if (st == "garbled") c.garbled = n;
     }
     return c;
+}
+
+void Store::mark_sent(const std::string& id, int64_t ack_due) {
+    Stmt s(db_,
+           "UPDATE messages SET state = 'sent', sends = sends + 1, next_try_at = ?, updated_at = ? WHERE id = ?");
+    s.bind(1, ack_due).bind(2, now_utc()).bind(3, id);
+    s.step();
+}
+
+std::vector<Message> Store::overdue_acks(int64_t now) {
+    Stmt s(db_, (std::string("SELECT ") + kCols +
+                 " FROM messages WHERE direction = 'out' AND state = 'sent' AND next_try_at > 0 AND next_try_at <= ?"
+                 " ORDER BY next_try_at")
+                    .c_str());
+    s.bind(1, now);
+    std::vector<Message> out;
+    while (s.step()) out.push_back(row(s));
+    return out;
+}
+
+void Store::requeue(const std::string& id, bool keep_sends) {
+    Stmt s(db_, keep_sends ? "UPDATE messages SET state = 'queued', attempts = 0, next_try_at = 0, last_error = '',"
+                             " updated_at = ? WHERE id = ?"
+                           : "UPDATE messages SET state = 'queued', attempts = 0, sends = 0, next_try_at = 0,"
+                             " last_error = '', updated_at = ? WHERE id = ?");
+    s.bind(1, now_utc()).bind(2, id);
+    s.step();
+}
+
+std::vector<Message> Store::out_to(const std::string& dst, const std::string& state) {
+    Stmt s(db_, (std::string("SELECT ") + kCols +
+                 " FROM messages WHERE direction = 'out' AND dst = ? AND state = ?"
+                 " ORDER BY CASE prec WHEN 'Z' THEN 0 WHEN 'O' THEN 1 WHEN 'P' THEN 2 ELSE 3 END, created_at, rowid")
+                    .c_str());
+    s.bind(1, dst).bind(2, state);
+    std::vector<Message> out;
+    while (s.step()) out.push_back(row(s));
+    return out;
+}
+
+std::optional<Message> Store::out_with_prefix(const std::string& prefix) {
+    Stmt s(db_, (std::string("SELECT ") + kCols +
+                 " FROM messages WHERE direction = 'out' AND substr(body, 1, ?) = ? ORDER BY rowid DESC LIMIT 1")
+                    .c_str());
+    s.bind(1, static_cast<int64_t>(prefix.size())).bind_blob(2, prefix);
+    if (!s.step()) return std::nullopt;
+    return row(s);
+}
+
+void Store::set_link_format(const std::string& station, const std::string& format) {
+    if (format == "pna1") {
+        Stmt(db_, "DELETE FROM links WHERE station = ?").bind(1, station).step();
+        return;
+    }
+    Stmt(db_, "INSERT OR REPLACE INTO links(station, format) VALUES(?,?)").bind(1, station).bind(2, format).step();
+}
+
+std::string Store::link_format(const std::string& station) {
+    Stmt s(db_, "SELECT format FROM links WHERE station = ?");
+    s.bind(1, station);
+    return s.step() ? s.text(0) : "pna1";
+}
+
+std::vector<std::pair<std::string, std::string>> Store::link_formats() {
+    Stmt s(db_, "SELECT station, format FROM links ORDER BY station");
+    std::vector<std::pair<std::string, std::string>> out;
+    while (s.step()) out.emplace_back(s.text(0), s.text(1));
+    return out;
+}
+
+void Store::set_flag(const std::string& key, bool v) {
+    Stmt(db_, "INSERT OR REPLACE INTO meta(key, value) VALUES(?, ?)")
+        .bind(1, "flag:" + key)
+        .bind(2, static_cast<int64_t>(v ? 1 : 0))
+        .step();
+}
+
+bool Store::flag(const std::string& key) {
+    Stmt s(db_, "SELECT value FROM meta WHERE key = ?");
+    s.bind(1, "flag:" + key);
+    return s.step() && s.i64(0) != 0;
 }
 
 void Store::log_event(const std::string& msg_id, const std::string& text) {

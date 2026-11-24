@@ -12,8 +12,12 @@ struct sqlite3;
 
 namespace pna {
 
-// Outgoing states: queued -> sending -> sent -> acked, or failed.
-// Incoming state: received.
+// Outgoing states: queued -> sending -> sent -> acked. Off that path:
+// failed (the modem would not send it), unacked (no ack after every try),
+// held (the operator holds it back), cancelled.
+// Incoming states: received; overheard (traffic for another station, kept
+// as CP keeps every burst, never acked); garbled (a damaged copy, kept so
+// the operator can ask for a repeat, never acked).
 struct Message {
     std::string id;
     std::string direction;  // "out" or "in"
@@ -27,6 +31,7 @@ struct Message {
     int64_t updated_at = 0;
     int64_t next_try_at = 0;
     std::string last_error;
+    int sends = 0;  // times it went out whole on the air (for the ack timer)
 };
 
 // One line of the event log (events table rowid is its number).
@@ -39,6 +44,7 @@ struct Event {
 
 struct QueueCounts {
     int queued = 0, sending = 0, sent = 0, acked = 0, failed = 0, received = 0;
+    int unacked = 0, held = 0, cancelled = 0, overheard = 0, garbled = 0;
 };
 
 class Store {
@@ -76,6 +82,28 @@ public:
     void schedule_retry(const std::string& id, int64_t at, const std::string& error);
     // After a crash, anything left "sending" goes back to the queue.
     int requeue_interrupted();
+    // Went out whole: state sent, one more send, and the time an ack is due
+    // (0: none is expected).
+    void mark_sent(const std::string& id, int64_t ack_due);
+    // Sent messages whose ack is overdue.
+    std::vector<Message> overdue_acks(int64_t now);
+    // Back to the queue with fresh counts (the operator's requeue, or a
+    // station heard again). keep_sends keeps the ack-try count.
+    void requeue(const std::string& id, bool keep_sends = false);
+    // Outgoing messages to dst in one state.
+    std::vector<Message> out_to(const std::string& dst, const std::string& state);
+    // The outgoing message whose body starts with prefix (a CP chat's ID).
+    std::optional<Message> out_with_prefix(const std::string& prefix);
+
+    // How each station is reached (core.h LinkFormat): "pna1" (the
+    // default) or "plain".
+    void set_link_format(const std::string& station, const std::string& format);
+    std::string link_format(const std::string& station);
+    std::vector<std::pair<std::string, std::string>> link_formats();
+
+    // A named flag in the meta table (EMCON survives a restart).
+    void set_flag(const std::string& key, bool v);
+    bool flag(const std::string& key);
     QueueCounts counts();
 
     void log_event(const std::string& msg_id, const std::string& text);

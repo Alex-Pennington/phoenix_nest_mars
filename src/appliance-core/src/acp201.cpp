@@ -2,6 +2,7 @@
 #include "acp201.h"
 
 #include <cstdio>
+#include <ctime>
 #include <sstream>
 
 namespace pna {
@@ -93,6 +94,23 @@ void classify(Chat& c) {
     }
 }
 
+// "K 24-0215Z", "AR 24-0215Z": CP's ending. Fills day, time and over.
+bool cp_ending(const std::vector<std::string>& w, Chat& c) {
+    if (w.size() < 2) return false;
+    const std::string& t = w.back();
+    const std::string& k = w[w.size() - 2];
+    if (k != "K" && k != "AR") return false;
+    if (t.size() != 8 || t[2] != '-' || t[7] != 'Z' || !all_digits(t.substr(0, 2)) || !all_digits(t.substr(3, 4)))
+        return false;
+    c.day = std::stoi(t.substr(0, 2));
+    c.hour = std::stoi(t.substr(3, 2));
+    c.minute = std::stoi(t.substr(5, 2));
+    c.zulu = true;
+    c.over = k == "AR";
+    for (size_t i = 0; i + 2 < w.size(); ++i) c.instructions += (i ? " " : "") + w[i];
+    return c.day >= 1 && c.day <= 31;
+}
+
 }  // namespace
 
 const char* kind_name(Kind k) {
@@ -112,6 +130,30 @@ const char* kind_name(Kind k) {
 bool parse(const std::string& raw, Chat& c, std::string* error) {
     c = Chat();
     std::string line;
+    std::string body = raw;
+    {
+        size_t a = body.find_first_not_of(" \t\r\n");
+        if (a != std::string::npos && body.compare(a, 5, "chat|") == 0) {
+            size_t bar = body.find('|', a + 5);
+            if (bar == std::string::npos || bar == a + 5) return fail(error, "chat: no ID after \"chat|\"");
+            std::string id = body.substr(a + 5, bar - a - 5);
+            for (char ch : id)
+                if (!((ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9') || ch == '-'))
+                    return fail(error, "chat: the ID must be letters, digits and -");
+            // CP's text runs over lines: read it as one.
+            std::string joined;
+            std::istringstream in(body.substr(bar + 1));
+            for (std::string l; std::getline(in, l);) {
+                l = trim(l);
+                if (!l.empty()) joined += (joined.empty() ? "" : " ") + l;
+            }
+            Chat inner;
+            if (!parse(joined, inner, error)) return false;
+            c = inner;
+            c.cp_id = id;
+            return true;
+        }
+    }
     {
         std::istringstream in(raw);
         size_t lines = 0;
@@ -139,6 +181,13 @@ bool parse(const std::string& raw, Chat& c, std::string* error) {
 
     c.text = trim(line.substr(first + 2, last - first - 2));
 
+    // CP's "// <instructions> K DD-HHMMZ".
+    if (cp_ending(words(line.substr(last + 2)), c)) {
+        if (c.hour > 23 || c.minute > 59) return fail(error, "chat: time out of range");
+        classify(c);
+        if (error) error->clear();
+        return true;
+    }
     // "2333Z K", "2001Z K", "2339K".
     std::string tail;
     for (char ch : line.substr(last + 2))
@@ -211,8 +260,62 @@ std::string build(const Chat& c, std::string* error) {
     }
     for (char ch : text)
         if (ch < ' ' || ch > '~') return bad("chat: text must be printable ASCII on one line");
+    if (!c.cp_id.empty()) {
+        for (char ch : c.cp_id)
+            if (!((ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') || ch == '-'))
+                return bad("chat: the ID must be A-Z, 0-9 and -");
+        if (c.day < 1 || c.day > 31) return bad("chat: day out of range");
+        for (char ch : c.instructions)
+            if (ch < ' ' || ch > '~' || ch == '/') return bad("chat: instructions must be printable ASCII, no /");
+        char end[16];
+        std::snprintf(end, sizeof end, "%02d-%sZ", c.day, hhmm);
+        if (error) error->clear();
+        return "chat|" + c.cp_id + "|" + c.to + " DE " + c.from + " // \r\n\r\n" + text + "\r\n\r\n // " +
+               (c.instructions.empty() ? "" : c.instructions + " ") + (c.over ? "AR " : "K ") + end;
+    }
     if (error) error->clear();
     return c.to + " DE " + c.from + " // " + text + " // " + hhmm + (c.zulu ? "Z" : "") + " K";
+}
+
+bool parse_cp_reply(const std::string& raw, CpReply& out) {
+    out = CpReply();
+    std::string line = trim(raw);
+    std::vector<std::string> parts;
+    size_t start = 0;
+    for (;;) {
+        size_t bar = line.find('|', start);
+        parts.push_back(line.substr(start, bar == std::string::npos ? std::string::npos : bar - start));
+        if (bar == std::string::npos) break;
+        start = bar + 1;
+    }
+    if (parts.size() < 2 || parts.size() > 3 || parts[1].empty()) return false;
+    if (parts[0] == "ack") out.kind = CpReply::Kind::Ack;
+    else if (parts[0] == "nack") out.kind = CpReply::Kind::Nack;
+    else if (parts[0] == "canx") out.kind = CpReply::Kind::Canx;
+    else return false;
+    if (parts.size() == 3 && out.kind != CpReply::Kind::Ack) return false;
+    for (auto& p : parts)
+        for (char ch : p)
+            if (!((ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9') || ch == '-'))
+                return false;
+    out.id = parts[1];
+    if (parts.size() == 3) out.from = parts[2];
+    return true;
+}
+
+std::string build_cp_reply(const CpReply& r) {
+    const char* k = r.kind == CpReply::Kind::Ack ? "ack|" : r.kind == CpReply::Kind::Nack ? "nack|" : "canx|";
+    return k + r.id + (r.from.empty() ? "" : "|" + r.from);
+}
+
+std::string cp_chat_id(const std::string& call, int64_t unix_ms) {
+    std::time_t t = static_cast<std::time_t>(unix_ms / 1000);
+    std::tm u{};
+    gmtime_r(&t, &u);
+    char buf[16];
+    std::snprintf(buf, sizeof buf, "%02d%02d%02d%02d%03d", u.tm_mday, u.tm_hour, u.tm_min, u.tm_sec,
+                  static_cast<int>(unix_ms % 1000));
+    return call + buf;
 }
 
 }  // namespace acp201
