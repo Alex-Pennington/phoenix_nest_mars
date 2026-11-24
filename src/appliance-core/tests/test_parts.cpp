@@ -753,6 +753,12 @@ static void pacing(const fs::path& dir) {
     ask(D, C, "tape");
     r = call(*C.core, {{"cmd", "parts_queue"}});
     CHECK(num(r, "sends") == 3 && num(r, "room") == 2 && num(r, "per_hour") == 2);
+    // The status strip's cap: nothing counted yet.
+    r = call(*C.core, {{"cmd", "status"}});
+    CHECK(!yes(r, "emcon"));
+    CHECK(num(sub(r, "cap"), "per_hour") == 2 && num(sub(r, "cap"), "used") == 0 &&
+          num(sub(r, "cap"), "room") == 2 && num(sub(r, "cap"), "resets_at") == 0 &&
+          str(sub(r, "cap"), "covers") == "parts_resend");
     // Now: two go, the third waits for the cap.
     r = form(*C.core, "PARTS_QUEUE", {{"queue", "ALL"}, {"when", "NOW"}});
     CHECK(ok(r) && num(sub(r, "result"), "sends") == 2 && num(sub(r, "result"), "left_for_cap") == 1);
@@ -760,6 +766,16 @@ static void pacing(const fs::path& dir) {
     CHECK(wait_for([&] { return num(waiting(*D.core), "have") == of - 1; }));
     r = call(*C.core, {{"cmd", "parts_queue"}});
     CHECK(num(r, "sends") == 1 && num(r, "room") == 0);
+    // Status shows the cap spent, and when the rolling hour opens room again.
+    {
+        const double t = static_cast<double>(std::time(nullptr));
+        JsonValue st = call(*C.core, {{"cmd", "status"}});
+        const double at = num(sub(st, "cap"), "resets_at");
+        CHECK(num(sub(st, "cap"), "used") == 2 && num(sub(st, "cap"), "room") == 0);
+        CHECK(at > t + 3500 && at <= t + 3601);
+        CHECK(ok(call(*C.core, {{"cmd", "emcon"}, {"on", "Y"}})) && yes(call(*C.core, {{"cmd", "status"}}), "emcon"));
+        CHECK(ok(call(*C.core, {{"cmd", "emcon"}, {"on", "N"}})) && !yes(call(*C.core, {{"cmd", "status"}}), "emcon"));
+    }
     // The rest waits for the evening net, three hours on: held till then.
     std::time_t later = std::time(nullptr) + 3 * 3600;
     std::tm tm{};

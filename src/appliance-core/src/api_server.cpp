@@ -2427,6 +2427,22 @@ std::string ApiServer::handle(Core& core, const std::string& line) {
             .field("emcon", s.emcon)
             .field("acks_waiting", s.acks_waiting)
             .field("frames_dropped", static_cast<long long>(s.frames_dropped));
+        // The per-hour transmit cap, for the status strip. The one the core
+        // enforces is the resend cap (parts_resend_per_hour): a rolling hour,
+        // so resets_at is when the oldest counted send ages out and room
+        // opens again (0 when nothing counts against it). per_hour 0: no cap.
+        {
+            int64_t oldest = 0;
+            const int cap = core.parts_resend_per_hour();
+            const int used = resends_near(core.part_asks(), now_utc(), &oldest);
+            w.begin_object("cap")
+                .field("per_hour", cap)
+                .field("used", used)
+                .field("room", cap > 0 ? std::max(0, cap - used) : -1)
+                .field("resets_at", static_cast<long long>(used > 0 ? oldest + 3600 : 0))
+                .field("covers", std::string("parts_resend"))
+                .end_object();
+        }
         auto adv = compose::advisor();
         w.field("advisor", adv ? adv->name() : std::string());
         // Link state from greybeard-ale (link_monitor.h); "link": null with no source.

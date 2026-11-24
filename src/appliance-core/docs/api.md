@@ -74,10 +74,22 @@ the top level of the request, beside `cmd` and `form`.
 `{"cmd":"status"}` →
 `{"ok":true,"station":"AAR4XX","modem":"...","modem_ready":true,"modem_busy":false,"sending":"",
 "queued":0,"sent":0,"acked":0,"failed":0,"received":0,"unacked":0,"held":0,"cancelled":0,
-"overheard":0,"garbled":0,"acks_waiting":0,"frames_dropped":0,"emcon":false,"advisor":""}`
+"overheard":0,"garbled":0,"acks_waiting":0,"frames_dropped":0,"emcon":false,
+"cap":{"per_hour":12,"used":0,"room":12,"resets_at":0,"covers":"parts_resend"},"advisor":""}`
 
 `unacked`, `held`, `cancelled`, `overheard`, `garbled` and `emcon` are
 explained under "Working with MSC stations" below.
+
+`cap` is the per-hour transmit cap, for a status strip. The only per-hour
+cap the core enforces is the resend cap on asked-for parts
+(`--parts-resend-per-hour`, default 12; see parts_queue), so `covers` is
+`parts_resend`. The hour is rolling, not a clock hour:
+- `per_hour`: the cap; 0 means no cap (`room` is then -1).
+- `used`: resends counted in the last hour (each send once, however many
+  stations asked). `room`: how many more may go now.
+- `resets_at`: Unix time the oldest counted send ages out of the hour and
+  room opens again; 0 when nothing counts against the cap.
+Ordinary traffic, ACKs and orderwire have no per-hour cap.
 
 `advisor` names the helper plugged in with `--advisor`, or is empty.
 
