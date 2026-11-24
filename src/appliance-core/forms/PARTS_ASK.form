@@ -1,0 +1,13 @@
+; Ask the sender for the parts of a long tape or bundle that haven't come.
+FORM PARTS_ASK
+TITLE Ask for missing parts
+SUMMARY A long key tape or startup bundle comes in numbered parts. This asks the station that sent it for the parts that haven't arrived, by number.
+LEVEL ZERO
+ORDER 83
+ACTION parts_request
+FIELD id Waiting for(@parts_waiting) required
+NEXT KEY_OPEN BUNDLE_LOAD
+BEGIN_HELP
+Waiting for:
+Each set shows who sent it and how many parts are in. Nothing opens until every part is here, each signed by the same station. A set still short after the hold time (three days unless your box is set otherwise) is dropped, and the sender sends it again.
+END

@@ -5,6 +5,7 @@
 #include "core.h"
 #include "forms.h"
 #include "json.h"
+#include "parts.h"
 
 #include <algorithm>
 #include <memory>
@@ -56,8 +57,9 @@ std::string flat(std::initializer_list<std::pair<std::string, std::string>> kv) 
 
 // What kind of thing a received message carries.
 std::string carries(const std::string& body) {
-    if (body.find("PNA STARTUP BUNDLE 1") != std::string::npos || body.find("PNA BUNDLE PART ") != std::string::npos)
-        return "bundle";
+    parts::Head h;
+    if (parts::head(body, h)) return h.kind == "TAPE" ? "tape" : "bundle";
+    if (body.find("PNA STARTUP BUNDLE 1") != std::string::npos) return "bundle";
     if (body.find("PNA SEALED TAPE 1") != std::string::npos) return "tape";
     if (body.find("PNA STATION CARD 1") != std::string::npos) return "card";
     return "";
@@ -97,21 +99,55 @@ std::vector<forms::Choice> choices(Core& core, const forms::Library& lib, const 
             add(s_of(k, "station"), s_of(k, "question"));
     } else if (src == "@forms") {
         for (auto& e : lib.list()) add(e.t.id, e.t.id + " " + e.t.title);
+    } else if (src == "@parts_waiting" || src == "@parts_requests") {
+        JsonValue r = call(core, flat({{"cmd", "parts_list"}}));
+        const char* list = src == "@parts_waiting" ? "sets" : "requests";
+        for (auto& e : arr(r, list)) {
+            std::string missing;
+            for (auto& n : arr(e, "missing"))
+                if (n.type == JsonValue::Type::Number) missing += (missing.empty() ? "" : " ") + std::to_string(static_cast<int>(n.n));
+            if (src == "@parts_waiting") {
+                if (s_of(e, "state") != "waiting") continue;
+                add(s_of(e, "id"), s_of(e, "kind") + " from " + s_of(e, "from") + ", tag " + s_of(e, "tag") +
+                                       ", missing parts " + missing);
+            } else {
+                add(s_of(e, "id"), s_of(e, "from") + " asks for parts " + missing + " of " + s_of(e, "kind") + " " +
+                                       s_of(e, "tag"));
+            }
+        }
     } else if (src == "@msg_cards" || src == "@msg_bundles" || src == "@msg_tapes") {
         std::string want = src == "@msg_cards" ? "card" : src == "@msg_bundles" ? "bundle" : "tape";
-        std::set<std::string> tags;
-        for (auto& m : core.list(300)) {
+        // A set of parts is one choice, under the id of its first part to
+        // come, so the choice stays the same as more parts (or repeats) arrive.
+        struct Group {
+            std::string id, src, tag;
+            int of = 0;
+            std::set<int> have;
+        };
+        std::vector<Group> groups;  // newest first
+        auto msgs = core.list(300);
+        for (auto& m : msgs) {
             if (m.direction != "in" || carries(m.body) != want) continue;
-            std::string label = want + " from " + m.src;
-            if (want == "bundle") {
-                std::string tag;
-                int n = 0, of = 0;
-                if (bundle::part_head(m.body, tag, n, of)) {
-                    if (!tags.insert(tag).second) continue;
-                    label += ", tag " + tag + ", " + std::to_string(of) + " parts";
-                }
+            parts::Head ph;
+            if (!parts::head(m.body, ph)) {
+                groups.push_back({m.id, m.src, "", 0, {}});
+                continue;
             }
-            add(m.id, label);
+            auto g = std::find_if(groups.begin(), groups.end(),
+                                  [&](const Group& x) { return x.tag == ph.tag && x.src == m.src; });
+            if (g == groups.end()) {
+                groups.push_back({m.id, m.src, ph.tag, ph.of, {}});
+                g = groups.end() - 1;
+            }
+            g->id = m.id;  // the list is newest first: this ends on the first to come
+            g->have.insert(ph.n);
+        }
+        for (auto& g : groups) {
+            std::string label = want + " from " + g.src;
+            if (!g.tag.empty())
+                label += ", tag " + g.tag + ", " + std::to_string(std::min<int>(static_cast<int>(g.have.size()), g.of)) +
+                         " of " + std::to_string(g.of) + " parts in";
+            add(g.id, label);
         }
     }
     return out;

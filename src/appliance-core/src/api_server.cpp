@@ -16,6 +16,7 @@
 #include "keys.h"
 #include "station.h"
 #include "bundle.h"
+#include "parts.h"
 #include "ops.h"
 #include "received.h"
 #include "json.h"
@@ -1026,6 +1027,281 @@ std::string keymaster_cmd(Core& core, const station::Identity& me, const std::st
 // member's own yes, and is marked as from that signer.
 constexpr size_t kBundlePart = 6000;  // text bytes a part, well under a message's 8192
 
+// Parts of one long block (parts.h) that came in to this station: a sealed
+// key tape or a startup bundle sent in numbered parts. A set is the parts
+// with one kind and tag, signed by one station. Each part is its own signed
+// message: a part whose signature is bad, or that was signed by a station
+// other than the set's, is not taken. A set still incomplete after the hold
+// time is dropped: its old parts are no longer counted.
+struct PartSet {
+    parts::Head h;
+    std::string from;                   // the signer
+    std::map<int, std::string> got;     // part number -> its lines
+    std::map<int, std::string> ids;     // part number -> message id
+    std::vector<int> missing;
+    int64_t first = 0, last = 0;        // when the first and last parts came
+    bool complete = false, dropped = false;
+    int dropped_parts = 0, refused = 0;  // parts too old; parts not taken
+    std::string text() const {
+        std::string t;
+        for (auto& [n, b] : got) t += b;
+        return t;
+    }
+};
+
+// A part's signer, when its signature can be taken: good, or from a station
+// whose card isn't held here (a bundle carries its signer's card and is
+// checked whole once complete). Empty when it can't.
+std::string part_signer(Core& core, const Message& m) {
+    auto sc = station::check_signature(m.body, [&](const std::string& c) { return core.card_for(c); });
+    if (sc.state == "good") return sc.signer;
+    if (sc.state == "unknown" && !core.card_for(sc.signer)) return sc.signer;
+    return "";
+}
+
+std::vector<PartSet> part_sets(Core& core) {
+    std::map<std::string, PartSet> sets;  // kind|tag|signer
+    const int64_t now = now_utc();
+    const int64_t hold = core.parts_hold_s();
+    for (auto& m : core.list(5000)) {
+        if (m.direction != "in" || m.state == "overheard") continue;
+        parts::Head h;
+        if (!parts::head(m.body, h)) continue;
+        std::string from = part_signer(core, m);
+        std::string key = h.kind + "|" + h.tag + "|" + (from.empty() ? "?" + m.src : from);
+        PartSet& ps = sets[key];
+        if (ps.h.of == 0) {
+            ps.h = h;
+            ps.from = from.empty() ? m.src : from;
+        }
+        if (from.empty() || h.of != ps.h.of) {
+            ++ps.refused;
+            continue;
+        }
+        // A part sent again: the newest copy counts.
+        if (ps.ids.count(h.n)) {
+            auto had = core.get(ps.ids[h.n]);
+            if (had && had->created_at > m.created_at) continue;
+        }
+        ps.got[h.n] = parts::body(m.body);
+        ps.ids[h.n] = m.id;
+    }
+    std::vector<PartSet> out;
+    for (auto& [k, ps] : sets) {
+        if (ps.got.empty()) continue;  // only refused parts
+        std::map<int, int64_t> when;
+        for (auto& [n, id] : ps.ids)
+            if (auto m = core.get(id)) when[n] = m->created_at;
+        auto span = [&] {
+            ps.first = ps.last = 0;
+            for (auto& [n, t] : when) {
+                ps.first = ps.first ? std::min(ps.first, t) : t;
+                ps.last = std::max(ps.last, t);
+            }
+        };
+        span();
+        ps.complete = static_cast<int>(ps.got.size()) == ps.h.of;
+        if (hold > 0) {
+            // A set waits at most the hold time. Parts that waited longer
+            // before the set was whole (or until now, while it isn't) are
+            // dropped; parts sent again start it afresh.
+            auto drop_before = [&](int64_t until) {
+                for (auto it = ps.got.begin(); it != ps.got.end();) {
+                    if (until - when[it->first] > hold) {
+                        ++ps.dropped_parts;
+                        ps.ids.erase(it->first);
+                        when.erase(it->first);
+                        it = ps.got.erase(it);
+                    } else {
+                        ++it;
+                    }
+                }
+                ps.complete = static_cast<int>(ps.got.size()) == ps.h.of;
+            };
+            if (ps.complete) drop_before(ps.last);
+            if (!ps.complete) drop_before(now);
+            ps.dropped = ps.got.empty();
+            span();
+        }
+        for (int n = 1; n <= ps.h.of; ++n)
+            if (!ps.got.count(n)) ps.missing.push_back(n);
+        out.push_back(ps);
+    }
+    return out;
+}
+
+// The set a stored part belongs to.
+std::optional<PartSet> part_set_of(Core& core, const Message& m) {
+    parts::Head h;
+    if (!parts::head(m.body, h)) return std::nullopt;
+    std::string from = part_signer(core, m);
+    if (from.empty()) return std::nullopt;
+    for (auto& ps : part_sets(core))
+        if (ps.h.kind == h.kind && ps.h.tag == h.tag && ps.from == from) return ps;
+    return std::nullopt;
+}
+
+void write_set(JsonWriter& w, Core& core, const PartSet& ps) {
+    const int64_t hold = core.parts_hold_s();
+    w.begin_object()
+        .field("kind", ps.h.kind == "TAPE" ? std::string("tape") : std::string("bundle"))
+        .field("tag", ps.h.tag)
+        .field("from", ps.from)
+        .field("parts", ps.h.of)
+        .field("have", static_cast<int>(ps.got.size()))
+        .field("state", ps.complete ? std::string("complete") : ps.dropped ? std::string("dropped") : std::string("waiting"));
+    w.begin_array("missing");
+    for (int n : ps.missing) w.field("", n);
+    w.end_array();
+    if (!ps.ids.empty()) w.field("id", ps.ids.begin()->second);
+    if (!ps.complete && !ps.dropped && hold > 0)
+        w.field("drops_in_s", static_cast<long long>(std::max<int64_t>(0, ps.first + hold - now_utc())));
+    if (ps.dropped_parts) w.field("dropped_parts", ps.dropped_parts);
+    if (ps.refused) w.field("refused_parts", ps.refused);
+    w.end_object();
+}
+
+// What a reply says when a set isn't all here.
+std::string incomplete_reply(Core& core, const PartSet& ps, const std::string& what) {
+    JsonWriter w;
+    w.begin_object().field("ok", false);
+    std::string have = std::to_string(ps.got.size()) + " of " + std::to_string(ps.h.of);
+    if (ps.dropped)
+        w.field("error", what + " not opened: its parts waited past the hold time and were dropped. Ask " + ps.from +
+                             " to send it again.");
+    else
+        w.field("error", what + " not opened yet: " + have + " parts are here. Ask " + ps.from +
+                             " for the rest (form PARTS_ASK, or parts_request).");
+    w.field("tag", ps.h.tag).field("from", ps.from).field("parts", ps.h.of).field("have", static_cast<int>(ps.got.size()));
+    w.begin_array("missing_parts");
+    for (int n : ps.missing) w.field("", n);
+    w.end_array();
+    if (!ps.ids.empty()) w.field("id", ps.ids.begin()->second);
+    w.end_object();
+    (void)core;
+    return w.str();
+}
+
+// Sends a block to one station, in parts when it is long. The ids sent, or
+// empty with *error.
+std::vector<std::string> send_in_parts(Core& core, const std::string& to, const std::string& kind,
+                                       const std::string& tag, const std::string& text, std::string* error,
+                                       int* parts_n = nullptr) {
+    std::vector<std::string> ids;
+    std::vector<std::string> pieces;
+    if (text.size() <= kBundlePart && kind == "TAPE")
+        pieces.push_back(text);
+    else
+        pieces = parts::split(kind, tag, text, kBundlePart);
+    if (parts_n) *parts_n = static_cast<int>(pieces.size());
+    if (pieces.size() > 99) {
+        if (error) *error = "too long to send in parts (more than 99): put it on a stick";
+        return {};
+    }
+    for (auto& p : pieces) {
+        std::string id = send_block(core, to, p, error);
+        if (id.empty()) return {};
+        ids.push_back(id);
+    }
+    return ids;
+}
+
+std::optional<std::string> parts_cmd(Core& core, const station::Identity& me, const std::string& cmd,
+                                     std::map<std::string, std::string>& req) {
+    if (cmd == "parts_list") {
+        JsonWriter w;
+        w.begin_object().field("ok", true).field("hold_s", static_cast<long long>(core.parts_hold_s())).begin_array("sets");
+        for (auto& ps : part_sets(core))
+            if (req["all"] == "Y" || !ps.complete) write_set(w, core, ps);
+        w.end_array().begin_array("requests");
+        for (auto& m : core.list(500)) {
+            std::string kind, tag;
+            std::vector<int> missing;
+            if (m.direction != "in" || m.state == "overheard" || !parts::read_request(m.body, kind, tag, missing)) continue;
+            w.begin_object().field("id", m.id).field("from", m.src).field("kind", kind == "TAPE" ? "tape" : "bundle").field("tag", tag);
+            w.begin_array("missing");
+            for (int n : missing) w.field("", n);
+            w.end_array().end_object();
+        }
+        w.end_array().end_object();
+        return w.str();
+    }
+    if (cmd == "parts_request") {
+        // The receiver asks the sender for the parts it lacks, by number.
+        auto m = core.get(req["id"]);
+        if (!m) return error_reply("give the id of a part that came in (parts_list lists them)");
+        auto ps = part_set_of(core, *m);
+        if (!ps) return error_reply("that message isn't a part this station can take");
+        if (ps->complete) return error_reply("every part is here: open it (key_open or bundle_load)");
+        std::vector<int> missing = ps->missing;
+        std::string err;
+        std::string id = send_block(core, ps->from, parts::request_text(ps->h.kind, ps->h.tag, missing), &err);
+        if (id.empty()) return error_reply("the request wasn't sent: " + err);
+        core.note("asked " + ps->from + " for parts of " + ps->h.kind + " " + ps->h.tag);
+        JsonWriter w;
+        w.begin_object().field("ok", true).field("to", ps->from).field("tag", ps->h.tag).field("id", id);
+        w.begin_array("asked");
+        for (int n : missing) w.field("", n);
+        w.end_array().end_object();
+        return w.str();
+    }
+    // parts_resend: sends parts again, as a station asked (id of its request),
+    // or as named (to, tag, parts). Only to a station they were sent to.
+    std::string to = req["to"], tag = req["tag"];
+    std::vector<int> want;
+    if (!req["id"].empty()) {
+        auto m = core.get(req["id"]);
+        std::string kind;
+        if (!m || m->direction != "in" || !parts::read_request(m->body, kind, tag, want))
+            return error_reply("that message isn't a request for parts");
+        auto sc = station::check_signature(m->body, [&](const std::string& c) { return core.card_for(c); });
+        if (sc.state != "good") return error_reply("the request's signature can't be checked here, so nothing was sent");
+        to = sc.signer;
+    } else {
+        for (auto& c : to) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+        for (auto& c : tag) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+        std::istringstream in(req["parts"]);
+        std::string tok;
+        while (std::getline(in, tok, ' '))
+            for (auto& x : call_list(tok))
+                if (!x.empty() && std::all_of(x.begin(), x.end(), ::isdigit)) want.push_back(std::stoi(x));
+        if (to.empty() || tag.empty() || want.empty())
+            return error_reply("give the request's id, or to, tag and the part numbers (parts=\"2 4\")");
+    }
+    std::map<int, std::string> sent_before;
+    for (auto& m : core.list(5000)) {
+        parts::Head h;
+        if (m.direction != "out" || m.dst != to || !parts::head(m.body, h) || h.tag != tag) continue;
+        if (!sent_before.count(h.n)) sent_before[h.n] = parts::cut(m.body);
+    }
+    if (sent_before.empty()) return error_reply("no parts with tag " + tag + " were sent to " + to + " from here");
+    JsonWriter w;
+    w.begin_object().field("ok", true).field("to", to).field("tag", tag).begin_array("resent");
+    std::vector<int> not_found;
+    std::vector<std::string> failed;
+    std::sort(want.begin(), want.end());
+    want.erase(std::unique(want.begin(), want.end()), want.end());
+    for (int n : want) {
+        auto it = sent_before.find(n);
+        if (it == sent_before.end() || it->second.empty()) {
+            not_found.push_back(n);
+            continue;
+        }
+        std::string err, id = send_block(core, to, it->second, &err);
+        if (id.empty()) failed.push_back(std::to_string(n) + ": " + err);
+        else w.begin_object().field("part", n).field("id", id).end_object();
+    }
+    w.end_array().begin_array("not_found");
+    for (int n : not_found) w.field("", n);
+    w.end_array().begin_array("failed");
+    for (auto& f : failed) w.field("", f);
+    w.end_array().end_object();
+    core.note("parts of " + tag + " sent again to " + to);
+    (void)me;
+    return w.str();
+}
+
+
 std::string bundle_cmd(Core& core, const station::Identity& me, const std::string& cmd,
                        std::map<std::string, std::string>& req) {
     Ops* ops = core.ops();
@@ -1140,7 +1416,11 @@ std::string bundle_cmd(Core& core, const station::Identity& me, const std::strin
                 failed.push_back(st + ": " + err);
                 continue;
             }
-            auto parts = bundle::split(text, kBundlePart);
+            auto parts = bundle::split(text, kBundlePart);  // in PART n OF m form (parts.h)
+            if (parts.size() > 99) {
+                failed.push_back(st + ": too long to send in parts (more than 99): put it on a stick");
+                continue;
+            }
             total_parts += static_cast<int>(parts.size());
             w.begin_object()
                 .field("station", st)
@@ -1175,32 +1455,26 @@ std::string bundle_cmd(Core& core, const station::Identity& me, const std::strin
         auto m = core.get(req["id"]);
         if (!m) return error_reply("no message with that id");
         text = m->body;
-        std::string tag;
-        int n = 0, of = 0;
-        if (bundle::part_head(text, tag, n, of)) {
-            // Gather every part with this tag from what this station received.
-            std::map<int, std::string> got;
-            for (auto& msg : core.list(5000)) {
-                std::string t;
-                int k = 0, kof = 0;
-                if (bundle::part_head(msg.body, t, k, kof) && t == tag && kof == of && !got.count(k))
-                    got[k] = bundle::part_body(msg.body);
-            }
-            std::vector<int> missing;
-            for (int k = 1; k <= of; ++k)
-                if (!got.count(k)) missing.push_back(k);
-            if (!missing.empty()) {
+        parts::Head ph;
+        if (parts::head(text, ph) && ph.kind == "BUNDLE") {
+            // Every part with this tag, from the same signer; opened only when all are here.
+            auto ps = part_set_of(core, *m);
+            if (!ps) return error_reply("that part's signature can't be taken here: it is bad or from another station");
+            if (!ps->complete) {
                 JsonWriter w;
-                w.begin_object().field("ok", true).field("loaded", false).field("tag", tag).field("parts", of);
+                w.begin_object().field("ok", true).field("loaded", false).field("tag", ps->h.tag).field("from", ps->from);
+                w.field("parts", ps->h.of).field("have", static_cast<int>(ps->got.size())).field("dropped", ps->dropped);
                 w.begin_array("missing_parts");
-                for (int k : missing) w.field("", k);
+                for (int k : ps->missing) w.field("", k);
                 w.end_array();
-                w.field("next", "Not every part of this bundle has arrived. Ask the sender to repeat the missing parts.");
+                w.field("next", ps->dropped ? "Its parts waited past the hold time and were dropped. Ask " + ps->from +
+                                                  " to send the bundle again."
+                                            : "Not every part has arrived. Ask " + ps->from +
+                                                  " for the missing ones (form PARTS_ASK, or parts_request).");
                 w.end_object();
                 return w.str();
             }
-            text.clear();
-            for (auto& [k, body] : got) text += body;
+            text = ps->text();
         }
     }
     if (text.empty()) return error_reply("give the bundle as text, file or the id of a message that carries it");
@@ -1413,7 +1687,8 @@ std::optional<std::string> station_cmd(Core& core, const std::string& cmd, std::
                                                 "cards_list",   "card_check",     "card_send",       "net_tape",
                                                 "tape_seal",    "card_keymaster", "handout_import",  "rally_status",
                                                 "keymaster_accept", "keymaster_refuse", "keymaster_list",
-                                                "bundle_make", "bundle_load", "bundle_send"};
+                                                "bundle_make", "bundle_load", "bundle_send",
+                                                "parts_list", "parts_request", "parts_resend"};
     if (!kCmds.count(cmd)) return std::nullopt;
     const station::Identity* me = core.identity();
     if (!me && cmd != "station_restore" && cmd != "cards_list") return error_reply("this station has no keys of its own");
@@ -1587,6 +1862,7 @@ std::optional<std::string> station_cmd(Core& core, const std::string& cmd, std::
     }
     if (cmd == "handout_import") return handout_import(core, *me, req);
     if (cmd == "bundle_make" || cmd == "bundle_load" || cmd == "bundle_send") return bundle_cmd(core, *me, cmd, req);
+    if (cmd == "parts_list" || cmd == "parts_request" || cmd == "parts_resend") return *parts_cmd(core, *me, cmd, req);
     if (cmd == "keymaster_accept" || cmd == "keymaster_refuse" || cmd == "keymaster_list")
         return keymaster_cmd(core, *me, cmd, req);
     if (cmd == "rally_status") return rally_status(core, *me);
@@ -1691,9 +1967,15 @@ std::optional<std::string> station_cmd(Core& core, const std::string& cmd, std::
         sealed_for[m] = sealed;
         w.begin_object().field("station", m).field("checked", core.card_verified(m)).field("text", sealed);
         if (req["send"] == "Y") {
-            std::string e, id = send_block(core, m, sealed, &e);
-            w.field("id", id);
-            if (id.empty()) w.field("error", e);
+            // A long tape (a month or more) goes in numbered parts.
+            std::string e;
+            int n_parts = 0;
+            auto ids = send_in_parts(core, m, "TAPE", parts::tag_of(sealed), sealed, &e, &n_parts);
+            w.field("id", ids.empty() ? std::string() : ids.front()).field("parts", n_parts);
+            w.begin_array("ids");
+            for (auto& x : ids) w.field("", x);
+            w.end_array();
+            if (ids.empty()) w.field("error", e);
         }
         w.end_object();
     }
@@ -2138,6 +2420,14 @@ std::string ApiServer::handle(Core& core, const std::string& line) {
                 auto m = core.get(req["id"]);
                 if (!m) return error_reply("no message with that id");
                 text = m->body;
+                parts::Head ph;
+                if (parts::head(text, ph) && ph.kind == "TAPE") {
+                    // A long tape in parts: open it only when every part is here.
+                    auto ps = part_set_of(core, *m);
+                    if (!ps) return error_reply("sealed key tape not opened: that part's signature is bad or can't be checked here");
+                    if (!ps->complete) return incomplete_reply(core, *ps, "sealed key tape");
+                    text = ps->text();
+                }
             }
             std::string tape;
             station::SealedHead h;

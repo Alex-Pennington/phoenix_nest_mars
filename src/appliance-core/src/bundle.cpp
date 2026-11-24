@@ -1,6 +1,7 @@
 // Startup bundles. See bundle.h and docs/crypto.md.
 #include "bundle.h"
 #include "forms.h"
+#include "parts.h"
 
 #include "compose.h"
 #include "crypto.h"
@@ -17,7 +18,6 @@ namespace {
 
 const char* kHead = "PNA STARTUP BUNDLE 1";
 const char* kEnd = "END BUNDLE";
-const char* kPartHead = "PNA BUNDLE PART";
 const char* kFreqHead = "PNA SEALED PLAN 1";
 constexpr size_t kLine = 69;  // ACP 127's line
 
@@ -514,53 +514,21 @@ std::vector<std::string> split(const std::string& bundle_text, size_t max_body) 
         L.push_back(l);
         if (l == kEnd) break;
     }
-    std::string tag = tag_of(L);
-    std::vector<std::string> chunks;
-    std::string cur;
-    size_t room = max_body > 120 ? max_body - 80 : 40;
-    for (auto& l : L) {
-        if (!cur.empty() && cur.size() + l.size() + 1 > room) {
-            chunks.push_back(cur);
-            cur.clear();
-        }
-        cur += l + "\n";
-    }
-    if (!cur.empty()) chunks.push_back(cur);
-    std::vector<std::string> parts;
-    for (size_t i = 0; i < chunks.size(); ++i)
-        parts.push_back(std::string(kPartHead) + " " + std::to_string(i + 1) + " OF " + std::to_string(chunks.size()) +
-                        " TAG " + tag + "\n" + chunks[i] + "END PART\n");
-    return parts;
+    std::string text;
+    for (auto& l : L) text += l + "\n";
+    return parts::split("BUNDLE", tag_of(L), text, max_body);
 }
 
 bool part_head(const std::string& text, std::string& tag, int& n, int& of) {
-    for (auto& raw : lines_of(upper(text))) {
-        std::string l = simplified(raw);
-        if (!starts(l, kPartHead)) continue;
-        char t[16] = {0};
-        if (std::sscanf(l.c_str(), "PNA BUNDLE PART %d OF %d TAG %8s", &n, &of, t) == 3 && n >= 1 && n <= of &&
-            of <= 99 && std::strlen(t) == 8) {
-            tag = t;
-            return true;
-        }
-    }
-    return false;
+    parts::Head h;
+    if (!parts::head(text, h) || h.kind != "BUNDLE") return false;
+    tag = h.tag;
+    n = h.n;
+    of = h.of;
+    return true;
 }
 
-std::string part_body(const std::string& text) {
-    std::string o;
-    bool in = false;
-    for (auto& raw : lines_of(upper(text))) {
-        std::string l = simplified(raw);
-        if (!in) {
-            in = starts(l, kPartHead);
-            continue;
-        }
-        if (l == "END PART") break;
-        if (!l.empty()) o += l + "\n";
-    }
-    return o;
-}
+std::string part_body(const std::string& text) { return parts::body(text); }
 
 Applied apply(const Bundle& b, Ops& ops, const std::string& source) {
     Applied a;

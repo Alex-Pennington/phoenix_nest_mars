@@ -6,3 +6,4 @@ LEVEL ZERO
 ORDER 81
 ACTION key_open
 FIELD id Tape received(@msg_tapes) required
+NEXT PARTS_ASK

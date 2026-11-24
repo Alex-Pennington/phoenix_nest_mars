@@ -203,6 +203,53 @@ Naming a keymaster is the member's own choice: see the next section.
 
 The groups on the air are cipher. The key tape is never in the clear.
 
+A tape of two weeks or less goes as one message. A longer one (a 31-day
+tape is about 13 KB sealed, 62 days about 26 KB) goes in numbered parts: see
+[Parts](#parts-long-tapes-and-bundles-over-the-air).
+
+## Parts: long tapes and bundles over the air
+
+One message carries at most 8192 bytes. A sealed tape of a month or more, or
+a startup bundle for a region whose book has grown, is longer. It goes the way
+ACP 127 sends a long message: in numbered sections, each one its own signed
+plain message, headed so a part read alone says what it belongs to.
+
+    PART 2 OF 5 PNA TAPE 4HNPQ2XR
+    (lines of the sealed tape)
+    END PART 2 OF 5
+
+The tag (8 characters, from the block's hash) ties the parts of one block
+together. Each part carries up to 6000 bytes and the sender's signature.
+
+At the receiver:
+
+- **Held until complete.** Parts are kept as they come. `key_open` or
+  `bundle_load` on any part gathers the set and opens it only when every part
+  is here, signed by the same station. Until then it says how many are here
+  and which numbers are missing.
+- **Signed, every part.** A part whose signature is bad, or signed by another
+  station than the rest, isn't taken (`refused_parts`). The whole tape is still
+  sealed and signed inside, as for a tape in one message.
+- **Asking for the rest.** `parts_request` (form PARTS_ASK) sends the sender a
+  signed request for the missing numbers:
+
+      PNA PARTS REQUEST TAPE 4HNPQ2XR
+      MISSING 2 4
+      END REQUEST
+
+- **Sending again.** The sender sees the request in `parts_list` and sends
+  those parts again with `parts_resend` (form PARTS_REPEAT). It goes only to a
+  station the parts were sent to, and only when the request's signature checks.
+  The operator does this, not the box by itself: nothing goes out unasked.
+- **Dropped after the hold time.** A set still incomplete after 72 hours
+  (`--parts-hold-h`, or `parts-hold-h` in the settings; 0 holds forever) is
+  dropped: its old parts no longer count. Asking the sender to send the whole
+  block again starts it afresh. A set that came complete is never dropped.
+
+A short tape still goes whole, as before, so boxes built earlier take it. They
+also don't take parts: send them a long tape on a stick. Bundle parts from
+earlier builds (`PNA BUNDLE PART 2 OF 3 TAG 4HNPQ2XR`) are still read.
+
 ## Choosing your keymasters
 
 A keymaster's tapes decide whose net a member is on, so the member chooses.
@@ -299,8 +346,9 @@ frequency card and schedule) or was typed in.
   its own key; its card is inside. Without `--for` the copy is for anyone and
   carries no frequencies.
 - **Send:** `bundle send STA-B,STA-C` (`bundle_send`) sends each station its
-  own copy over the air as ordinary signed plain traffic, in parts of up to
-  6000 bytes when it is large (`PNA BUNDLE PART 2 OF 3 TAG 4HNPQ2XR`).
+  own copy over the air as ordinary signed plain traffic, in numbered parts of up to
+  6000 bytes when it is large (`PART 2 OF 3 PNA BUNDLE 4HNPQ2XR`, see
+  [Parts](#parts-long-tapes-and-bundles-over-the-air)).
 - **Frequencies, sealed to each member.** A member's copy carries every
   frequency in the plan, sealed to that member's card with our own sealing
   (X25519, HKDF-SHA256, AES-256-GCM, signed: the same construction as a
@@ -478,8 +526,9 @@ new card. The voice check catches anyone pretending to be the station.
   traffic. Signatures, not the cipher, prove who sent a message.
 - **No forward secrecy within a period.** If a day's key leaks, that day's
   traffic can be read. Short periods limit the damage.
-- **Sealed tapes over the air** must fit one message (8192 bytes): about two
-  weeks of 24-hour keys. A longer tape goes on a handout or a stick.
+- **Long tapes over the air** go in numbered parts, up to 99 of 6000 bytes.
+  Parts lost on the air are asked for and sent again by hand; a set still
+  incomplete after the hold time is dropped.
 - **Sealed frequencies follow the card.** A member who makes new station keys
   needs a new copy of the bundle, sealed to the new card.
 - **The keymaster box** holds every tape it made. Keep it offline when it

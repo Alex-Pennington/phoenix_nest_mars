@@ -61,6 +61,10 @@ struct CoreConfig {
     // Every burst heard, as heard, goes into a day file here
     // (YYYY-MM-DD.log). Empty: no raw receive log.
     std::string raw_rx_dir{};
+    // A long tape or bundle sent in numbered parts (parts.h) is held until
+    // every part has come. A set still incomplete this long after a part
+    // came drops that part; a repeat starts afresh. 0: held forever.
+    int parts_hold_s = 72 * 3600;
 };
 
 // How a station is reached on the air.
@@ -101,6 +105,7 @@ public:
 
     const std::string& station() const { return cfg_.station; }
     const std::string& db_path() const { return cfg_.db_path; }
+    int parts_hold_s() const { return cfg_.parts_hold_s; }
 
     CoreStatus status();
     // greybeard-ale's link state (see link_monitor.h). Set before start().

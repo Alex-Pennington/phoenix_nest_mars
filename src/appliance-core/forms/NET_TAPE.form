@@ -16,7 +16,7 @@ FIELD out Write handouts to(X) check=path
 NEXT KEY_OPEN
 BEGIN_HELP
 Days:
-How many daily keys. Over the air a sealed tape holds about two weeks; longer tapes go by handout on a stick.
+How many daily keys. A tape longer than one message (about two weeks) goes over the air in numbered parts, each signed; the member opens it when every part is in.
 END
 
 Write handouts to:

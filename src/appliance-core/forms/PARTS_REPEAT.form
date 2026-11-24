@@ -1,0 +1,12 @@
+; Send again the parts another station asked for.
+FORM PARTS_REPEAT
+TITLE Send missing parts again
+SUMMARY Another station asked for parts of a tape or bundle you sent it. This sends those parts again, only to that station.
+LEVEL ZERO
+ORDER 84
+ACTION parts_resend
+FIELD id Request(@parts_requests) required
+BEGIN_HELP
+Request:
+Each request names the station and the part numbers it lacks. Only parts already sent to that station go again, and only when its signature checks.
+END

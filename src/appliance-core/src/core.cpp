@@ -5,6 +5,7 @@
 #include "crypto.h"
 #include "received.h"
 #include "filemsg.h"
+#include "parts.h"
 
 #include <cctype>
 #include <ctime>
@@ -614,6 +615,16 @@ void Core::handle_rx(const std::string& bytes) {
             station::SealedHead sh;
             if (f.body.find("PNA STATION CARD 1") != std::string::npos)
                 log(f.id, "a station card came in: load it with cards import " + f.id);
+            parts::Head ph;
+            std::string pk, ptag;
+            std::vector<int> pmissing;
+            if (parts::head(f.body, ph))
+                log(f.id, "part " + std::to_string(ph.n) + " of " + std::to_string(ph.of) + " of " +
+                              (ph.kind == "TAPE" ? "a sealed key tape" : "a startup bundle") + " (" + ph.tag + ") from " +
+                              f.src + " came in: parts_list shows what is still missing");
+            else if (parts::read_request(f.body, pk, ptag, pmissing))
+                log(f.id, f.src + " asks for " + std::to_string(pmissing.size()) + " missing part(s) of " + ptag +
+                              ": send them again with parts_resend " + f.id);
             if (station::sealed_head(f.body, sh) && id_ && sh.to == id_->station)
                 log(f.id, "a sealed key tape for " + sh.net + " from " + sh.from + " came in: open it with keys open " + f.id);
         }

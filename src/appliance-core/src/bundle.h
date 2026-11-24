@@ -96,10 +96,11 @@ std::string format(const Bundle& b, const station::Identity& signer, const stati
 // signature against that card. False with *error.
 bool parse(const std::string& text, Bundle& out, std::string* error);
 
-// On the air a bundle goes in parts, each under max_body bytes of text:
-//   PNA BUNDLE PART 2 OF 3 TAG 4HNPQ2XR
+// On the air a bundle goes in numbered parts (parts.h), each under
+// max_body bytes of text:
+//   PART 2 OF 3 PNA BUNDLE 4HNPQ2XR
 //   (lines of the bundle)
-//   END PART
+//   END PART 2 OF 3
 std::vector<std::string> split(const std::string& bundle_text, size_t max_body);
 // The part header in text, if there is one.
 bool part_head(const std::string& text, std::string& tag, int& n, int& of);

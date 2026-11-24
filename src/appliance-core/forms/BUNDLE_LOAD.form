@@ -8,7 +8,7 @@ ACTION bundle_load
 FIELD id Bundle received(@msg_bundles)
 FIELD file Or from a file(X) check=path
 FIELD accept Load it though you haven't checked the signer(Y,N) default=N
-NEXT KEYMASTER
+NEXT KEYMASTER PARTS_ASK
 BEGIN_HELP
 Bundle received:
 Bundles that came in over the air. All its parts are gathered.

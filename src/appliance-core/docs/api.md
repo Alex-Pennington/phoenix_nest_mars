@@ -443,6 +443,9 @@ memory after use and never written to the log.
 - `key_open {id | text}`: opens a sealed key tape (from a stored message or
   pasted text) and loads it, if its sender is named a keymaster here. Returns
   the same as `key_import`, plus `from` (the keymaster) and `from_checked`.
+  Given the id of one part of a long tape, it gathers the set; with parts
+  missing it returns `ok` false, `error`, `tag`, `from`, `parts`, `have`,
+  `missing_parts` and `id`.
 - `keys_list` also gives each key's `check`, to read by voice.
 - `keys_list`: `keys`, each with `indicator`, `net`, `tape`, `from`, `until`,
   `state`, `cipher` (the module the key is for) and `usable` (false when that
@@ -548,8 +551,9 @@ card, key or keymaster.
   `parts` (total), `sent` (each `station`, `tag`, `parts`, `frequencies`,
   `ids`), `tag` when one bundle was given, and `failed`.
 - `bundle_load {text | file | id, accept}`: loads a bundle. From `id`, every
-  stored part with the same tag is gathered; with parts missing it returns
-  `loaded` false and `missing_parts`. Always returns `tag`, `by`,
+  stored part with the same tag and signer is gathered; with parts missing it
+  returns `loaded` false, `tag`, `from`, `parts`, `have`, `dropped`,
+  `missing_parts` and `next`. Always returns `tag`, `by`,
   `fingerprint`, `signer` (`own`, `checked`, `unchecked`, `unknown` or
   `different`, when the card in the bundle isn't the one held), `label`,
   `made` and the counts. From a signer this box hasn't checked, without
@@ -568,6 +572,25 @@ card, key or keymaster.
   `problems` and `next`. A bundle that was changed is
   an error.
 
+### Parts of long tapes and bundles
+
+A tape or bundle over 6000 bytes goes as numbered, signed parts
+(docs/crypto.md, Parts).
+
+- `parts_list {all}`: `hold_s`, `sets` and `requests`. Each set has `kind`
+  (`tape` or `bundle`), `tag`, `from`, `parts`, `have`, `state` (`waiting`,
+  `dropped`, or with `all=Y` also `complete`), `missing`, `id` (a part, for
+  `key_open`, `bundle_load` or `parts_request`), `drops_in_s` while waiting,
+  and `dropped_parts` and `refused_parts` when there are any. Each request
+  that came in has `id`, `from`, `kind`, `tag` and `missing`.
+- `parts_request {id}`: asks the set's sender for the missing parts, by
+  number, in a signed message. Returns `to`, `tag`, `id` (the request sent)
+  and `asked`.
+- `parts_resend {id} | {to, tag, parts}`: sends parts again, for a request
+  that came in (`id`; its signature must check) or as named (`parts="2 4"`).
+  Only to a station they were sent to before. Returns `to`, `tag`,
+  `resent` (each `part` and `id`), `not_found` and `failed`.
+
 ### Keymaster
 
 - `net_tape {net, start, days, period_hours, members, keymasters, send, handouts, out}`:
@@ -576,7 +599,8 @@ card, key or keymaster.
   copy to each station in `members` (calls or station-book names, spaces or
   commas). `keymasters` names alternates: they get the tape too, and are named
   keymasters on every handout. Returns `net`, `tape`, `sealed` (each with
-  `station`, `checked` and `text`, plus `id` when `send` is `Y`) and `no_card`
+  `station`, `checked` and `text`, plus `id`, `parts` and `ids` when `send`
+  is `Y`: a tape over 6000 bytes goes in numbered parts) and `no_card`
   (members whose card isn't held). With `handouts=Y` it also returns
   `handouts`, each with `station`, `has_tape`, `alternate` and `text`
   (docs/crypto.md). `out` is a folder (a stick): each handout is written
