@@ -10,6 +10,7 @@
 #include <memory>
 #include <mutex>
 #include <thread>
+#include <vector>
 
 namespace pna {
 
@@ -21,6 +22,9 @@ public:
 
     // Wires a and b so each one's transmissions reach the other.
     static void connect(LoopbackModem& a, LoopbackModem& b);
+    // Wires many on one channel, as stations on one net frequency: each
+    // one's transmissions reach all the others. Set up before start().
+    static void share(const std::vector<LoopbackModem*>& all);
 
     // Test hooks: fail the next n sends, or flip a bit in the next n deliveries.
     void fail_next_sends(int n) { fail_sends_ = n; }
@@ -30,7 +34,7 @@ public:
 
     void start(Callbacks cb) override;
     void stop() override;
-    bool ready() const override { return running_ && peer_ != nullptr && !held_; }
+    bool ready() const override { return running_ && !peers_.empty() && !held_; }
     bool busy() const override { return sending_; }
     bool send(const std::string& bytes) override;
     std::string describe() const override;
@@ -40,7 +44,8 @@ private:
     void deliver(const std::string& bytes);
 
     int bps_;
-    LoopbackModem* peer_ = nullptr;
+    std::vector<LoopbackModem*> peers_;
+    std::shared_ptr<std::mutex> channel_;  // shared: one burst on the channel at a time
     Callbacks cb_;
     std::mutex cb_mu_;
     std::mutex mu_;

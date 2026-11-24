@@ -13,6 +13,7 @@
 #include <fstream>
 #include <iterator>
 #include <regex>
+#include <set>
 #include <sstream>
 
 #include <chrono>
@@ -60,7 +61,7 @@ void Core::stop() {
     modem_->stop();
 }
 
-std::string Core::submit(const std::string& to, char prec, const std::string& body, std::string* error) {
+std::string Core::submit(const std::string& to, char prec, const std::string& body, std::string* error, bool held) {
     auto fail = [&](const std::string& e) {
         if (error) *error = e;
         return std::string();
@@ -80,10 +81,10 @@ std::string Core::submit(const std::string& to, char prec, const std::string& bo
     m.dst = to;
     m.prec = prec;
     m.body = body;
-    m.state = "queued";
+    m.state = held ? "held" : "queued";
     m.created_at = m.updated_at = now_utc();
     store_.insert(m);
-    log(m.id, std::string("queued ") + prec_name(prec) + " for " + to);
+    log(m.id, std::string(held ? "held " : "queued ") + prec_name(prec) + " for " + to);
     return m.id;
 }
 
@@ -425,6 +426,8 @@ void Core::tick() {
     if (cfg_.ack_timeout_s > 0)
         for (auto& m : store_.overdue_acks(now_utc()))
             no_ack(m, "no ack from " + m.dst + " after " + std::to_string(cfg_.ack_timeout_s) + " s");
+    // Resends held for a net slot go to the queue at its start.
+    release_due_parts();
     // Handling times, expiry.
     age_queue();
     // Bare text that stopped part-way is taken as it stands.
@@ -686,6 +689,40 @@ bool Core::hold(const std::string& id, std::string* error) {
     store_.set_state(id, "held", "held by the operator");
     log(id, "held by the operator");
     return true;
+}
+
+void Core::put_part_ask(const Store::PartAsk& a) {
+    std::lock_guard<std::mutex> g(mu_);
+    store_.put_part_ask(a);
+}
+
+void Core::set_part_ask(const std::string& request_id, int part, const std::string& state, const std::string& sent_id,
+                        int64_t at) {
+    std::lock_guard<std::mutex> g(mu_);
+    store_.set_part_ask(request_id, part, state, sent_id, at);
+}
+
+std::vector<Store::PartAsk> Core::part_asks() {
+    std::lock_guard<std::mutex> g(mu_);
+    return store_.part_asks();
+}
+
+// Caller holds mu_.
+void Core::release_due_parts() {
+    const int64_t now = now_utc();
+    std::set<std::string> done;
+    for (auto& a : store_.part_asks("held")) {
+        if (a.state != "held" || a.at > now) continue;
+        if (!done.count(a.sent_id)) {
+            auto m = store_.get(a.sent_id);
+            if (m && m->state == "held") {
+                store_.set_state(a.sent_id, "queued");
+                log(a.sent_id, "resent part " + std::to_string(a.part) + " of " + a.tag + " released for the net slot");
+            }
+            done.insert(a.sent_id);
+        }
+        store_.set_part_ask(a.request_id, a.part, "sent", a.sent_id, a.at);
+    }
 }
 
 bool Core::release(const std::string& id, std::string* error) {

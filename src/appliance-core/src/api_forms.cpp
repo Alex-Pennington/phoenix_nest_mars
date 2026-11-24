@@ -111,10 +111,17 @@ std::vector<forms::Choice> choices(Core& core, const forms::Library& lib, const 
                 add(s_of(e, "id"), s_of(e, "kind") + " from " + s_of(e, "from") + ", tag " + s_of(e, "tag") +
                                        ", missing parts " + missing);
             } else {
-                add(s_of(e, "id"), s_of(e, "from") + " asks for parts " + missing + " of " + s_of(e, "kind") + " " +
-                                       s_of(e, "tag"));
+                bool flagged = false;
+                for (auto& st : arr(e, "states")) flagged = flagged || st.s == "flagged";
+                add(s_of(e, "id"), std::string(flagged ? "FLAGGED, asked again after resends: " : "") + s_of(e, "from") +
+                                       " asks for parts " + missing + " of " + s_of(e, "kind") + " " + s_of(e, "tag"));
             }
         }
+    } else if (src == "@parts_queue") {
+        // The whole resend queue is one choice: the operator sends it with one press.
+        JsonValue r = call(core, flat({{"cmd", "parts_queue"}}));
+        const JsonValue* n = r.get("sends");
+        if (n && n->type == JsonValue::Type::Number && n->n > 0) add("ALL", s_of(r, "summary"));
     } else if (src == "@msg_cards" || src == "@msg_bundles" || src == "@msg_tapes") {
         std::string want = src == "@msg_cards" ? "card" : src == "@msg_bundles" ? "bundle" : "tape";
         // A set of parts is one choice, under the id of its first part to

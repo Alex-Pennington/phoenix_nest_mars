@@ -152,6 +152,22 @@ public:
     void remove_pending_handout(const std::string& key);
     std::vector<PendingHandout> pending_handouts();
 
+    // The resend queue for parts other stations asked for (docs/crypto.md,
+    // Parts). One row per part asked for in one request. state: "waiting",
+    // "held" (a resend made, held until `at`), "sent", "flagged" (asked for
+    // again after being sent it often), "not_ours" (never sent to that
+    // station from here) or "unchecked" (the request's signature didn't check).
+    struct PartAsk {
+        std::string request_id;
+        int part = 0;
+        std::string station, kind, tag, state, sent_id;
+        int64_t asked = 0, at = 0;  // when asked; when the resend went or goes
+    };
+    void put_part_ask(const PartAsk& a);  // a new row; an existing one is kept
+    void set_part_ask(const std::string& request_id, int part, const std::string& state, const std::string& sent_id,
+                      int64_t at);
+    std::vector<PartAsk> part_asks(const std::string& state = "");  // one state, or all
+
 private:
     void exec(const char* sql);
     sqlite3* db_ = nullptr;

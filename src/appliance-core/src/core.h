@@ -65,6 +65,12 @@ struct CoreConfig {
     // every part has come. A set still incomplete this long after a part
     // came drops that part; a repeat starts afresh. 0: held forever.
     int parts_hold_s = 72 * 3600;
+    // Parts sent again from the resend queue, at most this many an hour
+    // (each part counts once, however many stations asked for it). 0: no cap.
+    int parts_resend_per_hour = 12;
+    // A station that asks again for a part it has been sent again this many
+    // times is flagged for the operator instead of being sent it once more.
+    int parts_flag_after = 2;
 };
 
 // How a station is reached on the air.
@@ -98,7 +104,9 @@ public:
     void stop();
 
     // Queues a message. Returns its id, or an empty string with *error set.
-    std::string submit(const std::string& to, char prec, const std::string& body, std::string* error);
+    // held: queued as held, so it waits until released.
+    std::string submit(const std::string& to, char prec, const std::string& body, std::string* error,
+                       bool held = false);
 
     // Next value of a named counter, 1..wrap (see Store::next_counter).
     int64_t next_counter(const std::string& key, int64_t wrap);
@@ -106,6 +114,14 @@ public:
     const std::string& station() const { return cfg_.station; }
     const std::string& db_path() const { return cfg_.db_path; }
     int parts_hold_s() const { return cfg_.parts_hold_s; }
+    int parts_resend_per_hour() const { return cfg_.parts_resend_per_hour; }
+    int parts_flag_after() const { return cfg_.parts_flag_after; }
+    // The resend queue (Store::PartAsk). Held resends go to the queue by
+    // themselves at their time (the next net slot); EMCON still holds them.
+    void put_part_ask(const Store::PartAsk& a);
+    void set_part_ask(const std::string& request_id, int part, const std::string& state, const std::string& sent_id,
+                      int64_t at);
+    std::vector<Store::PartAsk> part_asks();
 
     CoreStatus status();
     // greybeard-ale's link state (see link_monitor.h). Set before start().
@@ -231,6 +247,7 @@ private:
     void handle_rx(const std::string& bytes);
     void handle_tx_done(bool ok, const std::string& err);
     void log(const std::string& msg_id, const std::string& text);
+    void release_due_parts();  // caller holds mu_
     void read_codress(const std::string& id, const std::string& body);  // caller holds mu_
     // caller holds mu_ for these:
     void heard(const std::string& src);

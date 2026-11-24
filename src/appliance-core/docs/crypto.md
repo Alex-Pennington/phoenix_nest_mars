@@ -237,10 +237,32 @@ At the receiver:
       MISSING 2 4
       END REQUEST
 
-- **Sending again.** The sender sees the request in `parts_list` and sends
-  those parts again with `parts_resend` (form PARTS_REPEAT). It goes only to a
-  station the parts were sent to, and only when the request's signature checks.
-  The operator does this, not the box by itself: nothing goes out unasked.
+- **The resend queue.** At a rally many members ask at once, often for the
+  same part. Net control's box pools the requests (`parts_queue`, form
+  PARTS_QUEUE): one row per station and part, with repeat asks from a
+  station merged. A part several stations asked for goes once, to the whole
+  net (`ALL`, which every station takes and nobody acks); a part only one
+  station asked for goes to that station. The operator sees one line, such as
+  "Resend queue: 7 sends for 20 stations", and sends it with one press, now or
+  held for the next sitting of a net on the schedule (the held parts go out by
+  themselves when the slot starts). The box never keys up on its own for a
+  request: nothing goes out until the operator sends the queue.
+- **Only to who it was for.** A request is served only when its signature
+  checks and the part was sent to that station before (`not_ours` otherwise).
+  A part that comes to `ALL` alone doesn't start a set at a member: some part
+  of it must have come to that member by name.
+- **Pacing.** At most 12 resends go out in any hour
+  (`--parts-resend-per-hour`, or `parts-resend-per-hour` in the settings; 0
+  for no cap). What the cap holds back stays in the queue, and the reply says
+  when there is room again. A station that asks again for a part already sent
+  to it twice is flagged, not served a third time: the operator looks into it
+  (its antenna, the path, the band) and can still send it by hand with
+  `parts_resend` (form PARTS_REPEAT). EMCON refuses a send now; a send held
+  for a net slot waits, and goes when EMCON is off.
+- **Tapes don't pool across members.** Each member's tape is sealed to that
+  member, so its parts are that member's alone and go to that member. Only a
+  block every station got the same, such as a bundle given as a file, goes
+  once for all.
 - **Dropped after the hold time.** A set still incomplete after 72 hours
   (`--parts-hold-h`, or `parts-hold-h` in the settings; 0 holds forever) is
   dropped: its old parts no longer count. Asking the sender to send the whole

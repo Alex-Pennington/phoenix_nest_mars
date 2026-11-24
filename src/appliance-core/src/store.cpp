@@ -86,6 +86,10 @@ Store::Store(const std::string& path) {
          " at INTEGER NOT NULL)");
     exec("CREATE TABLE IF NOT EXISTS pending_handouts (key TEXT PRIMARY KEY, issuer TEXT NOT NULL,"
          " text TEXT NOT NULL, packet TEXT NOT NULL DEFAULT '', added INTEGER NOT NULL)");
+    exec("CREATE TABLE IF NOT EXISTS part_asks (request_id TEXT NOT NULL, part INTEGER NOT NULL,"
+         " station TEXT NOT NULL, kind TEXT NOT NULL, tag TEXT NOT NULL, state TEXT NOT NULL,"
+         " sent_id TEXT NOT NULL DEFAULT '', asked INTEGER NOT NULL, at INTEGER NOT NULL DEFAULT 0,"
+         " PRIMARY KEY(request_id, part))");
     exec("CREATE INDEX IF NOT EXISTS messages_queue ON messages(direction, state, prec, created_at)");
 }
 
@@ -448,6 +452,53 @@ std::vector<Store::PendingHandout> Store::pending_handouts() {
         p.packet = s.text(3);
         p.added = s.i64(4);
         out.push_back(p);
+    }
+    return out;
+}
+
+void Store::put_part_ask(const PartAsk& a) {
+    Stmt s(db_,
+           "INSERT OR IGNORE INTO part_asks(request_id, part, station, kind, tag, state, sent_id, asked, at)"
+           " VALUES(?,?,?,?,?,?,?,?,?)");
+    s.bind(1, a.request_id)
+        .bind(2, static_cast<int64_t>(a.part))
+        .bind(3, a.station)
+        .bind(4, a.kind)
+        .bind(5, a.tag)
+        .bind(6, a.state)
+        .bind(7, a.sent_id)
+        .bind(8, a.asked)
+        .bind(9, a.at);
+    s.step();
+}
+
+void Store::set_part_ask(const std::string& request_id, int part, const std::string& state, const std::string& sent_id,
+                         int64_t at) {
+    Stmt s(db_, "UPDATE part_asks SET state = ?, sent_id = ?, at = ? WHERE request_id = ? AND part = ?");
+    s.bind(1, state).bind(2, sent_id).bind(3, at).bind(4, request_id).bind(5, static_cast<int64_t>(part));
+    s.step();
+}
+
+std::vector<Store::PartAsk> Store::part_asks(const std::string& state) {
+    Stmt s(db_, state.empty()
+                    ? "SELECT request_id, part, station, kind, tag, state, sent_id, asked, at FROM part_asks"
+                      " ORDER BY asked, request_id, part"
+                    : "SELECT request_id, part, station, kind, tag, state, sent_id, asked, at FROM part_asks"
+                      " WHERE state = ? ORDER BY asked, request_id, part");
+    if (!state.empty()) s.bind(1, state);
+    std::vector<PartAsk> out;
+    while (s.step()) {
+        PartAsk a;
+        a.request_id = s.text(0);
+        a.part = static_cast<int>(s.i64(1));
+        a.station = s.text(2);
+        a.kind = s.text(3);
+        a.tag = s.text(4);
+        a.state = s.text(5);
+        a.sent_id = s.text(6);
+        a.asked = s.i64(7);
+        a.at = s.i64(8);
+        out.push_back(a);
     }
     return out;
 }

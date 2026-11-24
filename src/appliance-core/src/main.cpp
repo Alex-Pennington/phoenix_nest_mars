@@ -105,6 +105,8 @@ void usage() {
         "  --parts-hold-h H      hold a long tape or bundle sent in parts H hours for its\n"
         "                        missing parts, then drop the incomplete set (default 72;\n"
         "                        0: hold forever)\n"
+        "  --parts-resend-per-hour N  parts sent again from the resend queue, at most N\n"
+        "                        an hour (default 12; 0: no cap)\n"
         "  --raw-rx-log on|off   keep every burst heard, as heard, in STATION.rx-raw/\n"
         "                        one file a day (default on)\n"
         "  --advisor PROG        a local program that explains compose fields and suggests\n"
@@ -126,7 +128,7 @@ std::shared_ptr<LinkMonitor> g_link;
 bool g_link_gate = false;
 int g_ack_timeout = 120, g_ack_retries = 2, g_tx_gap = 6;
 bool g_tx_gap_set = false;
-int g_link_wait = 0, g_expire_h = 0, g_parts_hold_h = 72;
+int g_link_wait = 0, g_expire_h = 0, g_parts_hold_h = 72, g_parts_resend = 12;
 int g_handling[4] = {10, 30, 180, 360};
 bool g_raw_rx = true;
 
@@ -152,6 +154,7 @@ bool start_station(Station& s, CoreConfig cfg, std::unique_ptr<ModemDriver> mode
     cfg.link_wait_s = g_link_wait;
     cfg.expire_h = g_expire_h;
     cfg.parts_hold_s = g_parts_hold_h * 3600;
+    cfg.parts_resend_per_hour = g_parts_resend;
     for (int i = 0; i < 4; ++i) cfg.handling_min[i] = g_handling[i];
     if (g_raw_rx)
         cfg.raw_rx_dir = (db.size() > 3 && db.compare(db.size() - 3, 3, ".db") == 0 ? db.substr(0, db.size() - 3) : db) +
@@ -285,6 +288,7 @@ int main(int argc, char** argv) {
             else if (a == "--link-wait") g_link_wait = std::stoi(next());
             else if (a == "--expire-h") g_expire_h = std::stoi(next());
             else if (a == "--parts-hold-h") g_parts_hold_h = std::stoi(next());
+            else if (a == "--parts-resend-per-hour") g_parts_resend = std::stoi(next());
             else if (a == "--handling") {
                 if (!parse_handling(next(), g_handling)) {
                     std::cerr << "--handling: four minute counts, FLASH,IMMEDIATE,PRIORITY,ROUTINE, e.g. 10,30,180,360\n";

@@ -9,8 +9,18 @@ LoopbackModem::LoopbackModem(int bps) : bps_(bps) {}
 LoopbackModem::~LoopbackModem() { stop(); }
 
 void LoopbackModem::connect(LoopbackModem& a, LoopbackModem& b) {
-    a.peer_ = &b;
-    b.peer_ = &a;
+    a.peers_ = {&b};
+    b.peers_ = {&a};
+}
+
+void LoopbackModem::share(const std::vector<LoopbackModem*>& all) {
+    auto channel = std::make_shared<std::mutex>();
+    for (auto* m : all) {
+        m->channel_ = channel;
+        m->peers_.clear();
+        for (auto* o : all)
+            if (o != m) m->peers_.push_back(o);
+    }
 }
 
 void LoopbackModem::start(Callbacks cb) {
@@ -44,20 +54,23 @@ std::string LoopbackModem::describe() const {
 }
 
 void LoopbackModem::deliver(const std::string& bytes) {
-    if (!peer_) return;
     std::string b = bytes;
     if (corrupt_ > 0 && !b.empty()) {
         --corrupt_;
         b[b.size() / 2] ^= 0x20;
     }
-    Callbacks cb;
-    {
-        std::lock_guard<std::mutex> g(peer_->cb_mu_);
-        cb = peer_->cb_;
+    std::unique_lock<std::mutex> on_air;
+    if (channel_) on_air = std::unique_lock<std::mutex>(*channel_);
+    for (auto* peer : peers_) {
+        Callbacks cb;
+        {
+            std::lock_guard<std::mutex> g(peer->cb_mu_);
+            cb = peer->cb_;
+        }
+        // Deliver in small chunks, as a modem data port does.
+        for (size_t off = 0; off < b.size(); off += 7)
+            if (cb.on_rx) cb.on_rx(b.substr(off, 7));
     }
-    // Deliver in small chunks, as a modem data port does.
-    for (size_t off = 0; off < b.size(); off += 7)
-        if (cb.on_rx) cb.on_rx(b.substr(off, 7));
 }
 
 void LoopbackModem::run() {

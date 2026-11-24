@@ -64,7 +64,8 @@ What it changed:
 | NET_TAPE | Key tape for a net, handouts to a stick | net_tape |
 | KEY_OPEN | Open a tape that came in | key_open |
 | PARTS_ASK | Ask for the missing parts of a long tape or bundle | parts_request |
-| PARTS_REPEAT | Send again the parts a station asked for | parts_resend |
+| PARTS_QUEUE | Send the pooled resend queue, now or at a net slot | parts_queue_send |
+| PARTS_REPEAT | Send one station the parts it asked for, now | parts_resend |
 | HANDOUT_LOAD | Load a handout from a stick | handout_import |
 | BACKUP | Back up the station to a stick | station_backup |
 | RESTORE | Put a backup back | station_restore |
@@ -127,7 +128,8 @@ END
 Sources: `@channels`, `@cards`, `@cards_unchecked`, `@stations`, `@nets`,
 `@schedules`, `@book`, `@keymasters_undecided`, `@forms`, `@msg_cards`,
 `@msg_bundles`, `@msg_tapes`, `@parts_waiting` (sets still missing parts),
-`@parts_requests` (stations asking for parts). A tape or bundle in parts is
+`@parts_requests` (stations asking for parts; flagged ones say so),
+`@parts_queue` (the resend queue, as one choice with its summary). A tape or bundle in parts is
 one choice, with how many of its parts are in.
 
 ### Flags
@@ -144,6 +146,7 @@ setup_station, station_card, book_put, book_remove, channel_put,
 channel_remove, sched_put, sched_remove, card_send, card_import, card_check,
 keymaster_accept, keymaster_refuse, bundle_make, bundle_send, bundle_load,
 net_tape, handout_import, key_open, parts_request, parts_resend,
+parts_queue_send,
 station_backup, station_restore,
 form_template_put, form_template_reset.
 

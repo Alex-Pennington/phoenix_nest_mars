@@ -355,7 +355,7 @@ std::string compose_form(Core& core, std::map<std::string, std::string>& req) {
 // compose_check: the issues, and the message as it would go (serials shown
 // as 1; they are taken only when it is sent).
 std::string compose_check(Core& core, std::map<std::string, std::string>& req) {
-    compose::Result r = compose::check(draft_of(req, {"sign"}), compose_ctx(core));
+    compose::Result r = compose::check(draft_of(req, {"sign", "hold"}), compose_ctx(core));
     JsonWriter w;
     w.begin_object().field("ok", true).field("ready", r.ready).field("procedure", r.procedure);
     write_issues(w, r.issues);
@@ -376,7 +376,7 @@ std::string compose_check(Core& core, std::map<std::string, std::string>& req) {
 // compose_send: refused while any error stands; otherwise takes the serials
 // and queues the message.
 std::string compose_send(Core& core, std::map<std::string, std::string>& req) {
-    compose::Draft d = draft_of(req, {"sign"});
+    compose::Draft d = draft_of(req, {"sign", "hold"});
     compose::Context ctx = compose_ctx(core);
     ctx.now = std::time(nullptr);
     compose::Result r = compose::check(d, ctx);
@@ -432,7 +432,7 @@ std::string compose_send(Core& core, std::map<std::string, std::string>& req) {
             sent_text = out;
             id = core.submit_codress(t, r.prec, out, r.message, r.codress_key, &e);
         } else {
-            id = core.submit(t, r.prec, r.message, &e);
+            id = core.submit(t, r.prec, r.message, &e, req["hold"] == "Y");
         }
         if (!id.empty()) {
             ids.push_back(id);
@@ -666,8 +666,9 @@ std::string parse_acp127(Core& core, std::map<std::string, std::string>& req) {
 
 // Sends a block of text (a card, a sealed tape) to one station as ACP 127
 // plaindress, signed. Returns the message id, or "" with *error.
-std::string send_block(Core& core, const std::string& to, const std::string& text, std::string* error) {
-    std::map<std::string, std::string> req = {{"template", "FREE_FORM"},
+std::string send_block(Core& core, const std::string& to, const std::string& text, std::string* error,
+                       bool held = false) {
+    std::map<std::string, std::string> req = {{"hold", held ? "Y" : "N"},{"template", "FREE_FORM"},
                                               {"procedure", "ACP127_PLAINDRESS"},
                                               {"prec", "R"},
                                               {"routing", to},
@@ -688,10 +689,16 @@ std::string send_block(Core& core, const std::string& to, const std::string& tex
         const JsonValue* e = v.get("error");
         if (error) *error = e && e->type == JsonValue::Type::String ? e->s : "could not queue it";
         const JsonValue* is = v.get("issues");
-        if (error && is && is->is_array() && !is->arr.empty()) {
-            const JsonValue* t = is->arr[0].get("text");
-            if (t) *error += ": " + t->s;
-        }
+        // The first error says why; a warning beside it doesn't.
+        if (error && is && is->is_array())
+            for (auto& i : is->arr) {
+                const JsonValue* lv = i.get("level");
+                const JsonValue* t = i.get("text");
+                if (t && lv && lv->s == "error") {
+                    *error += ": " + t->s;
+                    break;
+                }
+            }
         return "";
     }
     return id->s;
@@ -1041,6 +1048,7 @@ struct PartSet {
     std::vector<int> missing;
     int64_t first = 0, last = 0;        // when the first and last parts came
     bool complete = false, dropped = false;
+    bool direct = false;                // a part came addressed to this station
     int dropped_parts = 0, refused = 0;  // parts too old; parts not taken
     std::string text() const {
         std::string t;
@@ -1085,10 +1093,14 @@ std::vector<PartSet> part_sets(Core& core) {
         }
         ps.got[h.n] = parts::body(m.body);
         ps.ids[h.n] = m.id;
+        if (m.dst != "ALL") ps.direct = true;
     }
     std::vector<PartSet> out;
     for (auto& [k, ps] : sets) {
         if (ps.got.empty()) continue;  // only refused parts
+        // Parts sent again to the whole net reach stations whose block it
+        // isn't: a set counts here only when part of it came to this station.
+        if (!ps.direct) continue;
         std::map<int, int64_t> when;
         for (auto& [n, id] : ps.ids)
             if (auto m = core.get(id)) when[n] = m->created_at;
@@ -1206,6 +1218,132 @@ std::vector<std::string> send_in_parts(Core& core, const std::string& to, const 
     return ids;
 }
 
+// ---- The resend queue (docs/crypto.md, Parts) ----
+//
+// Requests for missing parts are pooled: each part asked for once per
+// request is a row (Store::PartAsk). Rows asking for the same part of the
+// same block are one send: to the station, or to ALL when several stations
+// asked for a block that went to each of them. Nothing goes out until the
+// operator sends the queue (parts_queue_send), now or at the next net slot,
+// and then at most parts_resend_per_hour parts an hour.
+
+// The part's text as first sent to station (header to END line), or empty.
+std::string part_text_sent(Core& core, const std::string& station, const std::string& tag, int n,
+                           const std::vector<Message>& msgs) {
+    for (auto& m : msgs) {
+        parts::Head h;
+        if (m.direction != "out" || m.dst != station || !parts::head(m.body, h) || h.tag != tag || h.n != n) continue;
+        std::string t = parts::cut(m.body);
+        if (!t.empty()) return t;
+    }
+    return "";
+}
+
+// Takes requests that came in into the queue, once each.
+void sync_asks(Core& core, const std::vector<Message>& msgs) {
+    std::set<std::string> known;
+    std::map<std::string, std::set<std::string>> served;  // station|tag|part -> resends made
+    for (auto& a : core.part_asks()) {
+        known.insert(a.request_id);
+        if ((a.state == "sent" || a.state == "held") && !a.sent_id.empty())
+            served[a.station + "|" + a.tag + "|" + std::to_string(a.part)].insert(a.sent_id);
+    }
+    // Oldest first, so a later repeat is weighed against what was sent before it.
+    for (auto it = msgs.rbegin(); it != msgs.rend(); ++it) {
+        const Message& m = *it;
+        if (m.direction != "in" || m.state == "overheard" || known.count(m.id)) continue;
+        std::string kind, tag;
+        std::vector<int> missing;
+        if (!parts::read_request(m.body, kind, tag, missing)) continue;
+        auto sc = station::check_signature(m.body, [&](const std::string& c) { return core.card_for(c); });
+        std::string from = sc.state == "good" ? sc.signer : m.src;
+        for (int n : missing) {
+            Store::PartAsk a;
+            a.request_id = m.id;
+            a.part = n;
+            a.station = from;
+            a.kind = kind;
+            a.tag = tag;
+            a.asked = m.created_at;
+            if (sc.state != "good")
+                a.state = "unchecked";
+            else if (part_text_sent(core, from, tag, n, msgs).empty())
+                a.state = "not_ours";
+            else if (core.parts_flag_after() > 0 &&
+                     static_cast<int>(served[from + "|" + tag + "|" + std::to_string(n)].size()) >= core.parts_flag_after())
+                a.state = "flagged";
+            else
+                a.state = "waiting";
+            core.put_part_ask(a);
+        }
+        if (sc.state == "good")
+            core.note(from + " asks for " + std::to_string(missing.size()) + " part(s) of " + tag +
+                      ": in the resend queue (parts_queue)");
+    }
+}
+
+struct ResendGroup {
+    std::string kind, tag;
+    int part = 0;
+    std::set<std::string> stations;
+    std::vector<std::pair<std::string, int>> rows;  // request id, part
+    int64_t first_asked = 0;
+    std::string to() const { return stations.size() == 1 ? *stations.begin() : std::string("ALL"); }
+};
+
+std::vector<ResendGroup> resend_groups(const std::vector<Store::PartAsk>& asks) {
+    std::map<std::string, ResendGroup> g;
+    for (auto& a : asks) {
+        if (a.state != "waiting") continue;
+        auto& r = g[a.kind + "|" + a.tag + "|" + std::to_string(1000 + a.part)];
+        r.kind = a.kind;
+        r.tag = a.tag;
+        r.part = a.part;
+        r.stations.insert(a.station);
+        r.rows.push_back({a.request_id, a.part});
+        r.first_asked = r.first_asked ? std::min(r.first_asked, a.asked) : a.asked;
+    }
+    std::vector<ResendGroup> out;
+    for (auto& [k, r] : g) out.push_back(r);
+    std::stable_sort(out.begin(), out.end(),
+                     [](const ResendGroup& a, const ResendGroup& b) { return a.first_asked < b.first_asked; });
+    return out;
+}
+
+// Resends that go out within the hour before t (each send counted once).
+int resends_near(const std::vector<Store::PartAsk>& asks, int64_t t, int64_t* oldest) {
+    std::map<std::string, int64_t> sends;
+    for (auto& a : asks)
+        if ((a.state == "sent" || a.state == "held") && !a.sent_id.empty() && a.at > t - 3600 && a.at <= t)
+            sends[a.sent_id] = a.at;
+    if (oldest) {
+        *oldest = 0;
+        for (auto& [id, at] : sends) *oldest = *oldest ? std::min(*oldest, at) : at;
+    }
+    return static_cast<int>(sends.size());
+}
+
+std::string queue_summary(const std::vector<ResendGroup>& gs) {
+    if (gs.empty()) return "Resend queue: empty";
+    std::set<std::string> who;
+    std::map<std::string, std::vector<int>> by_tag;
+    std::map<std::string, std::string> kind_of;
+    for (auto& g : gs) {
+        who.insert(g.stations.begin(), g.stations.end());
+        by_tag[g.tag].push_back(g.part);
+        kind_of[g.tag] = g.kind == "TAPE" ? "tape" : "bundle";
+    }
+    std::string list;
+    for (auto& [tag, ps] : by_tag) {
+        std::string nums;
+        for (size_t i = 0; i < ps.size(); ++i)
+            nums += (i == 0 ? "" : i + 1 == ps.size() ? " and " : ", ") + std::to_string(ps[i]);
+        list += (list.empty() ? "" : "; ") + kind_of[tag] + " " + tag + (ps.size() == 1 ? " part " : " parts ") + nums;
+    }
+    return "Resend queue: " + std::to_string(gs.size()) + (gs.size() == 1 ? " send" : " sends") + " for " +
+           std::to_string(who.size()) + (who.size() == 1 ? " station" : " stations") + " (" + list + ")";
+}
+
 std::optional<std::string> parts_cmd(Core& core, const station::Identity& me, const std::string& cmd,
                                      std::map<std::string, std::string>& req) {
     if (cmd == "parts_list") {
@@ -1214,16 +1352,149 @@ std::optional<std::string> parts_cmd(Core& core, const station::Identity& me, co
         for (auto& ps : part_sets(core))
             if (req["all"] == "Y" || !ps.complete) write_set(w, core, ps);
         w.end_array().begin_array("requests");
-        for (auto& m : core.list(500)) {
-            std::string kind, tag;
-            std::vector<int> missing;
-            if (m.direction != "in" || m.state == "overheard" || !parts::read_request(m.body, kind, tag, missing)) continue;
-            w.begin_object().field("id", m.id).field("from", m.src).field("kind", kind == "TAPE" ? "tape" : "bundle").field("tag", tag);
+        auto msgs = core.list(5000);
+        sync_asks(core, msgs);
+        std::map<std::string, std::vector<Store::PartAsk>> by_req;
+        std::vector<std::string> order;
+        for (auto& a : core.part_asks()) {
+            if (!by_req.count(a.request_id)) order.push_back(a.request_id);
+            by_req[a.request_id].push_back(a);
+        }
+        for (auto& id : order) {
+            auto& rows = by_req[id];
+            bool open = false;
+            for (auto& a : rows) open = open || a.state == "waiting" || a.state == "flagged" || a.state == "held";
+            if (!open && req["all"] != "Y") continue;
+            w.begin_object().field("id", id).field("from", rows[0].station)
+                .field("kind", rows[0].kind == "TAPE" ? std::string("tape") : std::string("bundle")).field("tag", rows[0].tag);
             w.begin_array("missing");
-            for (int n : missing) w.field("", n);
+            for (auto& a : rows) w.field("", a.part);
+            w.end_array().begin_array("states");
+            for (auto& a : rows) w.field("", a.state);
             w.end_array().end_object();
         }
         w.end_array().end_object();
+        return w.str();
+    }
+    if (cmd == "parts_queue" || cmd == "parts_queue_send") {
+        auto msgs = core.list(5000);
+        sync_asks(core, msgs);
+        auto asks = core.part_asks();
+        auto groups = resend_groups(asks);
+        const int cap = core.parts_resend_per_hour();
+        const int64_t now = now_utc();
+        auto write_queue = [&](JsonWriter& w, const std::vector<ResendGroup>& gs) {
+            w.field("summary", queue_summary(gs));
+            std::set<std::string> who;
+            for (auto& g : gs) who.insert(g.stations.begin(), g.stations.end());
+            w.field("sends", static_cast<int>(gs.size())).field("stations", static_cast<int>(who.size()));
+            w.begin_array("items");
+            for (auto& g : gs) {
+                w.begin_object().field("kind", g.kind == "TAPE" ? std::string("tape") : std::string("bundle"))
+                    .field("tag", g.tag).field("part", g.part).field("to", g.to());
+                w.begin_array("asked_by");
+                for (auto& st : g.stations) w.field("", st);
+                w.end_array().end_object();
+            }
+            w.end_array().begin_array("flagged");
+            for (auto& a : core.part_asks())
+                if (a.state == "flagged")
+                    w.begin_object().field("station", a.station).field("tag", a.tag).field("part", a.part)
+                        .field("request", a.request_id).end_object();
+            w.end_array().begin_array("held");
+            std::set<std::string> seen;
+            for (auto& a : core.part_asks())
+                if (a.state == "held" && seen.insert(a.sent_id).second)
+                    w.begin_object().field("id", a.sent_id).field("tag", a.tag).field("part", a.part)
+                        .field("goes_at", keys::time_text(a.at)).end_object();
+            w.end_array();
+            int unchecked = 0, not_ours = 0;
+            for (auto& a : core.part_asks()) {
+                unchecked += a.state == "unchecked";
+                not_ours += a.state == "not_ours";
+            }
+            w.field("unchecked", unchecked).field("not_ours", not_ours);
+        };
+        if (cmd == "parts_queue") {
+            int64_t oldest = 0;
+            int used = resends_near(asks, now, &oldest);
+            JsonWriter w;
+            w.begin_object().field("ok", true);
+            write_queue(w, groups);
+            w.field("per_hour", cap).field("sent_last_hour", used).field("room", cap > 0 ? std::max(0, cap - used) : -1);
+            w.field("emcon", core.emcon());
+            w.end_object();
+            return w.str();
+        }
+        // parts_queue_send: the operator's one press. when=NOW (default) or
+        // NET: held for the next net slot (net= a schedule, else the soonest).
+        std::string when = req["when"];
+        for (auto& c : when) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+        if (when.empty()) when = "NOW";
+        if (when != "NOW" && when != "NET") return error_reply("when is NOW or NET");
+        if (groups.empty()) return error_reply("the resend queue is empty");
+        int64_t go_at = now;
+        std::string slot;
+        if (when == "NET") {
+            Ops* ops = core.ops();
+            std::optional<NetSitting> sit;
+            if (ops && !req["net"].empty()) sit = ops->sched_sitting(req["net"]);
+            else if (ops) {
+                auto up = ops->sched_upcoming(1);
+                if (!up.empty()) sit = up[0];
+            }
+            if (!sit) return error_reply(req["net"].empty() ? "no net is scheduled: send now, or add a net schedule"
+                                                            : "no net schedule named " + req["net"]);
+            go_at = std::max(now, sit->start);
+            slot = sit->sched.name;
+        } else if (core.emcon()) {
+            return error_reply("EMCON is on, so nothing was sent. Send at the next net slot (when=NET), or when EMCON is lifted.");
+        }
+        int64_t oldest = 0;
+        int used = resends_near(asks, go_at, &oldest);
+        int room = cap > 0 ? std::max(0, cap - used) : static_cast<int>(groups.size());
+        const bool held = go_at > now;
+        JsonWriter w;
+        w.begin_object().field("ok", true).field("when", when);
+        if (!slot.empty()) w.field("net", slot);
+        w.field("goes_at", keys::time_text(go_at)).begin_array("sent");
+        std::vector<ResendGroup> left;
+        std::vector<std::string> failed;
+        int done = 0;
+        std::set<std::string> who;
+        for (auto& g : groups) {
+            if (done >= room) {
+                left.push_back(g);
+                continue;
+            }
+            std::string text;
+            for (auto& st : g.stations)
+                if (text.empty()) text = part_text_sent(core, st, g.tag, g.part, msgs);
+            std::string err, id = text.empty() ? std::string() : send_block(core, g.to(), text, &err, held);
+            if (id.empty()) {
+                failed.push_back(g.tag + " part " + std::to_string(g.part) + ": " + (text.empty() ? "not found" : err));
+                left.push_back(g);
+                continue;
+            }
+            ++done;
+            for (auto& [rid, n] : g.rows) core.set_part_ask(rid, n, held ? "held" : "sent", id, go_at);
+            who.insert(g.stations.begin(), g.stations.end());
+            w.begin_object().field("id", id).field("tag", g.tag).field("part", g.part).field("to", g.to())
+                .field("stations", static_cast<int>(g.stations.size())).end_object();
+        }
+        w.end_array();
+        w.field("sends", done).field("stations", static_cast<int>(who.size())).field("held", held);
+        w.field("left_for_cap", static_cast<int>(left.size()) - static_cast<int>(failed.size()));
+        if (!left.empty() && cap > 0 && room == done)
+            w.field("room_at", keys::time_text((oldest ? oldest : go_at) + 3600));
+        w.begin_array("failed");
+        for (auto& f : failed) w.field("", f);
+        w.end_array();
+        w.field("left", queue_summary(left));
+        w.end_object();
+        core.note(std::to_string(done) + " part(s) from the resend queue " +
+                  (held ? "held for the net slot at " + keys::time_text(go_at) : std::string("sent")) + " for " +
+                  std::to_string(who.size()) + " station(s)");
         return w.str();
     }
     if (cmd == "parts_request") {
@@ -1288,8 +1559,15 @@ std::optional<std::string> parts_cmd(Core& core, const station::Identity& me, co
             continue;
         }
         std::string err, id = send_block(core, to, it->second, &err);
-        if (id.empty()) failed.push_back(std::to_string(n) + ": " + err);
-        else w.begin_object().field("part", n).field("id", id).end_object();
+        if (id.empty()) {
+            failed.push_back(std::to_string(n) + ": " + err);
+            continue;
+        }
+        w.begin_object().field("part", n).field("id", id).end_object();
+        // Asks from that station for this part are answered (flagged ones too).
+        for (auto& a : core.part_asks())
+            if (a.station == to && a.tag == tag && a.part == n && (a.state == "waiting" || a.state == "flagged"))
+                core.set_part_ask(a.request_id, a.part, "sent", id, now_utc());
     }
     w.end_array().begin_array("not_found");
     for (int n : not_found) w.field("", n);
@@ -1688,7 +1966,8 @@ std::optional<std::string> station_cmd(Core& core, const std::string& cmd, std::
                                                 "tape_seal",    "card_keymaster", "handout_import",  "rally_status",
                                                 "keymaster_accept", "keymaster_refuse", "keymaster_list",
                                                 "bundle_make", "bundle_load", "bundle_send",
-                                                "parts_list", "parts_request", "parts_resend"};
+                                                "parts_list", "parts_request", "parts_resend", "parts_queue",
+                                                "parts_queue_send"};
     if (!kCmds.count(cmd)) return std::nullopt;
     const station::Identity* me = core.identity();
     if (!me && cmd != "station_restore" && cmd != "cards_list") return error_reply("this station has no keys of its own");
@@ -1862,7 +2141,9 @@ std::optional<std::string> station_cmd(Core& core, const std::string& cmd, std::
     }
     if (cmd == "handout_import") return handout_import(core, *me, req);
     if (cmd == "bundle_make" || cmd == "bundle_load" || cmd == "bundle_send") return bundle_cmd(core, *me, cmd, req);
-    if (cmd == "parts_list" || cmd == "parts_request" || cmd == "parts_resend") return *parts_cmd(core, *me, cmd, req);
+    if (cmd == "parts_list" || cmd == "parts_request" || cmd == "parts_resend" || cmd == "parts_queue" ||
+        cmd == "parts_queue_send")
+        return *parts_cmd(core, *me, cmd, req);
     if (cmd == "keymaster_accept" || cmd == "keymaster_refuse" || cmd == "keymaster_list")
         return keymaster_cmd(core, *me, cmd, req);
     if (cmd == "rally_status") return rally_status(core, *me);

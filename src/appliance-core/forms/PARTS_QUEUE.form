@@ -1,0 +1,21 @@
+; Send the resend queue: every part other stations asked for, pooled.
+FORM PARTS_QUEUE
+TITLE Send the resend queue
+SUMMARY Stations that missed parts of a tape or bundle ask for them. Their asks are pooled: a part several stations missed goes once, to the whole net. This sends the queue now, or holds it for the next net slot.
+LEVEL ZERO
+ORDER 85
+ACTION parts_queue_send
+FIELD queue Resend queue(@parts_queue) required nosend
+FIELD when Send(NOW,NET) default=NOW
+FIELD net Net slot(@schedules)
+NEXT PARTS_REPEAT
+BEGIN_HELP
+Resend queue:
+What is waiting: how many sends, for how many stations, and which parts. Nothing goes out until you send it. At most a set number of parts go out in an hour (12 unless set otherwise); the rest wait. A station that asks again for a part it has already been sent twice is flagged instead, for you to look at in Send missing parts again.
+END
+Send:
+NOW sends it at once (not while EMCON is on). NET holds it and sends it at the start of the next net slot.
+END
+Net slot:
+The net whose next sitting it waits for. Left empty, the soonest scheduled net.
+END

@@ -380,7 +380,8 @@ const std::vector<std::string>& actions() {
         "sched_put",     "sched_remove",   "card_send",      "card_import",      "card_check",
         "keymaster_accept", "keymaster_refuse", "bundle_make", "bundle_send",    "bundle_load",
         "net_tape",      "handout_import", "key_open",       "station_backup",   "station_restore",
-        "form_template_put", "form_template_reset", "parts_request", "parts_resend"};
+        "form_template_put", "form_template_reset", "parts_request", "parts_resend",
+        "parts_queue_send"};
     return a;
 }
 
@@ -388,7 +389,7 @@ const std::vector<std::string>& sources() {
     static const std::vector<std::string> s = {
         "@channels", "@cards",       "@cards_unchecked", "@stations",   "@nets",        "@schedules",
         "@book",     "@keymasters_undecided", "@forms",  "@msg_cards",  "@msg_bundles", "@msg_tapes",
-        "@parts_waiting", "@parts_requests"};
+        "@parts_waiting", "@parts_requests", "@parts_queue"};
     return s;
 }
 

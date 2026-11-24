@@ -6,6 +6,7 @@
 #include "acp126.h"
 #include "acp127.h"
 #include "acp201.h"
+#include "codress.h"
 #include "digest.h"
 #include "json.h"
 #include "run_program.h"
@@ -133,6 +134,31 @@ bool valid_datetime(const std::string& s) {
 // unit (1.234 MHZ, 12345 KHZ), a number with three or more decimals (1.2345),
 // a number of four or five digits with decimals (12345.0), or FREQ followed
 // by a number. Channel designators (M900) and temperatures (17.0C) pass.
+// The text with the cipher-group lines of any sealed block taken out: the
+// lines after a "GR n" line whose every word is a well-formed group.
+static std::string without_cipher_groups(const std::string& text) {
+    std::string out, line;
+    bool in_groups = false;
+    std::istringstream in(text);
+    while (std::getline(in, line)) {
+        std::string l = line;
+        if (!l.empty() && l.back() == '\r') l.pop_back();
+        if (in_groups) {
+            std::vector<std::string> g;
+            std::istringstream ws(l);
+            for (std::string w; ws >> w;) g.push_back(w);
+            std::string bytes;
+            if (!g.empty() && codress::from_groups(g, bytes, nullptr)) continue;
+            in_groups = false;
+        }
+        if (l.size() > 3 && l.compare(0, 3, "GR ") == 0 &&
+            std::all_of(l.begin() + 3, l.end(), [](char c) { return std::isdigit(static_cast<unsigned char>(c)); }))
+            in_groups = true;
+        out += line + "\n";
+    }
+    return out;
+}
+
 bool looks_like_frequency(const std::string& raw) {
     std::string s = upper(raw);
     size_t n = s.size();
@@ -1100,8 +1126,10 @@ void check_field(Checker& c, const Field& f, const std::string& val, const ProcI
         c.add(f.key, "error", f.label + " must be one line.", "Put it all on one line.", first_line(val));
         return;
     }
-    // Content that never goes on the air.
-    if (is_prose(f.kind) && looks_like_frequency(val)) {
+    // Content that never goes on the air. Lines of cipher groups (a sealed
+    // tape or plan, after its GR line) are left out of this check: random
+    // groups can look like a number and a unit, and can't carry one in clear.
+    if (is_prose(f.kind) && looks_like_frequency(without_cipher_groups(val))) {
         c.add(f.key, "error", f.label + " looks like it holds a frequency.",
               "MARS frequencies are controlled information and are never sent in the clear. Name the channel by "
               "its designator from your net plan instead.");

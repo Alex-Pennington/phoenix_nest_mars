@@ -225,7 +225,8 @@ Every message except chat carries the MSC digest and is signed with this
 station's key; `"sign":"N"` sends it unsigned, and `signed` in the reply says
 which. Codress (`ACP127_CODRESS`) takes `key`, one of the indicators
 `compose_form` offers, and each copy is enciphered under it; `codress_key` in
-the reply names the key used.
+the reply names the key used. `"hold":"Y"` queues it held, to go when it is
+released (as the resend queue does for a net slot).
 
 ## compose_advise
 
@@ -581,15 +582,33 @@ A tape or bundle over 6000 bytes goes as numbered, signed parts
   (`tape` or `bundle`), `tag`, `from`, `parts`, `have`, `state` (`waiting`,
   `dropped`, or with `all=Y` also `complete`), `missing`, `id` (a part, for
   `key_open`, `bundle_load` or `parts_request`), `drops_in_s` while waiting,
-  and `dropped_parts` and `refused_parts` when there are any. Each request
-  that came in has `id`, `from`, `kind`, `tag` and `missing`.
+  and `dropped_parts` and `refused_parts` when there are any. `requests`
+  lists the requests that came in and are still open (all of them with
+  `all=Y`): each has `id`, `from`, `kind`, `tag`, `missing` and `states`, one
+  per part: `waiting` (in the queue), `held` (for a net slot), `sent`,
+  `flagged` (asked again after resends), `not_ours` (never sent to that
+  station) or `unchecked` (the signature can't be checked here).
 - `parts_request {id}`: asks the set's sender for the missing parts, by
   number, in a signed message. Returns `to`, `tag`, `id` (the request sent)
   and `asked`.
 - `parts_resend {id} | {to, tag, parts}`: sends parts again, for a request
   that came in (`id`; its signature must check) or as named (`parts="2 4"`).
   Only to a station they were sent to before. Returns `to`, `tag`,
-  `resent` (each `part` and `id`), `not_found` and `failed`.
+  `resent` (each `part` and `id`), `not_found` and `failed`. Serves a flagged
+  request too, by hand.
+- `parts_queue`: the resend queue, pooled. Returns `summary` (one line for the
+  operator), `sends`, `stations`, `items` (each `kind`, `tag`, `part`, `to`:
+  a station or `ALL` when several asked, and `asked_by`), `flagged` (each
+  `station`, `tag`, `part`, `request`), `held` (each `id`, `tag`, `part`,
+  `goes_at`), `unchecked`, `not_ours`, `per_hour`, `sent_last_hour`, `room`
+  (-1 with no cap) and `emcon`.
+- `parts_queue_send {when, net}`: sends the queue. `when=NOW` (the default;
+  refused during EMCON) or `when=NET` with `net` naming a net on the schedule
+  (default: the next to sit); parts for a slot still to come are held and go
+  out when it starts. Up to the hourly cap. Returns `when`, `net`, `goes_at`,
+  `sent` (each `id`, `tag`, `part`, `to`, `stations`), `sends`, `stations`,
+  `held`, `left_for_cap` and `room_at` when the cap held some back, `failed`
+  and `left` (what stays in the queue).
 
 ### Keymaster
 
