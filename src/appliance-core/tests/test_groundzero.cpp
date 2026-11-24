@@ -304,8 +304,10 @@ static void three_empty_boxes(const fs::path& dir) {
 
     // Over the air to B, as signed plain traffic.
     r = call(*A.core, {{"cmd", "bundle_send"}, {"to", "STA-B"}});
-    CHECK(ok(r) && num(r, "parts") == 1 && count(r, "failed") == 0 && str(r, "tag").size() == 8);
-    const std::string air_tag = str(r, "tag");
+    CHECK(ok(r) && num(r, "parts") == 1 && count(r, "failed") == 0);
+    // A holds no card for B yet: B's copy carries no frequencies, and says to send the card.
+    CHECK(str(item(r, "sent", 0), "frequencies") == "no_card");
+    const std::string air_tag = str(item(r, "sent", 0), "tag");
     auto sent = ids(r, "STA-B");
     CHECK(sent.size() == 1);
     CHECK(wait_for([&] { return !sent.empty() && B.core->get(sent[0]).has_value(); }));
@@ -328,6 +330,8 @@ static void three_empty_boxes(const fs::path& dir) {
     CHECK(ok(r) && yes(r, "loaded") && yes(r, "signer_checked") && str(r, "signer") == "checked");
     CHECK(num(r, "book_added") >= 4 && num(r, "schedules_added") == 3 && num(r, "links_set") == 1);
     CHECK(count(r, "need_frequency") == 3 && str(r, "next").find("frequency card") != std::string::npos);
+    CHECK(str(r, "for") == "STA-B" && str(r, "frequencies") == "none_for_you" &&
+          str(r, "next").find("send your card to NCS-A") != std::string::npos);
     auto pn = B.ops->sched_get("PRACTICE NET");
     CHECK(pn && pn->channel == "P1" && pn->start == 1140 && pn->days == "TUE,THU");
     auto sb = B.ops->book_get("STA-C");
@@ -427,6 +431,102 @@ static void three_empty_boxes(const fs::path& dir) {
     cb = C.ops->book_get("NCS-A");
     CHECK(cb && cb->source.find("signer not checked") != std::string::npos);
     for (Box* b : {&A, &B, &C}) b->core->stop();
+}
+
+// ---------------------------------------------------------------- sealed frequencies
+
+// Frequencies ride in a member's own copy of the bundle, sealed to its card.
+static void sealed_frequencies(const fs::path& dir) {
+    g_now = static_cast<int64_t>(std::time(nullptr));
+    auto ma = std::make_unique<LoopbackModem>(0);
+    auto mb = std::make_unique<LoopbackModem>(0);
+    LoopbackModem::connect(*ma, *mb);
+    Box A = open_box(dir / "freq", "NCS-A", std::move(ma));
+    Box B = open_box(dir / "freq", "STA-B", std::move(mb));
+    Box C = open_box(dir / "freq", "STA-C", std::make_unique<LoopbackModem>(0));
+    Box E = open_box(dir / "freq", "STA-E", std::make_unique<LoopbackModem>(0));
+    import_documents(A);
+    // A has checked B's and E's cards by voice; it holds C's card unchecked, and none for D.
+    for (Box* m : {&B, &E}) {
+        CHECK(ok(call(*A.core, {{"cmd", "card_import"}, {"text", card_of(*m)}})));
+        CHECK(ok(call(*A.core, {{"cmd", "card_check"}, {"station", m == &B ? "STA-B" : "STA-E"}, {"fingerprint", m->fp}})));
+    }
+    CHECK(ok(call(*A.core, {{"cmd", "card_import"}, {"text", card_of(C)}})));
+    CHECK(ok(call(*B.core, {{"cmd", "card_import"}, {"text", card_of(A)}})));
+    CHECK(ok(call(*B.core, {{"cmd", "card_check"}, {"station", "NCS-A"}, {"fingerprint", A.fp}})));
+
+    std::string raw;
+    JsonValue r = call(*A.core, {{"cmd", "bundle_send"}, {"to", "STA-B STA-C STA-D"}}, &raw);
+    CHECK(ok(r) && count(r, "sent") == 3);
+    CHECK(str(item(r, "sent", 0), "frequencies") == "sealed");
+    CHECK(str(item(r, "sent", 1), "frequencies") == "card_not_checked");
+    CHECK(str(item(r, "sent", 2), "frequencies") == "no_card");
+    auto sent = ids(r, "STA-B");
+    CHECK(sent.size() == 1);
+    CHECK(wait_for([&] { return !sent.empty() && B.core->get(sent[0]).has_value(); }));
+
+    // The copy on the air: the frequencies are sealed, never in the clear.
+    std::string air = sent.empty() ? "" : B.core->get(sent[0])->body;
+    CHECK(air.find("PNA SEALED PLAN 1") != std::string::npos && air.find("FOR STA-B") != std::string::npos);
+    CHECK(air.find("STEP 4 THE FREQUENCIES ARE SEALED BELOW TO STA-B.") != std::string::npos);
+    for (auto* never : {"5000", "10000", "2500", "KHZ", "MHZ"}) CHECK(air.find(never) == std::string::npos);
+
+    // B loads it: the plan fills in, with no frequency card on B's box.
+    r = call(*B.core, {{"cmd", "bundle_load"}, {"id", sent.at(0)}}, &raw);
+    CHECK(ok(r) && yes(r, "loaded") && str(r, "frequencies") == "opened" && num(r, "frequencies_added") == 3);
+    CHECK(count(r, "need_frequency") == 0 && str(r, "next").empty());
+    for (auto* never : {"5000", "10000", "2500"}) CHECK(raw.find(never) == std::string::npos);
+    auto p1 = B.ops->channels().get("P1");
+    CHECK(p1 && p1->hz == 5000000 && p1->mode == "USB" && p1->use == "PRIMARY");
+    CHECK(B.ops->channels().get("S1") && B.ops->channels().get("S1")->hz == 2500000);
+    // Loading it again changes nothing.
+    r = call(*B.core, {{"cmd", "bundle_load"}, {"id", sent.at(0)}});
+    CHECK(ok(r) && num(r, "frequencies_same") == 3 && num(r, "frequencies_added") == 0);
+    // Still no keymaster and no key from it.
+    CHECK(!B.core->card_keymaster("NCS-A") && B.keys->for_sending().empty());
+
+    // C's own copy (its card isn't checked at A) carries none and says what to do.
+    r = call(*A.core, {{"cmd", "bundle_make"}, {"for", "STA-C"}});
+    CHECK(ok(r) && str(r, "frequencies") == "card_not_checked" && str(r, "next").find("check it") != std::string::npos);
+    std::string c_copy = str(r, "text");
+    CHECK(c_copy.find("PNA SEALED PLAN") == std::string::npos && c_copy.find("STEP 4 NO FREQUENCIES") != std::string::npos);
+    r = call(*C.core, {{"cmd", "bundle_load"}, {"text", c_copy}, {"accept", "Y"}});
+    CHECK(ok(r) && str(r, "frequencies") == "none_for_you" && count(r, "need_frequency") == 3);
+    // B's copy reaching C opens nothing on C.
+    r = call(*C.core, {{"cmd", "bundle_load"}, {"text", air}, {"accept", "Y"}});
+    CHECK(ok(r) && yes(r, "loaded") && str(r, "frequencies") == "sealed_to_other" && !C.ops->channels().get("P1"));
+    // A sealed line changed on the way: the whole bundle is refused.
+    std::string bent = air;
+    size_t g = bent.find("\nGR ");
+    g = bent.find('\n', g + 1) + 1;
+    bent[g] = bent[g] == 'A' ? 'B' : 'A';
+    r = call(*B.core, {{"cmd", "bundle_load"}, {"text", bent}});
+    CHECK(!ok(r) && str(r, "error").find("signature") != std::string::npos);
+
+    // E already has P1 on another frequency, and hasn't checked A's card.
+    Channel mine;
+    mine.name = "P1";
+    mine.hz = 3330000;
+    mine.mode = "USB";
+    CHECK(E.ops->channels().put(mine, nullptr));
+    r = call(*A.core, {{"cmd", "bundle_make"}, {"for", "STA-E"}});
+    CHECK(ok(r) && str(r, "frequencies") == "sealed" && num(r, "frequencies_sealed") == 3);
+    std::string e_copy = str(r, "text");
+    // On E's yes, the missing channels are added, but E's own P1 is kept.
+    r = call(*E.core, {{"cmd", "bundle_load"}, {"text", e_copy}, {"accept", "Y"}});
+    CHECK(ok(r) && num(r, "frequencies_added") == 2 && num(r, "frequencies_kept") == 1 &&
+          str(r, "next").find("kept") != std::string::npos);
+    CHECK(E.ops->channels().get("P1")->hz == 3330000);
+    // Once E checks A's card by voice, the bundle's P1 is taken.
+    CHECK(ok(call(*E.core, {{"cmd", "card_import"}, {"text", card_of(A)}})));
+    CHECK(ok(call(*E.core, {{"cmd", "card_check"}, {"station", "NCS-A"}, {"fingerprint", A.fp}})));
+    r = call(*E.core, {{"cmd", "bundle_load"}, {"text", e_copy}});
+    CHECK(ok(r) && num(r, "frequencies_changed") == 1 && num(r, "frequencies_same") == 2);
+    CHECK(E.ops->channels().get("P1")->hz == 5000000);
+    // A sealed frequency block is not a key tape.
+    r = call(*E.core, {{"cmd", "key_open"}, {"text", e_copy}});
+    CHECK(!ok(r));
+    for (Box* b : {&A, &B, &C, &E}) b->core->stop();
 }
 
 // ---------------------------------------------------------------- drill 2
@@ -580,6 +680,7 @@ int main() {
     fs::remove_all(dir);
     format_checks(dir);
     three_empty_boxes(dir);
+    sealed_frequencies(dir);
     stale_box(dir);
     fs::remove_all(dir);
     return check::report("test_groundzero");

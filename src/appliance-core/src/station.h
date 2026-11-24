@@ -97,6 +97,19 @@ struct SigCheck {
 };
 SigCheck check_signature(const std::string& message, const std::function<std::optional<Card>(const std::string&)>& card_for);
 
+// A block of text sealed to one station's card (X25519, HKDF-SHA256,
+// AES-256-GCM; our own construction) and signed by the sender:
+//   HEAD / TO / FROM / (extra lines) / EPH / GR n / groups / SIG / SIG / END
+// Key tapes use head "PNA SEALED TAPE 1"; a bundle's frequencies use
+// "PNA SEALED PLAN 1". The head is bound into the key, so one can't be
+// opened as the other.
+bool seal_block(const std::string& head, const std::vector<std::string>& extra, const std::string& plain_text,
+                const Identity& from, const Card& to, std::string& out, std::string* error);
+// Opens a block sealed to `me`. `what` names it in errors ("tape").
+bool open_block(const std::string& head, const std::string& text, const Identity& me,
+                const std::function<std::optional<Card>(const std::string&)>& card_for, std::string& plain_text,
+                std::string& from_station, const std::string& what, std::string* error);
+
 // Sealed key tapes.
 bool seal_tape(const std::string& tape_text, const std::string& net, const std::string& tape_id, const Identity& from,
                const Card& to, std::string& out, std::string* error);

@@ -116,8 +116,8 @@ or check signatures with another station:
 | Refuse a keymaster | `appliance-cli keymaster refuse NCS-A` |
 | See who you accepted, refused, or haven't decided on | `appliance-cli keymaster list` |
 | Load a startup bundle (book, channels, schedules) | `appliance-cli bundle load FILE` or `bundle load ID` |
-| Make your own startup bundle for a stick | `appliance-cli bundle make FILE --label "PRACTICE NET"` |
-| Send it over the air | `appliance-cli bundle send STA-B,STA-C` |
+| Make a member's startup bundle for a stick, frequencies sealed to them | `appliance-cli bundle make FILE --for STA-B` |
+| Send each member their own copy over the air | `appliance-cli bundle send STA-B,STA-C` |
 | See what your box can do now, and the next step | `appliance-cli rally` |
 | Load a key tape from a stick | `appliance-cli keys import FILE` |
 | Open a sealed key tape that came in | `appliance-cli keys open ID` |
@@ -128,7 +128,10 @@ or check signatures with another station:
 keymaster: the box asks about each one, and takes no tape until you accept.
 Accept only after you have read the fingerprint back with a voice you know,
 or in person. A bundle from a station you haven't checked loads only with
-`--yes`, and changes no card or key either way.
+`--yes`, and changes no card or key either way. A bundle made for you carries
+the frequencies sealed to your card, so your channel plan fills in with no
+frequency card; to get one, send your card to the net's keymaster and check
+it by voice.
 
 When a key for today is loaded, the Messages panel offers codress, and every
 message you send is signed. Keymasters, see docs/crypto.md for making tapes

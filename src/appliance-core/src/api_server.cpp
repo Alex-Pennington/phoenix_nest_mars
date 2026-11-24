@@ -1024,10 +1024,34 @@ std::string bundle_cmd(Core& core, const station::Identity& me, const std::strin
     Ops* ops = core.ops();
     if (!ops) return error_reply("this station has no station book");
     std::string err;
-    auto make = [&](std::vector<std::string>* changed) {
+    // A bundle from what this box holds. For a member (`member`), the
+    // frequencies go sealed to its card, and only to a card checked here by
+    // voice: sealing to an unchecked card could hand them to whoever made it.
+    // *freqs says what happened: "sealed", "no_card", "card_not_checked",
+    // "none_held" (the plan has none), or "not_sealed" (no member named).
+    auto make = [&](std::vector<std::string>* changed, const std::string& member, std::string* freqs, int* sealed_n) {
         bundle::Bundle b = bundle::collect(*ops, core.link_formats(), req["label"], changed);
         b.made = ops->now();
-        return bundle::format(b, me);
+        std::string state = "not_sealed";
+        std::string text;
+        if (member.empty()) {
+            text = bundle::format(b, me);
+        } else {
+            auto card = member == me.station ? std::optional<station::Card>(station::card_of(me)) : core.card_for(member);
+            bool checked = member == me.station || core.card_verified(member);
+            if (card && checked && !b.freqs.empty()) {
+                state = "sealed";
+                if (sealed_n) *sealed_n = static_cast<int>(b.freqs.size());
+                text = bundle::format(b, me, &*card);
+            } else {
+                state = !card ? "no_card" : !checked ? "card_not_checked" : "none_held";
+                b.for_station = member;
+                text = bundle::format(b, me);
+            }
+        }
+        for (auto& f : b.freqs) f.second = 0;
+        if (freqs) *freqs = state;
+        return text;
     };
     // The bundle's text: given, from a file, or (bundle_make/send) built here.
     auto given = [&](std::string& text) -> std::string {
@@ -1042,7 +1066,11 @@ std::string bundle_cmd(Core& core, const station::Identity& me, const std::strin
     };
     if (cmd == "bundle_make") {
         std::vector<std::string> changed;
-        std::string text = make(&changed);
+        std::string member = req["for"];
+        for (auto& c : member) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+        std::string freqs;
+        int sealed_n = 0;
+        std::string text = make(&changed, member, &freqs, &sealed_n);
         bundle::Bundle b;
         if (!bundle::parse(text, b, &err)) return error_reply("the bundle didn't check after it was made: " + err);
         if (!req["out"].empty()) {
@@ -1065,29 +1093,51 @@ std::string bundle_cmd(Core& core, const station::Identity& me, const std::strin
             .field("links", static_cast<int>(b.links.size()))
             .field("bytes", static_cast<int>(text.size()))
             .field("parts", static_cast<int>(bundle::split(text, kBundlePart).size()))
+            .field("for", b.for_station)
+            .field("frequencies", freqs)
+            .field("frequencies_sealed", sealed_n)
             .field("text", text);
         if (!req["out"].empty()) w.field("written", req["out"]);
+        if (freqs == "no_card" || freqs == "card_not_checked")
+            w.field("next", "This copy carries no frequencies: " + member +
+                                (freqs == "no_card" ? "'s card isn't held here." : "'s card isn't checked by voice yet.") +
+                                " Get its card and check it, then make the bundle again.");
         w.begin_array("changed");
         for (auto& c : changed) w.field("", c);
         w.end_array().end_object();
         return w.str();
     }
     if (cmd == "bundle_send") {
-        std::string text;
-        std::string e = given(text);
+        // A bundle given as text or file goes as it is. Otherwise each
+        // station gets its own copy, with the frequencies sealed to its card.
+        std::string given_text;
+        std::string e = given(given_text);
         if (!e.empty()) return error_reply(e);
-        if (text.empty()) text = make(nullptr);
         bundle::Bundle b;
-        if (!bundle::parse(text, b, &err)) return error_reply("bundle not sent: " + err);
+        if (!given_text.empty() && !bundle::parse(given_text, b, &err)) return error_reply("bundle not sent: " + err);
         auto to = call_list(req["to"]);
         if (to.empty()) return error_reply("name the stations to send it to (to=\"STA-B STA-C\")");
-        auto parts = bundle::split(text, kBundlePart);
         JsonWriter w;
-        w.begin_object().field("ok", true).field("tag", b.tag).field("by", b.by).field("parts", static_cast<int>(parts.size()));
+        w.begin_object().field("ok", true).field("by", me.station);
+        if (!given_text.empty()) w.field("tag", b.tag);
         w.begin_array("sent");
         std::vector<std::string> failed;
+        int total_parts = 0;
         for (auto& st : to) {
-            w.begin_object().field("station", st);
+            std::string text = given_text, freqs = "as_given";
+            if (text.empty()) text = make(nullptr, st, &freqs, nullptr);
+            bundle::Bundle mine;
+            if (!bundle::parse(text, mine, &err)) {
+                failed.push_back(st + ": " + err);
+                continue;
+            }
+            auto parts = bundle::split(text, kBundlePart);
+            total_parts += static_cast<int>(parts.size());
+            w.begin_object()
+                .field("station", st)
+                .field("tag", mine.tag)
+                .field("parts", static_cast<int>(parts.size()))
+                .field("frequencies", freqs);
             w.begin_array("ids");
             for (auto& p : parts) {
                 std::string id = send_block(core, st, p, &err);
@@ -1100,11 +1150,12 @@ std::string bundle_cmd(Core& core, const station::Identity& me, const std::strin
             w.end_array().end_object();
         }
         w.end_array();
+        w.field("parts", total_parts);
         w.begin_array("failed");
         for (auto& f : failed) w.field("", f);
         w.end_array().end_object();
-        core.note("startup bundle " + b.tag + " by " + b.by + " sent to " + req["to"] + " in " +
-                  std::to_string(parts.size()) + " part(s)");
+        core.note("startup bundle by " + me.station + " sent to " + req["to"] + " in " + std::to_string(total_parts) +
+                  " part(s)");
         return w.str();
     }
     // bundle_load
@@ -1189,6 +1240,34 @@ std::string bundle_cmd(Core& core, const station::Identity& me, const std::strin
     std::string source = "bundle from " + b.by + " " + b.signer_fp + " made " + keys::time_text(b.made) +
                          (trusted ? "" : " (signer not checked: loaded on the member's yes)");
     bundle::Applied a = bundle::apply(b, *ops, source);
+    // The frequencies, when this copy was sealed to this station.
+    std::string freq_state = "none";
+    bundle::FreqApplied fa;
+    if (!b.sealed_freqs.empty()) {
+        if (b.for_station != me.station) {
+            freq_state = "sealed_to_other";
+        } else {
+            std::vector<std::pair<std::string, int64_t>> fs;
+            std::string ferr;
+            if (bundle::open_freqs(b, me, fs, &ferr)) {
+                freq_state = "opened";
+                fa = bundle::apply_freqs(b, fs, ops->channels(), trusted, source);
+                for (auto& f : fs) f.second = 0;
+            } else {
+                freq_state = "not_opened";
+                a.problems.push_back("frequencies not opened: " + ferr);
+            }
+        }
+    } else if (!b.for_station.empty()) {
+        freq_state = b.for_station == me.station ? "none_for_you" : "none";
+    }
+    for (auto& p : fa.problems) a.problems.push_back("frequency: " + p);
+    {
+        std::vector<std::string> still;
+        for (auto& c : a.need_frequency)
+            if (!ops->channels().get(c)) still.push_back(c);
+        a.need_frequency = still;
+    }
     int links = 0;
     for (auto& l : b.links) {
         if (l.first == me.station) continue;
@@ -1197,7 +1276,9 @@ std::string bundle_cmd(Core& core, const station::Identity& me, const std::strin
     }
     core.note("startup bundle " + b.tag + " from " + b.by + " loaded (" + signer + " signer): " +
               std::to_string(a.book_added + a.book_replaced) + " book entries, " +
-              std::to_string(a.schedules_added + a.schedules_replaced) + " schedules");
+              std::to_string(a.schedules_added + a.schedules_replaced) + " schedules" +
+              (freq_state == "opened" ? ", " + std::to_string(fa.added + fa.changed) + " frequencies (sealed to this station)"
+                                      : ""));
     JsonWriter w;
     w.begin_object().field("ok", true).field("loaded", true);
     summary(w);
@@ -1209,16 +1290,27 @@ std::string bundle_cmd(Core& core, const station::Identity& me, const std::strin
         .field("schedules_replaced", a.schedules_replaced)
         .field("schedules_same", a.schedules_same)
         .field("channels_updated", a.channels_updated)
-        .field("links_set", links);
+        .field("links_set", links)
+        .field("for", b.for_station)
+        .field("frequencies", freq_state)
+        .field("frequencies_added", fa.added)
+        .field("frequencies_changed", fa.changed)
+        .field("frequencies_same", fa.same)
+        .field("frequencies_kept", fa.kept);
     w.begin_array("need_frequency");
     for (auto& c : a.need_frequency) w.field("", c);
     w.end_array();
     w.begin_array("problems");
     for (auto& p : a.problems) w.field("", p);
     w.end_array();
-    if (!a.need_frequency.empty())
-        w.field("next", "The bundle names channels by designator only. Load your frequency card (mars_import) for " +
-                            std::to_string(a.need_frequency.size()) + " channel(s) this box doesn't hold.");
+    if (fa.kept > 0)
+        w.field("next", std::to_string(fa.kept) + " channel(s) here have a different frequency from the bundle and were "
+                        "kept: " + b.by + "'s card isn't checked on this box. Check it by voice and load the bundle again "
+                        "to take them.");
+    else if (!a.need_frequency.empty())
+        w.field("next", "This box has no frequency for " + std::to_string(a.need_frequency.size()) +
+                            " channel(s) in the bundle. Load your frequency card (mars_import), or send your card to " +
+                            b.by + " and check it by voice, for a bundle with them sealed to you.");
     w.end_object();
     return w.str();
 }

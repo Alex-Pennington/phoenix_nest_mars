@@ -2,9 +2,12 @@
 // of the can doesn't have to be typed in by hand. docs/crypto.md has the
 // design ("Startup bundles").
 //
-// A bundle carries the station book, the channel plan by designator (never a
-// frequency), the net schedules and the message settings (how each station
-// is reached). It is plain text in the radio's own character set, signed by
+// A bundle carries the station book, the channel plan by designator, the net
+// schedules and the message settings (how each station is reached). The
+// frequencies never go in the clear: a bundle made for one member carries
+// them sealed to that member's card (station::seal_block, "PNA SEALED PLAN
+// 1"), so they open only on that member's box. A bundle for a member whose
+// card isn't held, or for anyone, carries none, and says to send the card. It is plain text in the radio's own character set, signed by
 // the station that built it, with that station's card inside, so it can go
 // by stick or over the air as ordinary signed plain traffic.
 //
@@ -17,6 +20,7 @@
 //   BY NCS-A
 //   MADE 202611240000Z
 //   SIGNER NCS-A K7QM 2XRD 9FTA HW3C
+//   FOR STA-B             (optional) the member this copy was made for
 //   STEP 1 ...
 //   BOOK STA-B            a book entry, then its fields
 //   KIND STATION
@@ -31,6 +35,9 @@
 //   START 1900
 //   ...
 //   LINK STA-D PLAIN      how a station is reached
+//   PNA SEALED PLAN 1    (only with FOR: the frequencies, sealed to that member)
+//   ...
+//   END
 //   (the signer's card)
 //   SIG ...
 //   SIG ...
@@ -60,6 +67,11 @@ struct Bundle {
     std::vector<NetSchedule> schedules;
     std::vector<std::pair<std::string, std::string>> links;  // station, "pna1" or "plain"
     std::string tag;        // 8 characters from SHA-256 of the signed text: names its parts on the air
+    std::string for_station;   // the member this copy was made for, or ""
+    std::string sealed_freqs;  // the sealed frequency block, or ""
+    // Filled by collect() and used by format() to seal; never formatted in
+    // the clear. Designator and frequency in Hz.
+    std::vector<std::pair<std::string, int64_t>> freqs;
 };
 
 // What this station holds now, as a bundle (book, channel designators,
@@ -69,8 +81,11 @@ struct Bundle {
 Bundle collect(Ops& ops, const std::vector<std::pair<std::string, std::string>>& links, const std::string& label,
                std::vector<std::string>* changed);
 
-// The signed text. Fields are already radio-safe after collect().
-std::string format(const Bundle& b, const station::Identity& signer);
+// The signed text. Fields are already radio-safe after collect(). With
+// `to`, the copy is for that station: b.freqs go sealed to its card. With
+// b.for_station set and no `to` (no card held), the copy has no frequencies
+// and its steps say to send the card.
+std::string format(const Bundle& b, const station::Identity& signer, const station::Card* to = nullptr);
 
 // Finds a bundle in the text, checks its layout, the signer's card and the
 // signature against that card. False with *error.
@@ -99,6 +114,23 @@ struct Applied {
     std::vector<std::string> problems;
 };
 Applied apply(const Bundle& b, Ops& ops, const std::string& source);
+
+// The frequencies sealed in b for `me`, checked against the signer's card in
+// the bundle. False with *error (sealed to another station, damaged).
+bool open_freqs(const Bundle& b, const station::Identity& me, std::vector<std::pair<std::string, int64_t>>& out,
+                std::string* error);
+
+// Puts opened frequencies into the plan. A designator the plan lacks is
+// added (with the bundle's mode and use). One the plan already has with
+// another frequency is changed only when may_change (the signer's card is
+// checked here); otherwise it is kept and counted. No frequency appears in
+// what this returns.
+struct FreqApplied {
+    int added = 0, changed = 0, same = 0, kept = 0;
+    std::vector<std::string> problems;
+};
+FreqApplied apply_freqs(const Bundle& b, const std::vector<std::pair<std::string, int64_t>>& freqs, ChannelPlan& plan,
+                        bool may_change, const std::string& source);
 
 // Radio-safe text: capitals, A-Z 0-9 space and - ? : ( ) . , /, spaces made one.
 std::string radio_text(const std::string& s);

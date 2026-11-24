@@ -17,6 +17,7 @@ namespace {
 const char* kHead = "PNA STARTUP BUNDLE 1";
 const char* kEnd = "END BUNDLE";
 const char* kPartHead = "PNA BUNDLE PART";
+const char* kFreqHead = "PNA SEALED PLAN 1";
 constexpr size_t kLine = 69;  // ACP 127's line
 
 bool fail(std::string* error, const std::string& why) {
@@ -192,7 +193,8 @@ Bundle collect(Ops& ops, const std::vector<std::pair<std::string, std::string>>&
         o.name = c.name;
         o.mode = radio_text(c.mode);
         o.use = prose("channel " + c.name + " use", c.use);
-        b.channels.push_back(o);  // hz stays 0: frequencies never leave the plan
+        b.channels.push_back(o);  // hz stays 0: in the clear, a channel goes by designator only
+        if (c.hz > 0) b.freqs.emplace_back(c.name, c.hz);  // sealed per member, never in the clear
     }
     for (auto& s : ops.sched_list()) {
         if (!name_ok("schedule", s.name)) continue;
@@ -216,19 +218,37 @@ Bundle collect(Ops& ops, const std::vector<std::pair<std::string, std::string>>&
     return b;
 }
 
-std::string format(const Bundle& b, const station::Identity& signer) {
+std::string format(const Bundle& b, const station::Identity& signer, const station::Card* to) {
     station::Card card = station::card_of(signer);
+    std::string for_station = to ? to->station : b.for_station;
+    std::string sealed;
+    if (to && !b.freqs.empty()) {
+        std::string plain;
+        for (auto& f : b.freqs) plain += f.first + " " + std::to_string(f.second) + "\n";
+        std::string err;
+        if (!station::seal_block(kFreqHead, {}, plain, signer, *to, sealed, &err)) sealed.clear();
+        crypto::wipe(plain);
+    }
     std::vector<std::string> L = {kHead};
     if (!b.label.empty()) L.push_back("LABEL " + b.label.substr(0, kLine - 6));
     L.push_back("BY " + signer.station);
     L.push_back("MADE " + keys::time_text(b.made));
     L.push_back("SIGNER " + signer.station + " " + station::fingerprint(card));
-    for (auto* s : {"STEP 1 CHECK THE SIGNER FINGERPRINT ABOVE BY VOICE OR IN PERSON.",
-                    "STEP 2 LOAD THIS BUNDLE ON YOUR APPLIANCE (BUNDLE LOAD).",
-                    "STEP 3 LOADING IT CHANGES NO CARD, KEY OR KEYMASTER.",
-                    "STEP 4 CHANNELS ARE NAMED BY DESIGNATOR ONLY. LOAD YOUR",
-                    "STEP 5 FREQUENCY CARD FOR ANY CHANNEL YOUR BOX DOES NOT HOLD."})
-        L.push_back(radio_text(s));
+    if (!for_station.empty()) L.push_back("FOR " + for_station);
+    std::vector<std::string> steps = {"STEP 1 CHECK THE SIGNER FINGERPRINT ABOVE BY VOICE OR IN PERSON.",
+                                      "STEP 2 LOAD THIS BUNDLE ON YOUR APPLIANCE (BUNDLE LOAD).",
+                                      "STEP 3 LOADING IT CHANGES NO CARD, KEY OR KEYMASTER."};
+    if (!sealed.empty()) {
+        steps.push_back("STEP 4 THE FREQUENCIES ARE SEALED BELOW TO " + for_station + ".");
+        steps.push_back("STEP 5 THEY OPEN ONLY ON THE BOX OF " + for_station + ".");
+    } else if (!for_station.empty() && !to) {
+        steps.push_back("STEP 4 NO FREQUENCIES: SEND YOUR CARD TO " + signer.station + " (CARD SEND) AND");
+        steps.push_back("STEP 5 CHECK IT BY VOICE, FOR A BUNDLE WITH THEM SEALED TO YOU.");
+    } else {
+        steps.push_back("STEP 4 CHANNELS ARE NAMED BY DESIGNATOR ONLY. LOAD YOUR");
+        steps.push_back("STEP 5 FREQUENCY CARD FOR ANY CHANNEL YOUR BOX DOES NOT HOLD.");
+    }
+    for (auto& s : steps) L.push_back(radio_text(s).substr(0, kLine));
     for (auto& e : b.book) {
         L.push_back("BOOK " + e.name);
         L.push_back(std::string("KIND ") + (e.kind == "collective" ? "COLLECTIVE" : "STATION"));
@@ -256,6 +276,8 @@ std::string format(const Bundle& b, const station::Identity& signer) {
         if (!s.note.empty()) text_lines(L, "NOTE", s.note);
     }
     for (auto& l : b.links) L.push_back("LINK " + l.first + " " + upper(l.second));
+    for (auto& l : lines_of(sealed))
+        if (!simplified(l).empty()) L.push_back(simplified(l));
     for (auto& l : lines_of(station::format_card(signer)))
         if (!simplified(l).empty()) L.push_back(simplified(l));
     std::string sig = upper(crypto::to_hex(crypto::ed25519_sign(signer.sign_priv, signed_text(L))));
@@ -312,6 +334,18 @@ bool parse(const std::string& text, Bundle& out, std::string* error) {
     std::string v;
     for (size_t i = 1; i < card_at; ++i) {
         const std::string& l = body[i];
+        if (l == kFreqHead) {
+            if (!out.sealed_freqs.empty()) return fail(error, "the bundle carries two sealed frequency blocks");
+            size_t j = i;
+            for (; j < card_at; ++j) {
+                out.sealed_freqs += body[j] + "\n";
+                if (body[j] == "END") break;
+            }
+            if (j == card_at) return fail(error, "the bundle's sealed frequencies are cut off");
+            i = j;
+            cur = NONE;
+            continue;
+        }
         if (field(l, "BOOK", v)) {
             BookEntry e;
             e.name = v;
@@ -340,6 +374,7 @@ bool parse(const std::string& text, Bundle& out, std::string* error) {
             if (field(l, "LABEL", v)) out.label = v;
             else if (field(l, "BY", v)) out.by = v;
             else if (field(l, "MADE", v)) keys::parse_time(v, out.made);
+            else if (field(l, "FOR", v)) out.for_station = v;
             else if (field(l, "SIGNER", v)) {
                 if (v.compare(0, out.by.size() + 1, out.by + " ") != 0 || v.substr(out.by.size() + 1) != out.signer_fp)
                     return fail(error, "the bundle's SIGNER line doesn't match the card inside it");
@@ -379,7 +414,74 @@ bool parse(const std::string& text, Bundle& out, std::string* error) {
     if (!crypto::ed25519_verify(card.sign_pub, signed_text(body), sig))
         return fail(error, "the bundle's signature does not check against " + out.by +
                                "'s card in it: it was changed or damaged");
+    if (!out.sealed_freqs.empty()) {
+        std::string to, from, w;
+        for (auto& l : lines_of(out.sealed_freqs)) {
+            if (field(l, "TO", w) && to.empty()) to = w;
+            else if (field(l, "FROM", w) && from.empty()) from = w;
+        }
+        if (to != out.for_station || from != out.by)
+            return fail(error, "the bundle's sealed frequencies aren't for its FOR station, or not from its signer");
+    }
     return true;
+}
+
+bool open_freqs(const Bundle& b, const station::Identity& me, std::vector<std::pair<std::string, int64_t>>& out,
+                std::string* error) {
+    out.clear();
+    if (b.sealed_freqs.empty()) return fail(error, "the bundle carries no frequencies");
+    station::Card signer;
+    if (!station::parse_card(b.signer_card, signer, error)) return false;
+    std::string plain, from;
+    if (!station::open_block(kFreqHead, b.sealed_freqs, me,
+                             [&](const std::string& c) -> std::optional<station::Card> {
+                                 if (c == signer.station) return signer;
+                                 return std::nullopt;
+                             },
+                             plain, from, "sealed frequency block", error))
+        return false;
+    for (auto& l : lines_of(plain)) {
+        std::string t = simplified(l);
+        size_t sp = t.find(' ');
+        if (t.empty() || sp == std::string::npos) continue;
+        int64_t hz = std::atoll(t.c_str() + sp + 1);
+        if (hz > 0) out.emplace_back(t.substr(0, sp), hz);
+    }
+    crypto::wipe(plain);
+    return true;
+}
+
+FreqApplied apply_freqs(const Bundle& b, const std::vector<std::pair<std::string, int64_t>>& freqs, ChannelPlan& plan,
+                        bool may_change, const std::string& source) {
+    FreqApplied a;
+    for (auto& f : freqs) {
+        auto have = plan.get(f.first);
+        Channel n;
+        if (have) {
+            if (have->hz == f.second) {
+                ++a.same;
+                continue;
+            }
+            if (!may_change) {
+                ++a.kept;
+                continue;
+            }
+            n = *have;
+        } else {
+            n.name = f.first;
+            for (auto& c : b.channels)
+                if (c.name == f.first) {
+                    n.mode = c.mode;
+                    n.use = c.use;
+                }
+        }
+        n.hz = f.second;
+        n.source = source;
+        std::string err;
+        if (plan.put(n, &err)) ++(have ? a.changed : a.added);
+        else a.problems.push_back(err);
+    }
+    return a;
 }
 
 std::vector<std::string> split(const std::string& bundle_text, size_t max_body) {

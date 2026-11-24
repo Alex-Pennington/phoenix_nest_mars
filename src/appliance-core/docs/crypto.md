@@ -251,8 +251,9 @@ the first net opens in the second.
 ## Startup bundles
 
 A startup bundle carries what a box needs to work a net, so a member doesn't
-type it in: the station book, the channel plan by designator, the net
-schedules and how each station is reached (plain or PNA1). Any box can build
+type it in: the station book, the channel plan, the net schedules and how
+each station is reached (plain or PNA1). Channels go by designator in the
+clear; their frequencies go only sealed to one member's card. Any box can build
 one from what it holds, whether that came from `import` (leadership's roster,
 frequency card and schedule) or was typed in.
 
@@ -261,6 +262,7 @@ frequency card and schedule) or was typed in.
     BY NCS-A
     MADE 202611240000Z
     SIGNER NCS-A K7QM 2XRD 9FTA HW3C
+    FOR STA-B
     STEP 1 CHECK THE SIGNER FINGERPRINT ABOVE BY VOICE OR IN PERSON.
     ...
     BOOK STA-B
@@ -275,17 +277,32 @@ frequency card and schedule) or was typed in.
     CHAN P1
     ...
     LINK STA-D PLAIN
+    PNA SEALED PLAN 1      (in a member's own copy: the frequencies,
+    TO STA-B                sealed to that member's card)
+    FROM NCS-A
+    ...
+    END
     (the signer's card)
     SIG ...
     SIG ...
     END BUNDLE
 
-- **Make:** `bundle make FILE --label "PRACTICE REGION"` (`bundle_make`)
-  writes it for a stick. The station signs it with its own key; its card is
-  inside.
-- **Send:** `bundle send STA-B,STA-C` (`bundle_send`) sends it over the air as
-  ordinary signed plain traffic, in parts of up to 6000 bytes when it is
-  large (`PNA BUNDLE PART 2 OF 3 TAG 4HNPQ2XR`).
+- **Make:** `bundle make FILE --label "PRACTICE REGION" --for STA-B`
+  (`bundle_make`) writes STA-B's copy for a stick. The station signs it with
+  its own key; its card is inside. Without `--for` the copy is for anyone and
+  carries no frequencies.
+- **Send:** `bundle send STA-B,STA-C` (`bundle_send`) sends each station its
+  own copy over the air as ordinary signed plain traffic, in parts of up to
+  6000 bytes when it is large (`PNA BUNDLE PART 2 OF 3 TAG 4HNPQ2XR`).
+- **Frequencies, sealed to each member.** A member's copy carries every
+  frequency in the plan, sealed to that member's card with our own sealing
+  (X25519, HKDF-SHA256, AES-256-GCM, signed: the same construction as a
+  sealed tape, under its own head so one can't be opened as the other). It
+  opens only on that member's box. The keymaster seals only to a card it has
+  checked by voice. A member whose card isn't held, or isn't checked yet, gets
+  a copy with no frequencies, and its steps say to send the card and check it
+  by voice. The reply says which (`frequencies`: `sealed`, `no_card`,
+  `card_not_checked`, `none_held`).
 - **Load:** `bundle load FILE|ID` (`bundle_load`). From a message id, the box
   gathers every part with the same tag and says which are missing. A bundle
   that was changed on the way is refused, even with a yes.
@@ -298,11 +315,15 @@ frequency card and schedule) or was typed in.
 - **Nothing is removed.** Entries are added or replaced by name. A schedule
   that is already the same is counted as same, and one that changed keeps the
   sitting this box last opened.
-- **No frequencies.** Channels travel by designator only, and free text that
-  looks like a frequency is left out when the bundle is made (the reply lists
-  what was left out). A designator the box doesn't hold comes back in
-  `need_frequency`: load the frequency card for it. Personal columns in a
-  roster (names, email, phone) never reach the book, so never reach a bundle.
+- **No frequency in the clear.** Free text that looks like a frequency is left
+  out when the bundle is made (the reply lists what was left out), and no
+  reply or log line shows one. Loading a member's own copy fills the plan:
+  channels the box lacks are added; a channel the box holds on another
+  frequency is changed only when the signer's card is checked here, and kept
+  otherwise. A copy sealed to someone else opens nothing. A designator the
+  box still has no frequency for comes back in `need_frequency`. Personal
+  columns in a roster (names, email, phone) never reach the book, so never
+  reach a bundle.
 - Everything is in the radio's character set, lines of 69 or fewer.
 
 A bundle is separate from a handout: the handout carries keys and the
@@ -411,7 +432,11 @@ never updated once sealed. `test_groundzero` runs two drills.
   net schedule, makes a bundle, sends it to STA-B over the air and gives it to
   STA-C on a stick. STA-B's box waits until STA-B checks NCS-A's card by
   voice, then loads it; STA-C loads it on its own yes, and it stays marked so.
-  Neither box gains a card, key or keymaster from it. Then NCS-A hands out
+  Neither box gains a card, key or keymaster from it. Copies made per member
+  carry the frequencies sealed: STA-B's opens only on STA-B's box and fills its
+  plan; a member with no checked card gets none and a step to send it; a
+  member who hasn't checked the signer keeps its own frequency for a channel
+  until it does. Then NCS-A hands out
   tapes: STA-B refuses at first (no tape taken, signed plain traffic still
   works), then accepts after a second voice check; STA-C accepts in person.
 - **The stale box.** STA-B's box is sealed with OLD-K as keymaster, a 31-day
@@ -448,8 +473,8 @@ new card. The voice check catches anyone pretending to be the station.
   traffic can be read. Short periods limit the damage.
 - **Sealed tapes over the air** must fit one message (8192 bytes): about two
   weeks of 24-hour keys. A longer tape goes on a handout or a stick.
-- **Frequencies don't travel in a bundle.** Each member needs its own
-  frequency card on the box for the designators the bundle names.
+- **Sealed frequencies follow the card.** A member who makes new station keys
+  needs a new copy of the bundle, sealed to the new card.
 - **The keymaster box** holds every tape it made. Keep it offline when it
   isn't making tapes.
 

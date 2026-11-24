@@ -471,18 +471,27 @@ keymasters). These are the calls a panel needs to put that choice to them.
 ### Startup bundles
 
 The station book, channel designators, net schedules and link formats, signed
-by the station that made them (docs/crypto.md, Startup bundles). A bundle
-never carries a frequency and never changes a card, key or keymaster.
+by the station that made them (docs/crypto.md, Startup bundles). A member's
+own copy carries the frequencies sealed to that member's card; no frequency
+is ever in the clear, in a reply or in the log. A bundle never changes a
+card, key or keymaster.
 
-- `bundle_make {label, out}`: builds this box's bundle. `out` is a file path
-  to write it to (a stick). Returns `tag`, `by`, `fingerprint`, `made`,
-  `book`, `channels`, `schedules`, `links` (counts), `bytes`, `parts` (on the
-  air), `text`, `written` when `out` was given, and `changed`: what was cut or
-  left out (characters the radio can't send, frequency-like text).
-- `bundle_send {to, label, text | file}`: sends a bundle (this box's, or the
-  one given) to each station in `to` (calls, spaces or commas) as signed plain
-  traffic, in parts when it is large. Returns `tag`, `by`, `parts`, `sent`
-  (each `station` and `ids`) and `failed`.
+- `bundle_make {label, out, for}`: builds this box's bundle. `out` is a file
+  path to write it to (a stick). `for` makes that member's copy, with the
+  frequencies sealed to its card when the card is held and checked here.
+  Returns `tag`, `by`, `fingerprint`, `made`, `book`, `channels`,
+  `schedules`, `links` (counts), `bytes`, `parts` (on the air), `for`,
+  `frequencies` (`sealed`, `no_card`, `card_not_checked`, `none_held`, or
+  `not_sealed` with no `for`), `frequencies_sealed` (count), `text`,
+  `written` when `out` was given, `next` when the copy has no frequencies,
+  and `changed`: what was cut or left out (characters the radio can't send,
+  frequency-like text).
+- `bundle_send {to, label, text | file}`: sends a bundle to each station in
+  `to` (calls, spaces or commas) as signed plain traffic, in parts when it
+  is large. With `text` or `file` it sends that bundle as it is; otherwise
+  each station gets its own copy, as `bundle_make for=`. Returns `by`,
+  `parts` (total), `sent` (each `station`, `tag`, `parts`, `frequencies`,
+  `ids`), `tag` when one bundle was given, and `failed`.
 - `bundle_load {text | file | id, accept}`: loads a bundle. From `id`, every
   stored part with the same tag is gathered; with parts missing it returns
   `loaded` false and `missing_parts`. Always returns `tag`, `by`,
@@ -493,8 +502,13 @@ never carries a frequency and never changes a card, key or keymaster.
   put to the member, and changes nothing. Loaded, it returns `loaded` true,
   `signer_checked`, `book_added`, `book_replaced`, `book_same`,
   `schedules_added`, `schedules_replaced`, `schedules_same`,
-  `channels_updated`, `links_set`, `need_frequency` (designators this box
-  has no frequency for), `problems` and `next`. A bundle that was changed is
+  `channels_updated`, `links_set`, `for`, `frequencies` (`opened`,
+  `sealed_to_other`, `not_opened`, `none_for_you` for a copy made for this
+  station without them, or `none`), `frequencies_added`,
+  `frequencies_changed`, `frequencies_same`, `frequencies_kept` (held here
+  on another frequency and kept, because the signer isn't checked),
+  `need_frequency` (designators this box still has no frequency for),
+  `problems` and `next`. A bundle that was changed is
   an error.
 
 ### Keymaster

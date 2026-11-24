@@ -21,9 +21,11 @@
 //                                 the member's own choice, after reading the fingerprint back by voice
 //                                 (or in person); handouts waiting on it then load
 //   appliance-cli [--port 4100] keymaster refuse CALL   its tapes are not taken; its waiting handouts dropped
-//   appliance-cli [--port 4100] bundle make [FILE] [--label "NET"]   this box's startup bundle (book, channel
-//                                 designators, schedules, message settings), signed; to FILE for a stick
-//   appliance-cli [--port 4100] bundle send CALL[,CALL...] [FILE]   over the air as signed plain traffic
+//   appliance-cli [--port 4100] bundle make [FILE] [--label "NET"] [--for CALL]   this box's startup bundle
+//                                 (book, channel designators, schedules, message settings), signed; to FILE
+//                                 for a stick. --for: that member's copy, frequencies sealed to its card
+//   appliance-cli [--port 4100] bundle send CALL[,CALL...] [FILE]   over the air as signed plain traffic;
+//                                 each station gets its own copy, frequencies sealed to its card
 //   appliance-cli [--port 4100] bundle load FILE|ID [--yes]   load one; --yes for a signer whose card
 //                                 this box hasn't checked (it is marked so)
 //   appliance-cli [--port 4100] cipher           the cipher in the slot (docs/cipher-slot.md)
@@ -85,7 +87,7 @@ int main(int argc, char** argv) {
                      "                    | cards check CALL FINGERPRINT [--keymaster] | cards keymaster CALL [--off]\n"
                      "                    | handout import FILE|FOLDER|ID [--replace] | rally\n"
                      "                    | keymaster list | keymaster accept CALL FINGERPRINT [--in-person]\n"
-                     "                    | keymaster refuse CALL | bundle make [FILE] [--label NET]\n"
+                     "                    | keymaster refuse CALL | bundle make [FILE] [--label NET] [--for CALL]\n"
                      "                    | bundle send CALL[,CALL...] [FILE] | bundle load FILE|ID [--yes]\n"
                      "                    | cipher | cipher install FOLDER | cipher remove\n"
                      "                    | import FILE [--kind roster|book|freq|schedule] | channels\n";
@@ -255,12 +257,13 @@ int main(int argc, char** argv) {
         std::string sub = i < argc ? argv[i++] : "";
         w = JsonWriter();
         std::error_code ec;
-        std::string file, label, to;
+        std::string file, label, to, member;
         bool yes = false;
         if (sub == "send" && i < argc) to = argv[i++];
         for (; i < argc; ++i) {
             std::string a = argv[i];
             if (a == "--label" && i + 1 < argc) label = argv[++i];
+            else if (a == "--for" && i + 1 < argc) member = argv[++i];
             else if (a == "--yes") yes = true;
             else if (file.empty()) file = a;
         }
@@ -268,6 +271,7 @@ int main(int argc, char** argv) {
             w.begin_object().field("cmd", "bundle_make");
             if (!label.empty()) w.field("label", label);
             if (!file.empty()) w.field("out", std::filesystem::absolute(file, ec).string());
+            if (!member.empty()) w.field("for", member);
         } else if (sub == "send" && !to.empty()) {
             w.begin_object().field("cmd", "bundle_send").field("to", to);
             if (!label.empty()) w.field("label", label);
@@ -278,7 +282,7 @@ int main(int argc, char** argv) {
             else w.field("id", file);
             if (yes) w.field("accept", "Y");
         } else {
-            std::cerr << "bundle make [FILE] [--label NET] | bundle send CALL[,CALL...] [FILE] | bundle load FILE|ID [--yes]\n";
+            std::cerr << "bundle make [FILE] [--label NET] [--for CALL] | bundle send CALL[,CALL...] [FILE] | bundle load FILE|ID [--yes]\n";
             return 2;
         }
     } else if (cmd == "cipher") {

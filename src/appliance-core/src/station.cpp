@@ -451,21 +451,25 @@ SigCheck check_signature(const std::string& message,
 
 // ---- sealed key tapes
 
-bool seal_tape(const std::string& tape_text, const std::string& net, const std::string& tape_id, const Identity& from,
-               const Card& to, std::string& out, std::string* error) {
+// A block sealed to one station's card: the plain header lines (head, TO,
+// FROM, the extra lines, EPH) are bound to the cipher text and signed by the
+// sender. Key tapes and a bundle's frequencies use it under their own heads.
+bool seal_block(const std::string& head, const std::vector<std::string>& extra, const std::string& plain_text,
+                const Identity& from, const Card& to, std::string& out, std::string* error) {
     std::string eph_priv, eph_pub;
     if (!crypto::x25519_keygen(eph_priv, eph_pub)) return fail(error, "making the one-time key failed");
     std::string shared = crypto::x25519(eph_priv, to.seal_pub);
     crypto::wipe(eph_priv);
     if (shared.empty()) return fail(error, "the station's card has a bad sealing key");
-    std::string info = "PNA SEALED TAPE 1|" + to.station + "|" + from.station;
+    std::string info = head + "|" + to.station + "|" + from.station;
     std::string key = crypto::hkdf_sha256(shared, eph_pub + to.seal_pub, info, 32);
     crypto::wipe(shared);
-    std::vector<std::string> b = {"PNA SEALED TAPE 1", "TO " + to.station, "FROM " + from.station, "NET " + net,
-                                  "TAPE " + tape_id, "EPH " + HEX(eph_pub)};
+    std::vector<std::string> b = {head, "TO " + to.station, "FROM " + from.station};
+    for (auto& e : extra) b.push_back(e);
+    b.push_back("EPH " + HEX(eph_pub));
     std::string aad;
     for (auto& l : b) aad += l + "\n";
-    std::string plain = tape_text + static_cast<char>(0x80);
+    std::string plain = plain_text + static_cast<char>(0x80);
     while ((12 + plain.size() + 16) % 5) plain += '\0';
     std::string nonce = crypto::random_bytes(12);
     std::string sealed = crypto::aes256gcm_seal(key, nonce, aad, plain);
@@ -492,31 +496,33 @@ bool seal_tape(const std::string& tape_text, const std::string& net, const std::
     return true;
 }
 
-bool sealed_head(const std::string& text, SealedHead& out) {
-    auto b = block(text, "PNA SEALED TAPE 1");
-    if (b.empty()) return false;
-    out = SealedHead{get(b, "TO"), get(b, "FROM"), get(b, "NET"), get(b, "TAPE")};
-    return !out.to.empty() && !out.from.empty();
-}
-
-bool open_tape(const std::string& text, const Identity& me,
-               const std::function<std::optional<Card>(const std::string&)>& card_for, std::string& tape_text,
-               SealedHead& head, std::string* error) {
-    tape_text.clear();
-    auto b = block(text, "PNA SEALED TAPE 1");
-    if (b.empty() || !sealed_head(text, head)) return fail(error, "no sealed key tape in the text");
-    if (head.to != me.station) return fail(error, "this tape is sealed to " + head.to + ", not to this station");
-    auto from = card_for ? card_for(head.from) : std::nullopt;
+bool open_block(const std::string& head, const std::string& text, const Identity& me,
+                const std::function<std::optional<Card>(const std::string&)>& card_for, std::string& plain_text,
+                std::string& from_station, const std::string& what, std::string* error) {
+    plain_text.clear();
+    auto b = block(text, head.c_str());
+    if (b.empty()) return fail(error, "no " + what + " in the text");
+    std::string to = get(b, "TO");
+    from_station = get(b, "FROM");
+    if (to.empty() || from_station.empty()) return fail(error, "the " + what + " is damaged");
+    if (to != me.station) return fail(error, "this " + what + " is sealed to " + to + ", not to this station");
+    auto from = card_for ? card_for(from_station) : std::nullopt;
     if (!from)
-        return fail(error, "the tape is signed by " + head.from +
+        return fail(error, "the " + what + " is signed by " + from_station +
                                ", whose station card this station doesn't hold: import that card first");
     std::string sig;
     if (!unhex(all(b, "SIG"), 64, sig) || !crypto::ed25519_verify(from->sign_pub, sealed_signed_text(b), sig))
-        return fail(error, "the tape's signature does not check against " + head.from +
+        return fail(error, "the " + what + "'s signature does not check against " + from_station +
                                "'s card: it was changed, damaged, or not sent by that station");
     std::string eph;
-    if (!unhex(get(b, "EPH"), 32, eph)) return fail(error, "the tape is damaged");
-    // The groups: the lines after GR, up to the signature.
+    if (!unhex(get(b, "EPH"), 32, eph)) return fail(error, "the " + what + " is damaged");
+    // The plain header (bound to the cipher text) runs to the EPH line; the
+    // groups are the lines after GR, up to the signature.
+    std::string aad;
+    for (auto& l : b) {
+        aad += l + "\n";
+        if (starts(l, "EPH ")) break;
+    }
     std::vector<std::string> groups;
     bool in = false;
     size_t want = 0;
@@ -530,29 +536,51 @@ bool open_tape(const std::string& text, const Identity& me,
         if (in)
             for (auto& g : words(l)) groups.push_back(g);
     }
-    if (groups.size() != want || want < 7) return fail(error, "the tape's groups are incomplete");
+    if (groups.size() != want || want < 7) return fail(error, "the " + what + "'s groups are incomplete");
     std::string air;
     if (!codress::from_groups(groups, air, error)) return false;
     std::string shared = crypto::x25519(me.seal_priv, eph);
-    if (shared.empty()) return fail(error, "the tape is damaged");
-    std::string key = crypto::hkdf_sha256(shared, eph + me.seal_pub, "PNA SEALED TAPE 1|" + head.to + "|" + head.from, 32);
+    if (shared.empty()) return fail(error, "the " + what + " is damaged");
+    std::string key = crypto::hkdf_sha256(shared, eph + me.seal_pub, head + "|" + to + "|" + from_station, 32);
     crypto::wipe(shared);
-    std::string aad;
-    for (size_t i = 0; i < 6 && i < b.size(); ++i) aad += b[i] + "\n";
     std::string plain;
     bool ok = crypto::aes256gcm_open(key, air.substr(0, 12), aad, air.substr(12), plain);
     crypto::wipe(key);
     crypto::wipe(air);
-    if (!ok) return fail(error, "the tape doesn't open with this station's key: it was sealed to another card of " + head.to);
+    if (!ok) return fail(error, "the " + what + " doesn't open with this station's key: it was sealed to another card of " + to);
     while (!plain.empty() && plain.back() == '\0') plain.pop_back();
     if (plain.empty() || static_cast<unsigned char>(plain.back()) != 0x80) {
         crypto::wipe(plain);
         return fail(error, "bad padding");
     }
     plain.pop_back();
-    tape_text = plain;
+    plain_text = plain;
     crypto::wipe(plain);
     return true;
+}
+
+bool seal_tape(const std::string& tape_text, const std::string& net, const std::string& tape_id, const Identity& from,
+               const Card& to, std::string& out, std::string* error) {
+    return seal_block("PNA SEALED TAPE 1", {"NET " + net, "TAPE " + tape_id}, tape_text, from, to, out, error);
+}
+
+bool sealed_head(const std::string& text, SealedHead& out) {
+    auto b = block(text, "PNA SEALED TAPE 1");
+    if (b.empty()) return false;
+    out = SealedHead{get(b, "TO"), get(b, "FROM"), get(b, "NET"), get(b, "TAPE")};
+    return !out.to.empty() && !out.from.empty();
+}
+
+bool open_tape(const std::string& text, const Identity& me,
+               const std::function<std::optional<Card>(const std::string&)>& card_for, std::string& tape_text,
+               SealedHead& head, std::string* error) {
+    tape_text.clear();
+    if (!sealed_head(text, head)) return fail(error, "no sealed key tape in the text");
+    std::string from;
+    std::string err;
+    if (open_block("PNA SEALED TAPE 1", text, me, card_for, tape_text, from, "tape", &err)) return true;
+    if (err == "no tape in the text") err = "no sealed key tape in the text";
+    return fail(error, err);
 }
 
 namespace {
