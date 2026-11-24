@@ -477,6 +477,8 @@ Outgoing: `queued`, `sending`, `sent`, `acked`, `failed`, and:
   itself when its station is heard.
 - `held`: the operator held it.
 - `cancelled`: the operator cancelled it.
+- `expired`: still not through `--expire-h` hours after it was filed.
+- `failed` also covers a message that waited `--link-wait` seconds for a link.
 
 Incoming: `received`, and:
 
@@ -510,3 +512,28 @@ Each gives `"ok":false` with an `error` when the message can't take that step.
 How the core talks to a station: `pna1` (the default, framed and acked) or
 `plain` (the message text alone, for an MSC station). Without `format` it
 reports. ALL can't be set.
+
+## ACP 127 handling: orderwire, raw receive log, overdue, files
+
+More in docs/cp-link.md, "ACP 127 handling".
+
+`{"cmd":"orderwire","to":"STA-B","text":"QSL QRU"}` → `{"ok":true}`: one
+line of printable text, at most 512 characters, sent as typed ahead of
+traffic. No `to` means ALL. The log says `orderwire to STA-B: QSL QRU`.
+
+`{"cmd":"rx_raw","limit":4000}` → `{"ok":true,"text":"== 2026-11-24T04:10:00Z 20 bytes\nSTA-B DE STA-C QRV\n..."}`:
+the end of today's raw receive log, non-printing bytes as dots. Empty when
+the log is off.
+
+`{"cmd":"overdue"}` → `{"ok":true,"ids":["STA-A-12"]}`: messages past their
+handling time and still queued, held or unacked.
+
+`send_file` takes the same fields as `send_acp127`, plus `file_name` (1 to
+40 bytes, no slash) and `file_b64` (the file, base64). Any `text` goes
+before the file. The reply is `send_acp127`'s.
+
+`{"cmd":"get_file","id":"STA-A-12"}` →
+`{"ok":true,"name":"net-log.txt","size":300,"file_b64":"..."}`, or an error
+saying why the file can't be read (no file, cut short, wrong size or CRC).
+
+`requeue` takes an `expired` message too.

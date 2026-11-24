@@ -26,7 +26,8 @@ const std::vector<std::string>& config_keys() {
         "db-dir",      "api-port",    "loopback-pair", "loopback-bps", "no-acks",   "max-attempts",
         "advisor",     "advisor-arg", "link-socket",   "link-poll-ms", "link-gate",
         "link",        "s5066-peers", "s5066-port",    "s5066-sap",   "s5066-ttl",  "s5066-confirm", "s5066-broadcast",
-        "appa-port",   "ack-timeout", "ack-retries",   "tx-gap"};
+        "appa-port",   "ack-timeout", "ack-retries",   "tx-gap",
+        "link-wait",   "expire-h",    "handling",      "raw-rx-log"};
     return k;
 }
 

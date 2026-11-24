@@ -229,8 +229,24 @@ apart from its cipher, which stays a closed box behind our cipher slot:
 - `link_format` set to `plain` sends an MSC station the bare text and reads
   its bare text back, several messages to a burst.
 
-docs/cp-link.md says what was taken from CP and what was left alone;
-docs/api.md has the calls. tests/test_cp_link.cpp covers it.
+- The message reaches the cipher at the point where CP hands it to its
+  library, marked CIPHER HAND-OFF in the code.
+
+Built from the public ACP 127 rules rather than CP's code:
+
+- `orderwire` sends a line of operator text as typed, ahead of traffic.
+- Every burst heard is kept as heard in `STATION.rx-raw/`, one file a day
+  (`--raw-rx-log off` stops it); `rx_raw` shows the end of today's.
+- `--link-wait S` gives up on a message after S seconds with no link.
+- A message past its precedence's handling time (`--handling`, default 10,
+  30, 180 and 360 minutes) is logged and listed by `overdue`; `--expire-h H`
+  marks it `expired` after H hours.
+- `send_file` carries a file as base32 text inside an ACP 127 message, and
+  `get_file` reads it back after a size and CRC check.
+
+docs/cp-link.md says what was taken from CP, what was left alone, and how
+the ACP 127 handling works; docs/api.md has the calls.
+tests/test_cp_link.cpp and tests/test_acp127_ops.cpp cover it.
 
 ## Reading received traffic
 

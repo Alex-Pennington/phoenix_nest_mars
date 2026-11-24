@@ -4,8 +4,13 @@
 #include "codress.h"
 #include "crypto.h"
 #include "received.h"
+#include "filemsg.h"
 
 #include <cctype>
+#include <ctime>
+#include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <regex>
 #include <sstream>
 
@@ -370,6 +375,8 @@ void Core::tick() {
     if (cfg_.ack_timeout_s > 0)
         for (auto& m : store_.overdue_acks(now_utc()))
             no_ack(m, "no ack from " + m.dst + " after " + std::to_string(cfg_.ack_timeout_s) + " s");
+    // Handling times, expiry.
+    age_queue();
     // Bare text that stopped part-way is taken as it stands.
     if (!loose_.empty() &&
         std::chrono::steady_clock::now() - last_loose_ >= std::chrono::seconds(cfg_.loose_quiet_s))
@@ -386,8 +393,10 @@ void Core::tick() {
             acks_.pop_front();
             on_air_ = a.f;
             on_air_plain_ = !a.raw.empty();
-            log(a.f.id, (a.raw.empty() ? "sending ack to " : "sending " + a.raw.substr(0, a.raw.find('|')) + " to ") +
-                            a.f.dst);
+            if (a.orderwire) log("", "orderwire to " + a.f.dst + ": " + a.raw);
+            else
+                log(a.f.id, (a.raw.empty() ? "sending ack to " : "sending " + a.raw.substr(0, a.raw.find('|')) + " to ") +
+                                a.f.dst);
         }
         return;
     }
@@ -397,14 +406,29 @@ void Core::tick() {
         next = store_.next_to_send(now_utc(), [this](const std::string& dst) {
             return !waits_for_link(dst);
         });
-        // Say once per message that it waits, and for whom.
-        for (auto& m : store_.queue(1000))
-            if (m.state == "queued" && waits_for_link(m.dst) && told_waiting_.insert(m.id).second)
-                log(m.id, "waiting for a link to " + m.dst);
+        // Say once per message that it waits, and for whom. One that has
+        // waited link_wait_s gives up.
+        auto now_s = std::chrono::steady_clock::now();
+        for (auto& m : store_.queue(1000)) {
+            if (m.state != "queued" || !waits_for_link(m.dst)) {
+                waiting_since_.erase(m.id);
+                continue;
+            }
+            auto since = waiting_since_.emplace(m.id, now_s).first->second;
+            if (told_waiting_.insert(m.id).second) log(m.id, "waiting for a link to " + m.dst);
+            if (cfg_.link_wait_s > 0 && now_s - since >= std::chrono::seconds(cfg_.link_wait_s)) {
+                std::string why = "no link to " + m.dst + " after " + std::to_string(cfg_.link_wait_s) + " s";
+                store_.set_state(m.id, "failed", why);
+                log(m.id, "gave up: " + why + "; requeue to try again");
+                waiting_since_.erase(m.id);
+                told_waiting_.erase(m.id);
+            }
+        }
     } else {
         next = store_.next_to_send(now_utc());
     }
     if (!next) return;
+    waiting_since_.erase(next->id);
     if (told_waiting_.erase(next->id)) log(next->id, "link to " + next->dst + " is up");
     Frame f;
     f.type = FrameType::Msg;
@@ -443,7 +467,8 @@ void Core::handle_tx_done(bool ok, const std::string& err) {
     last_air_ = std::chrono::steady_clock::now();
 
     if (f.type == FrameType::Ack) {
-        if (!ok) log(f.id, "ack to " + f.dst + " failed: " + err);
+        const bool ow = f.id.compare(0, 3, "OW-") == 0;
+        if (!ok) log(ow ? "" : f.id, (ow ? "orderwire to " : "ack to ") + f.dst + " failed: " + err);
         return;
     }
     if (ok) {
@@ -475,6 +500,7 @@ void Core::handle_tx_done(bool ok, const std::string& err) {
 }
 
 void Core::handle_rx(const std::string& bytes) {
+    raw_rx(bytes);
     std::lock_guard<std::mutex> g(mu_);
     if (!bytes.empty()) last_air_ = std::chrono::steady_clock::now();
     auto frames = parser_.feed(bytes);
@@ -534,6 +560,7 @@ void Core::handle_rx(const std::string& bytes) {
             log(f.id, std::string("received ") + prec_name(f.prec) + " from " + f.src +
                           (to_all ? " to all stations" : ""));
             read_codress(f.id, f.body);
+            note_file(f.id, f.body);
             // Station keys that came over the air wait for the operator.
             station::SealedHead sh;
             if (f.body.find("PNA STATION CARD 1") != std::string::npos)
@@ -615,8 +642,12 @@ bool Core::requeue(const std::string& id, std::string* error) {
     std::lock_guard<std::mutex> g(mu_);
     auto m = store_.get(id);
     if (!m || m->direction != "out") return refuse(error, "no message " + id + " of ours");
-    if (m->state != "failed" && m->state != "unacked" && m->state != "cancelled" && m->state != "held")
-        return refuse(error, id + " is " + m->state + "; only failed, unacked, cancelled or held traffic can be requeued");
+    if (m->state != "failed" && m->state != "unacked" && m->state != "cancelled" && m->state != "held" &&
+        m->state != "expired")
+        return refuse(error, id + " is " + m->state +
+                                 "; only failed, unacked, cancelled, expired or held traffic can be requeued");
+    overdue_.erase(id);
+    if (m->state == "expired") no_expire_.insert(id);
     store_.requeue(id, false);
     log(id, "put back in the queue by the operator (was " + m->state + ")");
     return true;
@@ -685,6 +716,7 @@ void Core::store_in(const std::string& id, const std::string& src, const std::st
     m.created_at = m.updated_at = now_utc();
     store_.insert(m);
     log(id, what);
+    if (state == "received") note_file(id, body);
 }
 
 namespace {
@@ -902,6 +934,103 @@ void Core::plain_unit(const std::string& raw, bool complete) {
                  (src.empty() ? std::string("UNKNOWN") : src));
     if (mine) read_codress(id, u);
     if (!src.empty()) heard(src);
+}
+
+// ---- ACP 127 handling: orderwire, handling times, expiry, raw receive log, files ----
+
+bool Core::orderwire(const std::string& to, const std::string& text, std::string* error) {
+    std::string dst = to.empty() ? std::string(kBroadcast) : to;
+    if (!is_broadcast(dst) && !valid_station(dst)) return refuse(error, "station must be 1-16 characters of A-Z, 0-9 or '-'");
+    if (text.empty()) return refuse(error, "orderwire is empty");
+    if (text.size() > 512) return refuse(error, "orderwire is longer than 512 characters; send a message instead");
+    for (char c : text)
+        if (c == '\r' || c == '\n' || static_cast<unsigned char>(c) < 0x20 || static_cast<unsigned char>(c) > 0x7E)
+            return refuse(error, "orderwire is one line of printable text");
+    std::lock_guard<std::mutex> g(mu_);
+    Answer a;
+    a.f.type = FrameType::Ack;
+    a.f.id = "OW-" + std::to_string(++orderwire_seq_);
+    a.f.src = cfg_.station;
+    a.f.dst = dst;
+    a.f.prec = 'Z';
+    a.raw = text;
+    a.orderwire = true;
+    acks_.push_back(a);
+    log("", "orderwire to " + dst + " queued" + (emcon_ ? " (EMCON is on: it waits)" : ""));
+    return true;
+}
+
+// Caller holds mu_.
+void Core::age_queue() {
+    int64_t now = now_utc();
+    for (auto& m : store_.unfinished(1000)) {
+        int64_t age = now - m.created_at;
+        if (cfg_.expire_h > 0 && age >= int64_t(cfg_.expire_h) * 3600 && !no_expire_.count(m.id)) {
+            std::string was = m.state;
+            store_.set_state(m.id, "expired", "not through " + std::to_string(cfg_.expire_h) + " h after it was filed");
+            overdue_.erase(m.id);
+            log(m.id, "expired: still " + was + " " + std::to_string(cfg_.expire_h) +
+                          " h after it was filed; requeue to send it again");
+            continue;
+        }
+        int r = prec_rank(m.prec);
+        int lim = (r >= 0 && r < 4) ? cfg_.handling_min[r] : 0;
+        if (lim > 0 && age >= int64_t(lim) * 60 && overdue_.insert(m.id).second)
+            log(m.id, std::string("past the handling time for ") + prec_name(m.prec) + " (" + std::to_string(lim) +
+                          " min) and still " + m.state);
+    }
+}
+
+std::vector<std::string> Core::overdue() {
+    std::lock_guard<std::mutex> g(mu_);
+    std::vector<std::string> out;
+    for (auto& m : store_.unfinished(1000))
+        if (overdue_.count(m.id)) out.push_back(m.id);
+    return out;
+}
+
+namespace {
+std::string utc_stamp(bool day_only) {
+    std::time_t t = std::time(nullptr);
+    std::tm u{};
+    gmtime_r(&t, &u);
+    char buf[32];
+    std::strftime(buf, sizeof buf, day_only ? "%Y-%m-%d" : "%Y-%m-%dT%H:%M:%SZ", &u);
+    return buf;
+}
+}  // namespace
+
+void Core::raw_rx(const std::string& bytes) {
+    if (cfg_.raw_rx_dir.empty() || bytes.empty()) return;
+    std::lock_guard<std::mutex> g(raw_mu_);
+    std::error_code ec;
+    std::filesystem::create_directories(cfg_.raw_rx_dir, ec);
+    std::ofstream f(cfg_.raw_rx_dir + "/" + utc_stamp(true) + ".log", std::ios::app | std::ios::binary);
+    if (!f) return;
+    f << "== " << utc_stamp(false) << " " << bytes.size() << " bytes\n" << bytes << "\n";
+}
+
+std::string Core::raw_rx_tail(size_t max) {
+    if (cfg_.raw_rx_dir.empty()) return "";
+    std::lock_guard<std::mutex> g(raw_mu_);
+    std::ifstream f(cfg_.raw_rx_dir + "/" + utc_stamp(true) + ".log", std::ios::binary);
+    if (!f) return "";
+    std::string all((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+    if (all.size() > max) all.erase(0, all.size() - max);
+    for (auto& c : all)
+        if (c != '\n' && (static_cast<unsigned char>(c) < 0x20 || static_cast<unsigned char>(c) > 0x7E)) c = '.';
+    return all;
+}
+
+// Caller holds mu_.
+void Core::note_file(const std::string& id, const std::string& body) {
+    bool present = false;
+    filemsg::File file;
+    std::string err;
+    if (filemsg::find(body, &present, file, &err))
+        log(id, "a file came in: " + file.name + ", " + std::to_string(file.data.size()) + " bytes, CRC good");
+    else if (present)
+        log(id, "a file came in but can't be read: " + err);
 }
 
 }  // namespace pna

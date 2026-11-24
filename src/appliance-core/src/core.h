@@ -2,6 +2,8 @@
 // answers to whatever front end is attached through the local API.
 #pragma once
 
+#include <map>
+
 #include "cipher_slot.h"
 #include "frame.h"
 #include "keys.h"
@@ -46,6 +48,19 @@ struct CoreConfig {
     // Bare text with no PNA1 frame (an MSC station's traffic) that stops
     // part-way is taken as it stands after this many quiet seconds.
     int loose_quiet_s = 5;
+    // With link_gate: a message that has waited this long for a link to its
+    // station gives up and fails (requeue sends it again). 0: waits forever.
+    int link_wait_s = 0;
+    // Handling times by precedence, in minutes (FLASH, IMMEDIATE, PRIORITY,
+    // ROUTINE). A message still not sent past its time is said once in the
+    // log and shown as overdue. 0 for a precedence: no warning.
+    int handling_min[4] = {10, 30, 180, 360};
+    // A message still queued or unacked this many hours after it was filed
+    // is marked expired and not sent (requeue sends it again). 0: never.
+    int expire_h = 0;
+    // Every burst heard, as heard, goes into a day file here
+    // (YYYY-MM-DD.log). Empty: no raw receive log.
+    std::string raw_rx_dir{};
 };
 
 // How a station is reached on the air.
@@ -172,7 +187,17 @@ public:
     bool cancel(const std::string& id, std::string* error);   // not while on the air
     bool hold(const std::string& id, std::string* error);     // queued -> held
     bool release(const std::string& id, std::string* error);  // held -> queued
-    bool requeue(const std::string& id, std::string* error);  // failed, unacked, cancelled -> queued
+    bool requeue(const std::string& id, std::string* error);  // failed, unacked, cancelled, expired -> queued
+
+    // Orderwire: operator-to-operator text, sent as typed with no frame, no
+    // serial and no ack, ahead of traffic. Not kept as a message; the log
+    // holds it. Held by EMCON like everything else.
+    bool orderwire(const std::string& to, const std::string& text, std::string* error);
+    // The end of today's raw receive log, at most max bytes, non-printing
+    // bytes as dots. Empty when there is no raw log.
+    std::string raw_rx_tail(size_t max);
+    // Messages past their handling time and still not sent or acked.
+    std::vector<std::string> overdue();
     // How a station is reached (LinkFormat above).
     bool set_link_format(const std::string& station, const std::string& format, std::string* error);
     std::string link_format(const std::string& station);
@@ -209,6 +234,7 @@ private:
     struct Answer {
         Frame f;
         std::string raw;
+        bool orderwire = false;
     };
     std::deque<Answer> acks_;
     std::optional<Frame> on_air_;      // what the modem is sending now
@@ -230,6 +256,14 @@ private:
     std::shared_ptr<station::Identity> id_;
     std::string id_path_;
     std::set<std::string> told_waiting_;  // messages already logged as waiting for a link
+    std::map<std::string, std::chrono::steady_clock::time_point> waiting_since_;
+    std::set<std::string> overdue_;       // messages logged as past their handling time
+    std::set<std::string> no_expire_;     // expired, then requeued by the operator: not expired again
+    void age_queue();                     // caller holds mu_
+    void raw_rx(const std::string& bytes);
+    void note_file(const std::string& id, const std::string& body);
+    std::mutex raw_mu_;
+    int orderwire_seq_ = 0;
     std::string told_clock_;              // the clock source last logged
     std::chrono::steady_clock::time_point next_sched_{};  // when to look at net schedules again
 };

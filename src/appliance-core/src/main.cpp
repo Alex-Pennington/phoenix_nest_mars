@@ -14,6 +14,7 @@
 #include "ops.h"
 #include "loopback_modem.h"
 #include "s5066.h"
+#include <sstream>
 #include "s5066_client.h"
 #include "appa_modem.h"
 
@@ -89,6 +90,14 @@ void usage() {
         "  --ack-retries N       sends after the first before a message waits as unacked (default 2)\n"
         "  --tx-gap S            quiet seconds after any send or receive before keying up\n"
         "                        (default 6; 0 with --loopback-pair)\n"
+        "  --link-wait S         with --link-gate, give up on a message after S seconds\n"
+        "                        without a link; requeue sends it again (default 0: wait)\n"
+        "  --handling Z,O,P,R    minutes before an unsent message is logged as past its\n"
+        "                        handling time (default 10,30,180,360; 0 turns one off)\n"
+        "  --expire-h H          mark a message expired H hours after filing if still\n"
+        "                        queued, held or unacked (default 0: never)\n"
+        "  --raw-rx-log on|off   keep every burst heard, as heard, in STATION.rx-raw/\n"
+        "                        one file a day (default on)\n"
         "  --advisor PROG        a local program that explains compose fields and suggests\n"
         "                        wording (gets the request as one JSON argument; see\n"
         "                        docs/api.md). Without it the built-in guidance is used.\n"
@@ -108,6 +117,21 @@ std::shared_ptr<LinkMonitor> g_link;
 bool g_link_gate = false;
 int g_ack_timeout = 120, g_ack_retries = 2, g_tx_gap = 6;
 bool g_tx_gap_set = false;
+int g_link_wait = 0, g_expire_h = 0;
+int g_handling[4] = {10, 30, 180, 360};
+bool g_raw_rx = true;
+
+// "10,30,180,360": handling minutes for FLASH, IMMEDIATE, PRIORITY, ROUTINE.
+bool parse_handling(const std::string& v, int out[4]) {
+    std::istringstream in(v);
+    std::string part;
+    int n = 0;
+    while (std::getline(in, part, ',')) {
+        if (n == 4 || part.empty() || part.find_first_not_of("0123456789") != std::string::npos) return false;
+        out[n++] = std::stoi(part);
+    }
+    return n == 4;
+}
 
 bool start_station(Station& s, CoreConfig cfg, std::unique_ptr<ModemDriver> modem, uint16_t port) {
     std::string name = cfg.station;
@@ -116,6 +140,12 @@ bool start_station(Station& s, CoreConfig cfg, std::unique_ptr<ModemDriver> mode
     cfg.ack_timeout_s = g_ack_timeout;
     cfg.ack_retries = g_ack_retries;
     cfg.tx_gap_s = g_tx_gap;
+    cfg.link_wait_s = g_link_wait;
+    cfg.expire_h = g_expire_h;
+    for (int i = 0; i < 4; ++i) cfg.handling_min[i] = g_handling[i];
+    if (g_raw_rx)
+        cfg.raw_rx_dir = (db.size() > 3 && db.compare(db.size() - 3, 3, ".db") == 0 ? db.substr(0, db.size() - 3) : db) +
+                         ".rx-raw";
     s.core = std::make_unique<Core>(std::move(cfg), std::move(modem));
     // The station book (address book, nets, duty, log, reports) in the same file.
     s.core->set_ops(std::make_shared<Ops>(name, db));
@@ -242,6 +272,22 @@ int main(int argc, char** argv) {
             else if (a == "--max-attempts") max_attempts = std::stoi(next());
             else if (a == "--ack-timeout") g_ack_timeout = std::stoi(next());
             else if (a == "--ack-retries") g_ack_retries = std::stoi(next());
+            else if (a == "--link-wait") g_link_wait = std::stoi(next());
+            else if (a == "--expire-h") g_expire_h = std::stoi(next());
+            else if (a == "--handling") {
+                if (!parse_handling(next(), g_handling)) {
+                    std::cerr << "--handling: four minute counts, FLASH,IMMEDIATE,PRIORITY,ROUTINE, e.g. 10,30,180,360\n";
+                    return 2;
+                }
+            } else if (a == "--raw-rx-log") {
+                std::string v = next();
+                if (v == "on") g_raw_rx = true;
+                else if (v == "off") g_raw_rx = false;
+                else {
+                    std::cerr << "--raw-rx-log: on or off\n";
+                    return 2;
+                }
+            }
             else if (a == "--tx-gap") {
                 g_tx_gap = std::stoi(next());
                 g_tx_gap_set = true;

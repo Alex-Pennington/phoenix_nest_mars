@@ -2,6 +2,7 @@
 
 #include "api_ops.h"
 #include "cipher_slot.h"
+#include "filemsg.h"
 
 #include "acp126.h"
 #include "acp127.h"
@@ -1366,6 +1367,52 @@ std::string ApiServer::handle(Core& core, const std::string& line) {
     }
 
     if (cmd == "send_acp127") return send_acp127(core, req);
+    // A file as base32 text inside an ACP 127 message (filemsg.h).
+    if (cmd == "send_file") {
+        bool ok = false;
+        std::string data = filemsg::base64_decode_or_empty(req["file_b64"], &ok);
+        if (!ok) return error_reply("file_b64 isn't base64");
+        if (data.empty()) return error_reply("the file is empty");
+        std::string err;
+        std::string block = filemsg::encode(req["file_name"], data, &err);
+        if (block.empty()) return error_reply(err);
+        std::string lead = req["text"];
+        req["text"] = lead.empty() ? block : lead + "\n" + block;
+        return send_acp127(core, req);
+    }
+    if (cmd == "get_file") {
+        auto m = core.get(req["id"]);
+        if (!m) return error_reply("no message " + req["id"]);
+        bool present = false;
+        filemsg::File f;
+        std::string err;
+        if (!filemsg::find(m->body, &present, f, &err)) return error_reply(err);
+        JsonWriter w;
+        w.begin_object().field("ok", true).field("name", f.name).field("size", static_cast<long long>(f.data.size()))
+            .field("file_b64", filemsg::base64(f.data)).end_object();
+        return w.str();
+    }
+    if (cmd == "orderwire") {
+        std::string err;
+        if (!core.orderwire(req["to"], req["text"], &err)) return error_reply(err);
+        JsonWriter w;
+        w.begin_object().field("ok", true).end_object();
+        return w.str();
+    }
+    if (cmd == "rx_raw") {
+        size_t limit = 4000;
+        if (req.count("limit")) limit = static_cast<size_t>(std::max(1, std::min(200000, std::atoi(req["limit"].c_str()))));
+        JsonWriter w;
+        w.begin_object().field("ok", true).field("text", core.raw_rx_tail(limit)).end_object();
+        return w.str();
+    }
+    if (cmd == "overdue") {
+        JsonWriter w;
+        w.begin_object().field("ok", true).begin_array("ids");
+        for (auto& id : core.overdue()) w.field("", id);
+        w.end_array().end_object();
+        return w.str();
+    }
     if (cmd == "parse_acp127") return parse_acp127(core, req);
     if (cmd == "send_acp126") return send_acp126(core, req);
     if (cmd == "parse_traffic") return parse_traffic(core, req);
@@ -1580,7 +1627,7 @@ std::string ApiServer::handle(Core& core, const std::string& line) {
     if (auto r = handle_ops(core, cmd, req)) return *r;
 
     return error_reply(
-        "unknown cmd; use status, send, list, get, queue, log, emcon, cancel, hold, release, requeue, link_format, send_acp127, send_acp126, send_chat, parse_acp127, "
+        "unknown cmd; use status, send, list, get, queue, log, emcon, cancel, hold, release, requeue, link_format, orderwire, rx_raw, overdue, send_file, get_file, send_acp127, send_acp126, send_chat, parse_acp127, "
         "parse_traffic, compose_templates, compose_form, compose_check, compose_send, compose_advise, key_import, keys_list, key_zeroize, key_open, cipher_status, cipher_install, cipher_remove, station_card, station_backup, station_restore, card_import, cards_list, card_check, card_send, net_tape, tape_seal, or the book's calls (docs/api.md): book_*, net_*, sched_*, duty_*, log_add, station_log, report_monthly");
 }
 

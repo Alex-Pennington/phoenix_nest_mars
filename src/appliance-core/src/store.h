@@ -14,7 +14,8 @@ namespace pna {
 
 // Outgoing states: queued -> sending -> sent -> acked. Off that path:
 // failed (the modem would not send it), unacked (no ack after every try),
-// held (the operator holds it back), cancelled.
+// held (the operator holds it back), cancelled, expired (not through in
+// time, core.h expire_h).
 // Incoming states: received; overheard (traffic for another station, kept
 // as CP keeps every burst, never acked); garbled (a damaged copy, kept so
 // the operator can ask for a repeat, never acked).
@@ -68,6 +69,8 @@ public:
     // Outgoing messages not yet sent (queued or sending), in the order they
     // will go: precedence first, then age.
     std::vector<Message> queue(int limit);
+    // Outgoing messages not yet through: queued, held or unacked, oldest first.
+    std::vector<Message> unfinished(int limit);
     // Event lines with seq > after, oldest first, at most limit.
     std::vector<Event> events(int64_t after, int limit);
 

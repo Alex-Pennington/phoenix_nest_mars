@@ -67,5 +67,49 @@ and is not shaped to any other library's calls.
   Out of scope: the appliance meets other stations only over the air.
 - **Things CP does that the core does better already:** its queue order,
   its Baudot converter and its log clean-up.
-- **Not yet:** file transfer, sending raw orderwire, message expiry, a raw
-  receive log, and giving up on a link after a set wait.
+- **Built from the public ACP 127 rules, not from CP's code:** orderwire,
+  the raw receive log, giving up on a link, handling times and expiry, and
+  files. CP's own versions of these were not read, so they may differ from
+  CP in detail; see "ACP 127 handling" below.
+
+## ACP 127 handling
+
+These five came from the public ACP 127 rules and ordinary station practice,
+not from CP's source.
+
+- **Orderwire.** `orderwire` sends one line of operator text as typed, with
+  no frame, serial or ack, ahead of queued traffic, to a station or to ALL.
+  It is not kept as a message; the log keeps it. EMCON and the tx gap hold
+  it like anything else.
+- **Raw receive log.** Every burst heard goes, as heard, into a day file
+  beside the station's database (`STATION.rx-raw/YYYY-MM-DD.log`, each burst
+  under a `==` line with the UTC time and byte count). `rx_raw` shows the end
+  of today's file. That is where orderwire from another station, and
+  anything the core can't place, can be read. `--raw-rx-log off` stops it.
+- **Giving up on a link.** With `--link-gate`, a message that has waited
+  `--link-wait` seconds for a link to its station fails with "no link to
+  STATION after N s"; `requeue` tries again. Off (0) by default. The wait
+  starts again after a restart.
+- **Handling times.** A message still queued, held or unacked past its
+  precedence's handling time is said once in the log and listed by
+  `overdue`. The defaults are FLASH 10 min, IMMEDIATE 30 min, PRIORITY 3 h
+  and ROUTINE 6 h (`--handling 10,30,180,360`; 0 turns one off). Nothing is
+  dropped for being late.
+- **Expiry.** With `--expire-h H`, a message still queued, held or unacked H
+  hours after it was filed is marked `expired` and not sent. `requeue` sends
+  it again, and it is not expired a second time. Off (0) by default.
+- **Files.** ACP 127 carries text only, in A-Z, 0-9, space and
+  `- ? : ( ) . , /`, 69 characters a line. `send_file` puts a file in the
+  text of an ACP 127 message as base32 (A-Z and 2-7), which any station
+  passes as ordinary text:
+
+  ```
+  FILE SIZE 1234 CRC 1A2B3C4D
+  NAME <the file name, base32>
+  <data, base32, 64 characters a line>
+  END FILE
+  ```
+
+  The far core logs "a file came in" and `get_file` gives it back after the
+  size and CRC-32 check. A message holds 8 KB, so a file can be about 4.5 KB.
+  A station without this core sees the block as text and can pass it on.
