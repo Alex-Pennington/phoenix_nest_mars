@@ -221,7 +221,7 @@ apart from its cipher, which stays a closed box behind our cipher slot:
 - A message with no ack goes again after `--ack-timeout` seconds (120), up to
   `--ack-retries` more times (2), then waits as `unacked` and goes again when
   its station is heard.
-- It waits `--tx-gap` seconds (6) after the channel goes quiet before keying up.
+- It waits `--tx-gap` seconds (6, none with `--loopback-pair`) after the channel goes quiet before keying up. `tx-gap`, `ack-timeout` and `ack-retries` can also go in the settings file.
 - `emcon`, `hold`, `release`, `cancel` and `requeue` give the operator a hand
   on the queue.
 - Garbled copies and traffic for other stations are kept, as `garbled` and

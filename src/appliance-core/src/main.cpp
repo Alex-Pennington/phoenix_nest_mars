@@ -85,7 +85,8 @@ void usage() {
         "  --max-attempts N      modem failures before a message fails (default 3)\n"
         "  --ack-timeout S       seconds to wait for an ack before sending again; 0: never (default 120)\n"
         "  --ack-retries N       sends after the first before a message waits as unacked (default 2)\n"
-        "  --tx-gap S            quiet seconds after any send or receive before keying up (default 6)\n"
+        "  --tx-gap S            quiet seconds after any send or receive before keying up\n"
+        "                        (default 6; 0 with --loopback-pair)\n"
         "  --advisor PROG        a local program that explains compose fields and suggests\n"
         "                        wording (gets the request as one JSON argument; see\n"
         "                        docs/api.md). Without it the built-in guidance is used.\n"
@@ -104,6 +105,7 @@ struct Station {
 std::shared_ptr<LinkMonitor> g_link;
 bool g_link_gate = false;
 int g_ack_timeout = 120, g_ack_retries = 2, g_tx_gap = 6;
+bool g_tx_gap_set = false;
 
 bool start_station(Station& s, CoreConfig cfg, std::unique_ptr<ModemDriver> modem, uint16_t port) {
     std::string name = cfg.station;
@@ -238,7 +240,10 @@ int main(int argc, char** argv) {
             else if (a == "--max-attempts") max_attempts = std::stoi(next());
             else if (a == "--ack-timeout") g_ack_timeout = std::stoi(next());
             else if (a == "--ack-retries") g_ack_retries = std::stoi(next());
-            else if (a == "--tx-gap") g_tx_gap = std::stoi(next());
+            else if (a == "--tx-gap") {
+                g_tx_gap = std::stoi(next());
+                g_tx_gap_set = true;
+            }
             else if (a == "--advisor") advisor_prog = next();
             else if (a == "--advisor-arg") advisor_args.push_back(next());
             else if (a == "--link-socket") link_socket = next();
@@ -383,6 +388,9 @@ int main(int argc, char** argv) {
             auto ma = std::make_unique<LoopbackModem>(loop_bps);
             auto mb = std::make_unique<LoopbackModem>(loop_bps);
             LoopbackModem::connect(*ma, *mb);
+            // Two stations in one process have no radio to turn round: no gap
+            // unless --tx-gap asks for one.
+            if (!g_tx_gap_set) g_tx_gap = 0;
             stations.resize(2);
             CoreConfig ca{a, db_dir + "/" + a + ".db", max_attempts, 10, acks};
             CoreConfig cb{b, db_dir + "/" + b + ".db", max_attempts, 10, acks};
