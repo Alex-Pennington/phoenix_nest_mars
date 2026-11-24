@@ -70,7 +70,9 @@ void usage() {
         "  --s5066-port N        the node's SIS port on 127.0.0.1 (default 5066)\n"
         "  --s5066-sap N         SAP to bind, 0-15 (default 3, HMTP; same on every box)\n"
         "  --s5066-ttl SEC       time to live per send (default 600)\n"
-        "  --s5066-confirm WHAT  node or client delivery confirmation (default node)\n\n"
+        "  --s5066-confirm WHAT  node or client delivery confirmation (default node)\n"
+        "  --s5066-broadcast HOW each: a copy to every station in the peers file\n"
+        "                        (default); group: one copy to the all-stations address\n\n"
         "One station, straight to the modem over 110D Appendix A (no 5066 node):\n"
         "  --station NAME        this station's call\n"
         "  --link appa           be the modem's DTE on its Appendix A TCP data socket\n"
@@ -267,6 +269,14 @@ int main(int argc, char** argv) {
                 else if (v == "client") s5066.confirm = s5066::kClientConfirm;
                 else {
                     std::cerr << "--s5066-confirm: node or client\n";
+                    return 2;
+                }
+            } else if (a == "--s5066-broadcast") {
+                std::string v = next();
+                if (v == "each") s5066.broadcast_each_peer = true;
+                else if (v == "group") s5066.broadcast_each_peer = false;
+                else {
+                    std::cerr << "--s5066-broadcast: each or group\n";
                     return 2;
                 }
             }

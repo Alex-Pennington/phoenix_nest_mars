@@ -303,6 +303,11 @@ std::string unidata_rejected_text(uint8_t r) {
     }
 }
 
+std::string address_text(uint32_t a) {
+    return std::to_string((a >> 24) & 0x0F) + "." + std::to_string((a >> 16) & 0xFF) + "." +
+           std::to_string((a >> 8) & 0xFF) + "." + std::to_string(a & 0xFF);
+}
+
 bool parse_address(const std::string& text, uint32_t& out) {
     uint32_t parts[4];
     int n = 0;

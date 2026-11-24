@@ -39,6 +39,11 @@ struct S5066Config {
     uint8_t confirm = s5066::kNodeConfirm;  // or kClientConfirm
     uint32_t ttl_seconds = 600;   // per U_PDU; a send fails when it runs out
     uint8_t broadcast_retries = 2;
+    // How a message to ALL goes. Each peer: one non-ARQ copy to every station
+    // in the peers file, which any node can carry (greybeard-ale's s5066-node
+    // has no broadcast address yet). Group: one copy to the all-stations
+    // address, for a node that takes it.
+    bool broadcast_each_peer = true;
     std::string peers_file;       // CALL ADDRESS per line
     int reconnect_ms = 3000;
     int poll_ms = 100;
@@ -85,6 +90,12 @@ private:
     std::chrono::steady_clock::time_point deadline_;
     std::string pending_fail_;       // a send that failed before reaching the node
     bool pending_ok_ = false;        // a broadcast handed to the node
+    // A broadcast waits a moment for the node to refuse its copies: a non-ARQ
+    // request gets no confirm, only a refusal.
+    int bcast_copies_ = 0;
+    int bcast_refused_ = 0;
+    std::string bcast_why_;
+    std::chrono::steady_clock::time_point bcast_until_;
     std::vector<std::string> notes_; // log lines to give out without our lock
 
     std::atomic<uint16_t> mtu_{0};

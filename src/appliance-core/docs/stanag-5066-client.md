@@ -33,6 +33,7 @@ appliance-core --station STA-A --link s5066 --s5066-peers /path/peers
 | `s5066-sap` | 3 | the SAP to bind; every appliance in a net uses the same |
 | `s5066-ttl` | 600 | time to live per send, in seconds |
 | `s5066-confirm` | `node` | `node` or `client` delivery confirmation |
+| `s5066-broadcast` | `each` | `each`: a message to ALL goes as one copy to every station in the peers file; `group`: one copy to the all-stations address |
 
 The peers file maps calls to 5066 node addresses. Addresses are written like
 `0.0.1.2`, with the first part 0 to 15 (28 bits). `#` starts a comment. The
@@ -79,9 +80,14 @@ how urgent it is (`prec`).
 | P PRIORITY | 5 |
 | R ROUTINE | 0 |
 
-**To ALL.** A frame to `ALL` goes non-ARQ to the all-stations address
-(15.255.255.255), no confirmation, 2 repeats. It counts as sent once the node
-has it, as a broadcast does today.
+**To ALL.** A frame to `ALL` goes non-ARQ, no confirmation, 2 repeats. By
+default (`s5066-broadcast each`) it goes as one copy to every station in the
+peers file but this one, because greybeard-ale's node has no all-stations
+address yet and refuses one. With `group` it goes as one copy to the
+all-stations address (15.255.255.255), for a node that takes it. A non-ARQ
+copy gets no confirm, only a refusal, and the node refuses at once, so the
+client waits 1.5 s: each refused copy is logged with its address, and the
+broadcast counts as sent unless every copy was refused.
 
 **No address.** A frame to a call that isn't in the peers file fails with "no
 5066 address for CALL in the peers file", and the queue treats it as any other
@@ -163,13 +169,42 @@ and the engine adds a reader for that format.
 - Two cores through a stand-in node (two "nodes" in the test, joined by a
   stand-in network, MTU 2048 as the real node advertises): a message and its
   ACK; a 4 KB message as two pieces; one refusal then a retry that goes; a call with no address failing;
-  the peers file read again after a change; a broadcast; keep-alive; data
+  the peers file read again after a change; a broadcast as one copy per
+  station, one refused and logged; keep-alive; data
   flow off and on; the node dropping the connection and the client binding
   again; an unbind indication.
 - No node at all: not ready, sends refused, one line in the log.
 
-The stand-in has no ARQ and no radio. Interop with greybeard-ale's real node
-comes once it exists: audio files first, then the dummy load.
+The stand-in has no ARQ and no radio. Like the real node, it confirms ARQ
+requests only.
+
+## Run against greybeard-ale's node (Nov 24 2026)
+
+Two cores, STA-A and STA-B, each bound to its own `s5066-node` (greybeard-ale
+main at 7092946, addresses 0x101 and 0x102), joined by `s5066-channel` at
+2400 bps, 50 ms delay, 300 ms turnaround and 10 % D_PDU loss. All of these
+came through:
+
+- a chat each way, each acked;
+- a 5280-byte message, sent as three pieces, joined and acked;
+- a message to ALL, received by STA-B.
+
+The first run showed the one gap: the node refused the all-stations address
+(reason 3) and the client still called the broadcast sent. That is why ALL
+now goes one copy per station and refusals are counted. Nothing here has been
+near a modem or a radio; the dummy load comes after the modem is in.
+
+What the node's document settles for the client:
+
+- Framing is edition 1.2 with the version byte, as the client sends.
+- The node checks the low 29 bits of an address and accepts no more than 28
+  bits, which is what the peers file allows.
+- The node asks the far node for client delivery confirmation on every ARQ
+  request, whatever `s5066-confirm` says, so a confirm means the far core
+  has the piece. `s5066-confirm` matters only on another node.
+- The node never sends keep-alive, data flow on/off, subnet availability or an
+  unbind indication. The client still handles them, for other nodes.
+- Non-ARQ deliveries are reported as mode 2; the client ignores the mode.
 
 ## Agreed with greybeard-ale (Nov 23 2026)
 
@@ -187,13 +222,9 @@ Their orchestrator confirmed these for the real node, and the client matches:
 
 Still to settle:
 
-1. The address field. The node calls it a 4-byte field holding a 29-bit
-   address, and the exact coding of the size bits is being pinned down on
-   their side. The client sends 3 size bits (7), the group bit, then 28 bits,
-   as Wireshark reads it. Their docs/s5066-node.md will settle it.
-2. The time to live. The node calls it a 3-byte field. The client sends 4 bits
-   of repeats then 20 bits of time to live in those 3 bytes, as Wireshark reads
-   it. The same document will settle it.
+1. The address field: settled by their docs/s5066-node.md and the run above.
+2. The time to live: settled the same way (4 bits of repeats, 20 bits of time
+   to live).
 3. Their core lockdown limits which settings the box's settings file may set.
    The new settings (`link`, `s5066-*`, `appa-port`) need adding to that list
    before a station can turn these on from the settings file. That ask has

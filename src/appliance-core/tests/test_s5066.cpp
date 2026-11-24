@@ -18,6 +18,7 @@
 #include <fstream>
 #include <functional>
 #include <map>
+#include <set>
 #include <mutex>
 #include <netinet/in.h>
 #include <poll.h>
@@ -139,7 +140,9 @@ public:
         }
         to->to_client(
             s5066::unidata_indication(req.priority, req.sap, req.dst, req.tx_mode, req.sap, from.addr(), req.data));
-        from.to_client(s5066::unidata_confirm(req.sap, req.dst, req.data.substr(0, 8)));
+        // Non-ARQ gets no confirm, as on greybeard-ale's s5066-node.
+        if (req.service.tx_mode == s5066::kArq)
+            from.to_client(s5066::unidata_confirm(req.sap, req.dst, req.data.substr(0, 8)));
     }
 };
 
@@ -429,17 +432,33 @@ int main() {
         CHECK(wait_for([&] { return state_of(a, cid) == "failed"; }, 15000));
         CHECK(pa->peers() == 3);
 
-        // Broadcast goes non-ARQ to the all-stations address.
+        // Broadcast goes non-ARQ, one copy to each station in the peers file
+        // but this one. STA-C has no node, so its copy is refused; STA-B's
+        // gets through, and the broadcast counts as sent.
+        {
+            std::lock_guard<std::mutex> g(na.mu);
+            before = na.requests.size();
+        }
         std::string all = a.submit("ALL", 'R', "QST NET MEETS AT 2100Z", &err);
         CHECK(!all.empty());
         CHECK(wait_for([&] { return b.get(all) && b.get(all)->body == "QST NET MEETS AT 2100Z"; }));
         CHECK(wait_for([&] { return state_of(a, all) == "sent"; }));
         {
             std::lock_guard<std::mutex> g(na.mu);
-            auto& last = na.requests.back();
-            CHECK(last.dst == s5066::kBroadcastAddress && last.service.tx_mode == s5066::kNonArqBroadcast &&
-                  last.service.confirm == s5066::kNoConfirm);
+            CHECK(na.requests.size() == before + 2);
+            std::set<uint32_t> to;
+            for (size_t i = before; i < na.requests.size(); ++i) {
+                auto& r = na.requests[i];
+                CHECK(r.service.tx_mode == s5066::kNonArqBroadcast && r.service.confirm == s5066::kNoConfirm);
+                to.insert(r.dst);
+            }
+            CHECK(to == (std::set<uint32_t>{2, 3}));
         }
+        CHECK(wait_for([&] {
+            for (auto& e : a.events(0, 500))
+                if (e.text.find("refused the copy for 0.0.0.3") != std::string::npos) return true;
+            return false;
+        }));
 
         // The node answers keep-alive with keep-alive... and so does the client.
         na.to_client(s5066::keep_alive());

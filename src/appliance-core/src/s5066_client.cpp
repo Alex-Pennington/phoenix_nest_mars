@@ -110,7 +110,20 @@ bool S5066Client::send(const std::string& bytes) {
 
     bool bcast = is_broadcast(f.dst);
     uint32_t addr = s5066::kBroadcastAddress;
-    if (!bcast) {
+    std::vector<uint32_t> dests;
+    if (bcast) {
+        if (cfg_.broadcast_each_peer) {
+            for (auto& kv : peers_)
+                if (kv.first != f.src) dests.push_back(kv.second);
+            if (dests.empty()) {
+                sending_ = true;
+                pending_fail_ = "no stations in the peers file to send to all";
+                return true;
+            }
+        } else {
+            dests.push_back(s5066::kBroadcastAddress);
+        }
+    } else {
         auto it = peers_.find(f.dst);
         if (it == peers_.end()) {
             // Fails through on_tx_done, never from inside send().
@@ -119,6 +132,7 @@ bool S5066Client::send(const std::string& bytes) {
             return true;
         }
         addr = it->second;
+        dests.push_back(addr);
     }
 
     auto pieces = s5066::split(bytes, ++seq_, mtu_);
@@ -136,15 +150,19 @@ bool S5066Client::send(const std::string& bytes) {
     }
     uint8_t prio = s5066::priority_for(f.prec);
     std::string out;
-    for (auto& p : pieces) out += s5066::unidata_request(prio, cfg_.sap, addr, st, ttl, p);
+    for (uint32_t d : dests)
+        for (auto& p : pieces) out += s5066::unidata_request(prio, cfg_.sap, d, st, ttl, p);
     if (!write_all(out)) return false;
 
     sending_ = true;
     if (bcast) {
-        // Nothing comes back for a non-ARQ broadcast: it is sent once the
-        // node has it.
-        pending_ok_ = true;
+        // Nothing comes back for a non-ARQ copy but a refusal, and the node
+        // refuses at once: give it a moment, then call the broadcast sent.
         outstanding_ = 0;
+        bcast_copies_ = static_cast<int>(dests.size() * pieces.size());
+        bcast_refused_ = 0;
+        bcast_why_.clear();
+        bcast_until_ = std::chrono::steady_clock::now() + std::chrono::milliseconds(1500);
     } else {
         outstanding_ = static_cast<int>(pieces.size());
         deadline_ = std::chrono::steady_clock::now() + std::chrono::seconds(ttl ? ttl + 30 : 24 * 3600);
@@ -159,6 +177,7 @@ void S5066Client::finish_send(bool ok, const std::string& err, std::vector<Actio
     outstanding_ = 0;
     pending_ok_ = false;
     pending_fail_.clear();
+    bcast_copies_ = 0;
     after.push_back([this, ok, err] {
         if (cb_.on_tx_done) cb_.on_tx_done(ok, err);
     });
@@ -241,6 +260,15 @@ void S5066Client::handle(const s5066::Prim& p, std::vector<Action>& after) {
         if (sending_ && outstanding_ > 0 && --outstanding_ == 0) finish_send(true, "", after);
         break;
     case kUnidataRequestRejected:
+        if (sending_ && bcast_copies_ > 0) {
+            ++bcast_refused_;
+            bcast_why_ = unidata_rejected_text(p.reason);
+            uint32_t d = p.dst;
+            after.push_back([this, d, why = bcast_why_] {
+                event("5066 node refused the copy for " + s5066::address_text(d) + ": " + why);
+            });
+            break;
+        }
         if (sending_ && outstanding_ > 0)
             finish_send(false, "5066 node refused the send: " + unidata_rejected_text(p.reason), after);
         break;
@@ -270,6 +298,12 @@ void S5066Client::run() {
             // A send that failed before reaching the node, or a broadcast done.
             if (sending_ && !pending_fail_.empty()) finish_send(false, pending_fail_, after);
             else if (sending_ && pending_ok_) finish_send(true, "", after);
+            else if (sending_ && bcast_copies_ > 0 && std::chrono::steady_clock::now() > bcast_until_) {
+                if (bcast_refused_ >= bcast_copies_)
+                    finish_send(false, "5066 node refused every copy: " + bcast_why_, after);
+                else
+                    finish_send(true, "", after);
+            }
             else if (sending_ && outstanding_ > 0 && std::chrono::steady_clock::now() > deadline_)
                 finish_send(false, "no confirm from the 5066 node in time", after);
         }

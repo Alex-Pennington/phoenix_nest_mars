@@ -119,6 +119,8 @@ std::string unidata_rejected(uint8_t reason, uint8_t dst_sap, uint32_t dst, cons
 std::string bind_rejected_text(uint8_t reason);
 std::string unbind_text(uint8_t reason);
 std::string unidata_rejected_text(uint8_t reason);
+// An address as a peers file writes it: 0.0.1.2.
+std::string address_text(uint32_t addr);
 
 // "0.0.1.2" <-> 28-bit address. parse_address refuses anything past 28 bits.
 bool parse_address(const std::string& text, uint32_t& out);
