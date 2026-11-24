@@ -1,4 +1,4 @@
-# gale-term: Message Machine screens (inbox, BBS, routing) — build spec v1
+# gale-term: Message Machine screens (inbox, BBS, routing) — build spec v1.1 (v1.1: mouse added, section 1a)
 
 Owner of this spec: MARS core coordinator (pilot). Builder: Ymir (gale-term, greybeard-ale).
 Reference: Message Machine user manual (GRSS, 2020) and MultitermBasic guide, as uploaded by Alex.
@@ -21,6 +21,23 @@ Done when: `m` appears on the main screen on Gangleri and opens MSG-INBOX.
 - Nothing on these screens keys the radio except an explicit TX action the operator confirms,
   or machine-mode auto-sends the operator has enabled (section 5).
 - Lists: Up/Down move, PgUp/PgDn page, Enter opens, `/` filters. Selected row shown inverse.
+
+## 1a. Mouse (added v1.1, Alex Nov 24)
+
+The mouse is a second way in; the keyboard stays complete. Nothing is mouse-only.
+- Console: tty1 has no X, so the image runs `gpm` (console mouse daemon) and gale-term uses curses mouse events
+  (works the same under an xterm/SSH). If no mouse is present, nothing changes.
+- Left click: on a list row selects it, double click opens it (same as Enter). On a tab label switches tab.
+  On an action-bar item does that action. On a key in the main-screen key map opens that screen.
+- Right click: anywhere = Esc (back).
+- Wheel: scrolls lists and text (3 lines per notch).
+- Hover: the item under the pointer shows its one-line help on line 24 (MultitermBasic-style tips).
+- Confirms: a click can only pick No or open the confirm. Anything that keys the radio, switches machine mode or
+  routing on, or discards/marks all needs the keyboard `y` (a click on Yes does nothing but flash "press y").
+  This keeps a stray click from transmitting.
+- Fields: click puts the cursor in the field; typing is keyboard.
+- Load: gpm is a few hundred KB and idle when the mouse is still; gale-term only redraws on events.
+Tests: the screen-walk test also drives each screen by synthetic mouse events (click row, tab, action, right-click back).
 
 ## 2. Key map from main screen
 
