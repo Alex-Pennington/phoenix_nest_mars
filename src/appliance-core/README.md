@@ -124,6 +124,15 @@ routing indicator. tests/test_sched.cpp covers all three.
 
     appliance-core --loopback-pair A,B --db-dir ./data --api-port 4100
 
+## The operator screen (gale-web)
+
+    appliance-core --loopback-pair A,B --db-dir ./data --api-port 4100 \
+        --web-port 4110 --web-root path/to/gale-web/dist
+
+serves A's screen on http://127.0.0.1:4110/ (B's on 4111): gale-web's files
+and a WebSocket at `/ws` on the same calls as the API port. Loopback only.
+See docs/api.md, "Web port", and docs/gale-web-screens.md.
+
 ## Test framing
 
 The PNA1 frame (`src/frame.h`) is a test stand-in for the link layer, not the

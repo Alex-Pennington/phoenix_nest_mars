@@ -23,7 +23,7 @@ std::string trim(const std::string& s) {
 const std::vector<std::string>& config_keys() {
     static const std::vector<std::string> k = {
         "station",     "tx-mode",     "tx-cmd",        "tx-arg",      "captures",   "outbox",
-        "db-dir",      "api-port",    "loopback-pair", "loopback-bps", "no-acks",   "max-attempts",
+        "db-dir",      "api-port",    "web-port",    "web-root",    "loopback-pair", "loopback-bps", "no-acks",   "max-attempts",
         "advisor",     "advisor-arg", "link-socket",   "link-poll-ms", "link-gate",
         "link",        "s5066-peers", "s5066-port",    "s5066-sap",   "s5066-ttl",  "s5066-confirm", "s5066-broadcast",
         "appa-port",   "ack-timeout", "ack-retries",   "tx-gap",

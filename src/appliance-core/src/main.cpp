@@ -5,6 +5,8 @@
 //
 // See README.md for every option.
 #include "api_server.h"
+#include "web_server.h"
+#include "net.h"
 #include "bbs.h"
 #include "compose.h"
 #include "config.h"
@@ -70,7 +72,10 @@ void usage() {
         "  --captures DIR        greybeard-ale's capture directory (watched)\n"
         "  --outbox DIR          where burst WAVs go (default DB-DIR/outbox)\n"
         "  --db-dir DIR          the store, work files and state (default .)\n"
-        "  --api-port N          local API on 127.0.0.1:N (default 4100)\n\n"
+        "  --api-port N          local API on 127.0.0.1:N (default 4100)\n"
+        "  --web-port N          the operator screen (gale-web) on 127.0.0.1:N: its files\n"
+        "                        and a WebSocket at /ws on the same calls (default off)\n"
+        "  --web-root DIR        gale-web's built files (default /opt/gale/web)\n\n"
         "One station, through the STANAG 5066 node (greybeard-ale's interface 7):\n"
         "  --station NAME        this station's call\n"
         "  --link s5066          send through the 5066 node instead of gale-tx\n"
@@ -89,6 +94,7 @@ void usage() {
         "  --loopback-pair A,B   stations A and B wired back to back\n"
         "  --db-dir DIR          where their stores go (default .)\n"
         "  --api-port N          A answers on N, B on N+1\n"
+        "  --web-port N          A's screen on N, B's on N+1\n"
         "  --loopback-bps N      simulated airtime (default 600, 0 = instant)\n\n"
         "Both:\n"
         "  --no-acks             do not answer received messages with an ACK\n"
@@ -123,6 +129,7 @@ void usage() {
 struct Station {
     std::unique_ptr<Core> core;
     std::unique_ptr<ApiServer> api;
+    std::unique_ptr<WebServer> web;
 };
 
 std::shared_ptr<LinkMonitor> g_link;
@@ -132,6 +139,22 @@ bool g_tx_gap_set = false;
 int g_link_wait = 0, g_expire_h = 0, g_parts_hold_h = 72, g_parts_resend = 12;
 int g_handling[4] = {10, 30, 180, 360};
 bool g_raw_rx = true;
+int g_web_port = 0;  // 0: no web port
+std::string g_web_root = "/opt/gale/web";
+
+// The operator screen's web port (web_server.h) for one handler. Off when
+// --web-port isn't given; a web root that isn't there only means every file
+// is 404, so the screen's socket still works for a dev server elsewhere.
+std::unique_ptr<WebServer> start_web(const std::string& who, uint16_t port, WebServer::Handler h) {
+    auto web = std::make_unique<WebServer>(port, g_web_root, std::move(h));
+    if (!web->start()) {
+        log_line(who, "cannot open web port " + std::to_string(port));
+        return nullptr;
+    }
+    log_line(who, "web screen on http://127.0.0.1:" + std::to_string(port) + "/ (files from " + g_web_root +
+                      (web->root_ok() ? ")" : ", which isn't a directory: files are 404)"));
+    return web;
+}
 
 // "10,30,180,360": handling minutes for FLASH, IMMEDIATE, PRIORITY, ROUTINE.
 bool parse_handling(const std::string& v, int out[4]) {
@@ -145,7 +168,8 @@ bool parse_handling(const std::string& v, int out[4]) {
     return n == 4;
 }
 
-bool start_station(Station& s, CoreConfig cfg, std::unique_ptr<ModemDriver> modem, uint16_t port) {
+bool start_station(Station& s, CoreConfig cfg, std::unique_ptr<ModemDriver> modem, uint16_t port,
+                   uint16_t web_port = 0) {
     std::string name = cfg.station;
     std::string db = cfg.db_path;
     cfg.link_gate = g_link_gate;
@@ -204,6 +228,11 @@ bool start_station(Station& s, CoreConfig cfg, std::unique_ptr<ModemDriver> mode
         return false;
     }
     log_line(name, "API on 127.0.0.1:" + std::to_string(port));
+    if (web_port) {
+        Core* core = s.core.get();
+        s.web = start_web(name, web_port, [core](const std::string& line) { return ApiServer::handle(*core, line); });
+        if (!s.web) return false;
+    }
     return true;
 }
 
@@ -274,6 +303,13 @@ int main(int argc, char** argv) {
             } else if (a == "--config") next();
             else if (a == "--check") check_only = true;
             else if (a == "--api-port") api_port = static_cast<uint16_t>(std::stoi(next()));
+            else if (a == "--web-port") {
+                g_web_port = std::stoi(next());
+                if (g_web_port < 1 || g_web_port > 65535) {
+                    std::cerr << "--web-port: 1 to 65535\n";
+                    return 2;
+                }
+            } else if (a == "--web-root") g_web_root = next();
             else if (a == "--loopback-pair") pair = next();
             else if (a == "--station") station = next();
             else if (a == "--tx-mode") tx_mode = next();
@@ -375,6 +411,14 @@ int main(int argc, char** argv) {
         return 2;
     }
 
+    if (g_web_port) {
+        int last_api = pair.empty() ? api_port : api_port + 1, last_web = pair.empty() ? g_web_port : g_web_port + 1;
+        if (last_web > 65535 || (g_web_port <= last_api && api_port <= last_web)) {
+            std::cerr << "--web-port: pick a port apart from the API port" << (pair.empty() ? "" : "s") << "\n";
+            return 2;
+        }
+    }
+
     // No call in the settings or on the command line: the one set at first
     // start (first_start.h), if there is one.
     bool first_start_needed = false;
@@ -429,6 +473,12 @@ int main(int argc, char** argv) {
                 else if (!fs::is_directory(captures, ec)) problems.push_back("captures: " + captures + " isn't a directory");
             }
             std::cout << "  API            127.0.0.1:" << api_port << "\n";
+            if (g_web_port) {
+                std::error_code wec;
+                std::cout << "  web screen     http://127.0.0.1:" << g_web_port << "/ from " << g_web_root << "\n";
+                if (!fs::is_directory(g_web_root, wec))
+                    notes.push_back("web-root " + g_web_root + " isn't a directory yet: the screen's files are 404 until gale-web is installed there");
+            }
         } else {
             problems.push_back("set station (this station's call), or loopback-pair to practise with no radio");
         }
@@ -470,7 +520,27 @@ int main(int argc, char** argv) {
         std::filesystem::create_directories(db_dir, ec);
         log_line("SETUP", "no station call yet: waiting for setup_station on 127.0.0.1:" + std::to_string(api_port));
         bool opened = false;
+        // The screen sets the call too: its requests go through the setup
+        // port, one at a time, so setup has one door.
+        std::unique_ptr<WebServer> setup_web;
+        if (g_web_port)
+            setup_web = start_web("SETUP", static_cast<uint16_t>(g_web_port), [api_port](const std::string& line) {
+                int fd = tcp_connect("127.0.0.1", api_port, 2000);
+                std::string buf;
+                if (fd >= 0 && send_all(fd, line + "\n")) {
+                    auto until = std::chrono::steady_clock::now() + std::chrono::seconds(15);
+                    while (buf.find('\n') == std::string::npos && std::chrono::steady_clock::now() < until) {
+                        int r = wait_readable(fd, 200);
+                        if (r < 0 || (r == 1 && read_some(fd, buf) <= 0)) break;
+                    }
+                }
+                close_fd(fd);
+                size_t nl = buf.find('\n');
+                if (nl == std::string::npos) return std::string("{\"ok\":false,\"error\":\"setup is busy; try again\"}");
+                return buf.substr(0, nl);
+            });
         station = first_start::serve(db_dir, api_port, &g_stop_flag, &opened);
+        if (setup_web) setup_web->stop();
         if (!opened) {
             std::cerr << "cannot open API port " << api_port << " for first-start setup\n";
             return 1;
@@ -497,8 +567,9 @@ int main(int argc, char** argv) {
             stations.resize(2);
             CoreConfig ca{a, db_dir + "/" + a + ".db", max_attempts, 10, acks};
             CoreConfig cb{b, db_dir + "/" + b + ".db", max_attempts, 10, acks};
-            if (!start_station(stations[0], ca, std::move(ma), api_port)) return 1;
-            if (!start_station(stations[1], cb, std::move(mb), api_port + 1)) return 1;
+            uint16_t wa = static_cast<uint16_t>(g_web_port), wb = g_web_port ? static_cast<uint16_t>(g_web_port + 1) : 0;
+            if (!start_station(stations[0], ca, std::move(ma), api_port, wa)) return 1;
+            if (!start_station(stations[1], cb, std::move(mb), api_port + 1, wb)) return 1;
         } else if (!station.empty()) {
             if (!valid_station(station)) {
                 std::cerr << "--station: letters A-Z, digits and -, at most 16\n";
@@ -530,7 +601,7 @@ int main(int argc, char** argv) {
                 g.state_file = db_dir + "/" + station + "-captures-seen.txt";
                 modem = std::make_unique<GreybeardModem>(g);
             }
-            if (!start_station(stations[0], c, std::move(modem), api_port)) return 1;
+            if (!start_station(stations[0], c, std::move(modem), api_port, static_cast<uint16_t>(g_web_port))) return 1;
         } else {
             std::cerr << "give --station (greybeard-ale) or --loopback-pair (try --help)\n";
             return 2;
@@ -543,6 +614,7 @@ int main(int argc, char** argv) {
     while (!g_stop) std::this_thread::sleep_for(std::chrono::milliseconds(200));
 
     for (auto& s : stations) {
+        if (s.web) s.web->stop();
         if (s.api) s.api->stop();
         if (s.core) bbs::stop(*s.core);
         if (s.core) s.core->stop();

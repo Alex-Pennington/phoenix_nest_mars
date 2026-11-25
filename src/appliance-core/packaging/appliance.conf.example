@@ -21,6 +21,11 @@ db-dir = ~/.local/share/phoenix-nest-mars
 # It answers on this computer only (127.0.0.1).
 api-port = 4100
 
+# The operator screen (gale-web) in the kiosk: its files and a WebSocket on
+# the same calls, on this computer only. Off unless set; 4101 on the appliance.
+# web-port = 4101
+# web-root = /opt/gale/web
+
 # ---- The modem: greybeard-ale, on this computer ----
 
 # gale-tx, which turns a message into a burst WAV. Give the full path: the

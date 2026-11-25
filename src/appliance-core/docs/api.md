@@ -1,7 +1,8 @@
 # Local API
 
 One JSON object per line over TCP on 127.0.0.1 (port 4100 unless
-`--api-port` says otherwise). Every reply is one line with `"ok"`; on
+`--api-port` says otherwise). The same calls also answer over a WebSocket on
+the web port: see "Web port" below. Every reply is one line with `"ok"`; on
 `"ok": false` it also has `"error"`. Request values may be strings, numbers or
 booleans; multi-line values are strings with `\n`.
 
@@ -36,6 +37,44 @@ mode: the API port answers only these two calls until the call is given.
 
 gale-term shows this as its first-run screen when `setup_needed` is true.
 In setup mode the form calls below also answer, for the SETUP form only.
+
+## Web port: the operator screen (gale-web)
+
+With `--web-port N` (off unless given; `4101` on the appliance) the core also
+serves the kiosk screen, on 127.0.0.1 only, no TLS
+(docs/gale-web-screens.md section 5):
+
+- `GET /` and `GET /<file>`: gale-web's built files from `--web-root`
+  (default `/opt/gale/web`); `/` is `index.html`. Content types for html, js,
+  css, json, woff2, svg and png (others are `application/octet-stream`),
+  `Cache-Control: no-cache`, `Connection: close`. No directory listing.
+  404 for anything else: other methods, directories, missing files, hidden
+  names (`.env`), `..` written plainly or %-encoded, bad %-escapes, and
+  symlinks that lead out of the web root. A web root that isn't there yet
+  only makes every file 404; the WebSocket still works.
+- `GET /ws`: a WebSocket (RFC 6455, version 13). Each text frame is one
+  request, the same JSON object as one line on the API port, answered by the
+  same handler, one text frame per reply, in order. Fragmented messages,
+  ping/pong and the close handshake work; frames from the client must be
+  masked.
+  - `rid`: put `"rid": <int>` in a request and the reply carries it back
+    unchanged as its first member (`{"rid":7,"ok":true,...}`). A number stays
+    a number, a string a string. The handler never sees `rid`. Without `rid`
+    the frame goes to the handler exactly as sent. A reply with no `rid` is a
+    push (none are sent yet).
+  - Limits: 1 MiB per frame and per whole message (close 1009); binary
+    frames close with 1003, bad UTF-8 with 1007, protocol errors with 1002.
+    When the core stops, open sockets get close 1001.
+- Who may connect: the `Host` header must be `127.0.0.1:N` or `localhost:N`
+  (else 403), and a WebSocket's `Origin`, when sent, must be
+  `http://127.0.0.1:N` or `http://localhost:N` (else 403). A browser always
+  sends `Origin`; a local program may leave it out.
+- At most 32 connections at once (503 beyond that).
+- In setup mode (no call yet) the screen's requests go through the setup
+  calls above, so the first-run screen works in the kiosk too; when the call
+  is set the port closes and reopens on the station (the screen reconnects).
+- With `--loopback-pair` A's screen is on N and B's on N+1. The web port must
+  not overlap the API port(s).
 
 ## Forms
 
