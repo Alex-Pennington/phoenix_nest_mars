@@ -455,7 +455,11 @@ int main() {
     // A scheduled rule holds its traffic until its time.
     CHECK(ok(call(a, {{"cmd", "route_set"}, {"id", std::to_string(east)}, {"sched", "0000Z"}})));
     int64_t fake = static_cast<int64_t>(std::time(nullptr));
-    fake = fake - fake % 86400 + 3600;  // 0100Z today: 0000Z is tomorrow
+    // 0100Z tomorrow, so 0000Z is the day after. Always later than now:
+    // route_list shows the newest first by when each was routed, and the
+    // earlier rows were routed on the real clock (0100Z today failed the
+    // check whenever the suite ran after 0100Z).
+    fake = fake - fake % 86400 + 86400 + 3600;
     bbs_a.set_clock([&] { return fake; });
     CHECK(!c.submit("AAM499", 'R', traffic("UHEBBB", "AAR7ZZ", 15, "LATER FOR EAST"), &e).empty());
     CHECK(wait_for([&] { return got(a, "AAR7ZZ").size() == 5; }));
