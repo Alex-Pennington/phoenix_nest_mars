@@ -161,6 +161,8 @@ public:
     std::optional<std::pair<std::string, std::string>> clear(const std::string& id);
     // Writes a line to the station's event log (key loads and zeroizes).
     void note(const std::string& text);
+    // The same, against one message (its EVENTS tab): operator marks, QSLs, retransmits.
+    void note_on(const std::string& msg_id, const std::string& text);
 
     // The station's own keypair (station.h). Set before start(); none: no
     // signing, no cards, no sealed tapes.

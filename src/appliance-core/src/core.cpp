@@ -292,6 +292,11 @@ void Core::note(const std::string& text) {
     log("", text);
 }
 
+void Core::note_on(const std::string& msg_id, const std::string& text) {
+    std::lock_guard<std::mutex> g(mu_);
+    log(msg_id, text);
+}
+
 std::optional<std::pair<std::string, std::string>> Core::clear(const std::string& id) {
     std::lock_guard<std::mutex> g(mu_);
     return store_.clear(id);

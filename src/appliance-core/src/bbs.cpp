@@ -243,6 +243,10 @@ Engine::Engine(Core& core) : core_(core), clock_(system_now) {
     exec("CREATE TABLE IF NOT EXISTS bbs_qsl (msg_id TEXT NOT NULL, by TEXT NOT NULL, at INTEGER NOT NULL,"
          " PRIMARY KEY(msg_id, by))");
     exec("CREATE TABLE IF NOT EXISTS bbs_auto (at INTEGER NOT NULL, kind TEXT NOT NULL, msg_id TEXT NOT NULL)");
+    // The in box's marks (api_inbox.cpp makes the same table): read here for discards.
+    exec("CREATE TABLE IF NOT EXISTS inbox_flags (msg_id TEXT PRIMARY KEY, read_at INTEGER NOT NULL DEFAULT 0,"
+         " done TEXT NOT NULL DEFAULT '', done_at INTEGER NOT NULL DEFAULT 0, qsl_at INTEGER NOT NULL DEFAULT 0,"
+         " tag TEXT NOT NULL DEFAULT '', corrected BLOB, corrected_at INTEGER NOT NULL DEFAULT 0)");
     // A station that never ran the BBS starts reading after what it holds
     // now: nothing heard before is answered or routed by itself.
     if (meta("scan_after").empty()) {
@@ -592,7 +596,10 @@ bool Engine::move_rule(int64_t id, const std::string& dir, int to, std::string* 
 std::vector<Engine::Held> Engine::pool() {
     std::vector<Held> out;
     Stmt s(db_, "SELECT id, src, dst, prec, body, state, created_at FROM messages WHERE direction = 'in'"
-                " AND state IN ('received', 'overheard') ORDER BY created_at, rowid");
+                " AND state IN ('received', 'overheard')"
+                // Traffic the operator discarded in the in box (api_inbox.h) isn't held.
+                " AND id NOT IN (SELECT msg_id FROM inbox_flags WHERE done = 'discarded')"
+                " ORDER BY created_at, rowid");
     while (s.step()) {
         Held h;
         h.id = s.text(0);

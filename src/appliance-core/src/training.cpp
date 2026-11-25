@@ -1,6 +1,7 @@
 #include "training.h"
 
 #include "api_server.h"
+#include "bbs.h"
 #include "cipher_slot.h"
 #include "core.h"
 #include "json.h"
@@ -238,6 +239,10 @@ bool Training::fill(std::string* error) {
 }
 
 void Training::stop() {
+    // A BBS engine made for a practice core goes with it (one per core, keyed
+    // by the core's address, which a later core may reuse).
+    if (me_) bbs::stop(*me_);
+    if (ncs_) bbs::stop(*ncs_);
     if (me_) me_->stop();
     if (ncs_) ncs_->stop();
     me_.reset();

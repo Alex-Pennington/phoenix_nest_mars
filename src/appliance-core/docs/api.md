@@ -341,6 +341,9 @@ lines.
 
 `sends` counts how many times a message went out whole on the air.
 
+`list` with `dir`, `get`'s in-box extras and `log` with `stream` are under
+"In box" below.
+
 ## The station book: address book, nets, duty, log, monthly report
 
 All of it works offline and lives in the station's own SQLite file. Lists in a
@@ -876,3 +879,144 @@ A routed message goes to the rule's first ALE address with the broadcast RI
 struck off; the log names the whole calling order. With `key` set, plain
 traffic is enciphered in our cipher slot first (it needs a date-time group
 line). Traffic this station originated isn't routed.
+
+## In box: the message screens (MSG-INBOX, MSG-PENDING, MSG-VIEW, MSG-SEARCH, MSG-ACTIVITY, MSG-REPORTS)
+
+The core side of docs/gale-term-mm-bbs-screens.md, section 3. The operator's
+marks (read, processed, discarded, QSL, tag, a corrected copy) are kept in
+the station's database (`inbox_flags`); the message as received is never
+changed. Each mark is written to the message's own events. Training mode
+answers these calls from the practice store.
+
+Principle 5: nothing here keys the radio by itself. `retransmit` needs
+`confirm=Y`, and `qsl` queues a receipt only with `send=Y`. Both go into the
+ordinary queue, so EMCON holds them and they show in the outbox. A discarded
+message is no longer held for the BBS (QRU never lists it).
+
+### In-box row
+
+`list {dir:"in"}`, `pending` and `search` return rows:
+`{"record","id","direction","dtg","prec","from","to","serial","type","state","core_state","mine",
+"read","processed","discarded","delivered","format_error","enciphered","tag","corrected","created_at","qsl":[...]}`
+
+- `state` is the in-box state, first that applies: `DISC` (discarded),
+  `PROC` (processed, by the operator or by a routing rule), `DELIV` (sent on
+  by a routing rule), `QSL` (a QSL from this station or by machine command),
+  `READ`, `NEW`. `core_state` is the store's state (`received`, `overheard`,
+  `garbled`).
+- `record` is the row number (MM's record #). `dtg` is the message's DTG, its
+  time filed, or when it came in. `type` is the USMTF MSGID type, if any.
+- `mine`: addressed to this station (not overheard). `format_error`: heard
+  damaged (`garbled`); these are on the errors list.
+- `qsl` names the stations that QSL'd it.
+
+### list with dir
+
+`{"cmd":"list","dir":"in","mine":false,"hide_delivered":false,"include_processed":false,"limit":50,"after_id":"..."}`
+→ `{"ok":true,"dir":"in","messages":[rows],"more":true,"last_id":"..."}`
+
+Newest first. `include_processed` also shows processed and discarded ones.
+Pass `last_id` as `after_id` for the next page. `dir:"out"` lists sent
+messages the same way. `list` without `dir` is the plain call above.
+
+### get: MSG-VIEW
+
+`get` adds `inbox` (one row), `events` (the message's own log, oldest
+first: `seq`, `ts`, `text`), `props` (`precedence`, `compress`, `encrypt`,
+`key` (the indicator, never key material), `source`, `destination`, `ale`,
+`data_rate`, `interleave` (both empty: they belong to the modem),
+`checksum` (`pass`/`fail`/`none`, the MSC digest)), `decoded` (the clear
+text of a message in our cipher when this station holds the key, else empty,
+with `decoded_note` "No key for this message on this station.") and
+`corrected_text`. `{"read":"Y"}` marks it read (MSG-VIEW opening it).
+
+### pending, mark, mark_all
+
+- `{"cmd":"pending","all":false,"limit":200}` →
+  `{"pending_count","errors_count","last_processed","pending":[rows],"errors":[{"record","id","dtg","from","raw","errors":[...]}]}`.
+  Pending: received for this station, not processed or discarded (`all`
+  adds overheard traffic). Errors: heard damaged, not discarded.
+- `{"cmd":"mark","id","state"}`: `processed`, `discarded`, `reviewed` (read)
+  or `new` (clears all three). Returns the new `state`. Messages this
+  station sent are refused.
+- `{"cmd":"mark_all","list":"pending|errors","state"}`: `state` is
+  `processed` or `discarded` (default: processed for pending, discarded for
+  errors). Returns `marked`.
+
+### qsl, tag, correct, export
+
+- `{"cmd":"qsl","id","send":"N"}` marks it QSL by this station. With
+  `send=Y` it also queues MSC's receipt line to the originator, for plain
+  ACP 127 traffic only (`not_sent` says why not: PNA1 traffic was acked on
+  the air). Returns `sent`, `out_id`, and `emcon` when EMCON holds it.
+- `{"cmd":"tag","id","text"}`: one line, 80 characters at most, no
+  frequency. Empty clears it.
+- `{"cmd":"correct","id","body"}` keeps a corrected copy beside the
+  original (`E` in MSG-VIEW). Empty removes it. `retransmit` and `export`
+  use it.
+- `{"cmd":"export","id"}` writes the message as received (an enciphered one
+  stays enciphered) to `<station folder>/export/<id>.txt`, and the corrected
+  copy to `<id>.corrected.txt`. Returns `folder` and `files`.
+
+### retransmit (T in MSG-VIEW)
+
+`{"cmd":"retransmit","id","to","ale"?,"de"?,"key"?,"compress"?,"lines"?,"prec"?,"route"?,"confirm":"Y"}`
+→ `{"ok":true,"out_id","to","key","route","route_note","emcon"?,"compress"?}`
+
+Refused without `confirm=Y`: the screen sends it only after the operator's
+`y` on the confirm panel. Goes to `ale` if given, else `to`. `de` must be
+this station or empty (it sends as itself). `lines` picks lines of the
+message (`3-5,9`), not of an enciphered one. `key` (an indicator or a net
+name) enciphers in our cipher slot; the message needs a DTG line. `compress`
+is noted and sent uncompressed (no compression yet). `route` is written to
+the log; everything goes out the station's one transmit route (`route` in
+the reply) until transmit is unlocked.
+
+### search (MSG-SEARCH)
+
+`{"cmd":"search","sender","serial","dtg","recipient","types":"SITREP,...","filters":"delivered,unprocessed,processed,discarded","expr","limit":200}`
+→ `{"ok":true,"filter":"<effective filter, for line 22>","more":false,"messages":[rows]}`
+
+Case-blind. `sender`, `recipient` and `dtg` match anywhere; `serial` is the
+whole value; `%` is a wildcard in all four. `filters` are OR'd; with none,
+discarded messages are left out. `expr` is the advanced line:
+`field op value` joined by `AND`, `OR`, `NOT` and parentheses. Fields:
+`from, to, serial, dtg, type, prec, state, tag, id, key, text`. Ops: `=`
+(whole value, `%` wildcards), `!=`, `~` (contains). Quote values with
+spaces: `text ~ "ALL QUIET"`. The core reads it into its own tree; nothing
+of it reaches SQLite. A bad expression is refused with the character where
+it went wrong.
+
+### log streams and activity counters (MSG-ACTIVITY)
+
+`{"cmd":"log","stream":"io|app|msg","after":0,"limit":100,"q":"..."}` →
+`{"ok":true,"stream","events":[{"seq","ts","id","text","dir"?,"route"?}],"last"}`
+
+- `io`: traffic in and out (`dir` `in`/`out`; `route` on `out`), and BBS
+  answers and machine commands.
+- `app`: the core's own lines (no message id).
+- `msg`: lines about messages. With `q`, those whose message id, sender,
+  serial or tag match, or whose text has `q` (the EVENTS tab search).
+
+Poll with the reply's `last` as `after`. `log` without `stream` is the
+plain call above.
+
+`{"cmd":"activity_counters"}` →
+`{"ok":true,"session_since","watched_routes","routing","stored","received_session","processed_session","duplicates_session","purged_session":0,"purge"}`.
+The session starts when the core last started. `watched_routes` counts the
+routing rules. Nothing is purged yet (`purge` says so).
+
+### report (MSG-REPORTS)
+
+`{"cmd":"report","kind":"station_log|comtrafstat|comtrafsum","from":"YYYY-MM-DD","to":"YYYY-MM-DD","lines_per_page":60}`
+→ `{"ok":true,"kind","from","to","lines","text","pages":[...],"draft"?}`
+
+UTC days, both included; default today. Lines are 69 characters or fewer.
+- `station_log`: the station log's entries and every message in and out,
+  by time.
+- `comtrafstat`: the status now (the dates aren't used): pending action,
+  outgoing not yet delivered, the count of formatting errors.
+- `comtrafsum`: counts for the period by precedence, received and sent,
+  acknowledged, not delivered, overheard, errors, processed and discarded.
+  `draft` (`template` FREE_FORM, `prec`, `subject`, `text`) opens in
+  MSG-COMPOSE; nothing is sent from here.

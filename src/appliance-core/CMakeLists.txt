@@ -115,6 +115,7 @@ add_library(pna_core STATIC
   src/cipher_check.cpp
   src/bbs.cpp
   src/api_bbs.cpp
+  src/api_inbox.cpp
   modules/pna_aes.cpp)
 target_link_libraries(pna_core PUBLIC SQLite::SQLite3 Threads::Threads OpenSSL::Crypto ZLIB::ZLIB EXPAT::EXPAT ${CMAKE_DL_LIBS})
 
@@ -148,7 +149,7 @@ add_library(test_template_module MODULE sdk/cipher_template.c)
 set_target_properties(test_template_module PROPERTIES PREFIX "" C_VISIBILITY_PRESET hidden)
 target_include_directories(test_template_module PRIVATE sdk)
 
-foreach(t test_frame test_core test_greybeard test_acp127 test_received test_templates test_compose test_link test_ops test_sched test_config test_crypto test_codress test_station test_badday test_import test_s5066 test_appa test_appa_m110 test_cipher_slot test_cp_link test_acp127_ops test_groundzero test_firststart test_forms test_parts test_guide test_bbs)
+foreach(t test_frame test_core test_greybeard test_acp127 test_received test_templates test_compose test_link test_ops test_sched test_config test_crypto test_codress test_station test_badday test_import test_s5066 test_appa test_appa_m110 test_cipher_slot test_cp_link test_acp127_ops test_groundzero test_firststart test_forms test_parts test_guide test_bbs test_inbox)
   add_executable(${t} tests/${t}.cpp)
   target_link_libraries(${t} PRIVATE pna_core)
   target_compile_definitions(${t} PRIVATE PNA_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}" PNA_BUILD_DIR="${CMAKE_CURRENT_BINARY_DIR}")

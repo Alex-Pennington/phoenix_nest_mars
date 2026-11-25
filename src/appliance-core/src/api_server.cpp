@@ -1,5 +1,6 @@
 #include "api_server.h"
 #include "api_bbs.h"
+#include "api_inbox.h"
 #include "bbs.h"
 #include "api_forms.h"
 #include "api_guide.h"
@@ -2507,6 +2508,7 @@ std::string ApiServer::handle(Core& core, const std::string& line) {
     if (auto r = handle_forms(core, cmd, req)) return *r;
     if (auto r = handle_guide(core, cmd, req)) return *r;
     if (auto r = handle_bbs(core, cmd, req)) return *r;
+    if (auto r = handle_inbox(core, cmd, req)) return *r;
 
     if (cmd == "status") {
         CoreStatus s = core.status();
@@ -2659,7 +2661,11 @@ std::string ApiServer::handle(Core& core, const std::string& line) {
         w.begin_object().field("ok", true);
         w.begin_array("messages");
         write_message(w, *m);
-        w.end_array().end_object();
+        w.end_array();
+        // MSG-VIEW: in-box state, events, props, decoded text (api_inbox.h).
+        const std::string rd = req["read"];
+        write_inbox_extras(w, core, *m, rd == "Y" || rd == "y" || rd == "true" || rd == "1");
+        w.end_object();
         return w.str();
     }
 
