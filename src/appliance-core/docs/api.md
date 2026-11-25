@@ -6,6 +6,13 @@ the web port: see "Web port" below. Every reply is one line with `"ok"`; on
 `"ok": false` it also has `"error"`. Request values may be strings, numbers or
 booleans; multi-line values are strings with `\n`.
 
+Every reply also ends with `"store_mode"`: `"real"`, or `"training"` when the
+practice station answered it. Any request may carry `"expect_store"`
+(`real` or `training`): when the store in force is the other one (another
+screen turned training on or off), the call does nothing and is refused with
+`store_mismatch: true`, `expected`, and `store_mode` naming the store in
+force. `training` and `training_status` aren't held to it.
+
 ## What the Messages panel calls
 
 | To show or do | Call |
@@ -68,7 +75,9 @@ serves the kiosk screen, on 127.0.0.1 only, no TLS
 - Who may connect: the `Host` header must be `127.0.0.1:N` or `localhost:N`
   (else 403), and a WebSocket's `Origin`, when sent, must be
   `http://127.0.0.1:N` or `http://localhost:N` (else 403). A browser always
-  sends `Origin`; a local program may leave it out.
+  sends `Origin`. A request with no `Origin` is a local program, not a
+  page: it is taken only when it comes from this box itself (a loopback
+  peer) and refused with 403 from anywhere else.
 - At most 32 connections at once (503 beyond that).
 - In setup mode (no call yet) the screen's requests go through the setup
   calls above, so the first-run screen works in the kiosk too; when the call
@@ -1050,7 +1059,18 @@ with `decoded_note` "No key for this message on this station.") and
   station sent are refused.
 - `{"cmd":"mark_all","list":"pending|errors","state"}`: `state` is
   `processed` or `discarded` (default: processed for pending, discarded for
-  errors). Returns `marked`.
+  errors). Returns `marked` and `ids`, the ids it marked.
+- `{"cmd":"reply_draft","id"}`: a reply to a message received, filled in
+  for MSG-COMPOSE. Nothing is sent or stored. Returns `template` (GENADMIN
+  for ACP 127 traffic, FREE_FORM for chat and anything else), `procedure`
+  (the one the message came in, when the template takes it; empty for the
+  template's own), `to` (the original FM line, else the sender's call),
+  `to_station` (the call to send to over the air), `subject` (the
+  original's SUBJ line, as it was; empty when it had none), `prec` (the
+  original's), `values` (the same, by compose field key: `to`, `to_station`,
+  `prec`, `subj`, and `routing` for ACP 127 plaindress) and `in_reply_to`
+  (`id`, `from`, `subject`, `serial`). Pass `values` to `compose_check`
+  and `compose_send` as the form's starting values.
 
 ### qsl, tag, correct, export
 

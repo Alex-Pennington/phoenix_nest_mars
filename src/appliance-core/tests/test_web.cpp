@@ -15,6 +15,8 @@
 #include <string>
 #include <thread>
 #include <unistd.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
 
 using namespace pna;
 namespace fs = std::filesystem;
@@ -297,6 +299,43 @@ int main() {
         close_fd(w.fd);
     }
 
+    // The Origin rule (phoenix_nest_mars#3): no Origin header is taken from
+    // this box only. The port is bound to 127.0.0.1, so a peer from elsewhere
+    // can't be made here; the rule and the peer test are checked on their own.
+    {
+        CHECK(web::ws_origin_allowed(false, false, true));    // no Origin, from this box: taken
+        CHECK(!web::ws_origin_allowed(false, false, false));  // no Origin, from elsewhere: refused
+        CHECK(web::ws_origin_allowed(true, true, false));     // a page naming this port
+        CHECK(!web::ws_origin_allowed(true, false, true));    // a page elsewhere, even from this box
+        sockaddr_in a{};
+        a.sin_family = AF_INET;
+        a.sin_addr.s_addr = htonl(0x7f000001);
+        CHECK(web::addr_is_loopback(reinterpret_cast<sockaddr*>(&a)));
+        a.sin_addr.s_addr = htonl(0x7f0a0b0c);
+        CHECK(web::addr_is_loopback(reinterpret_cast<sockaddr*>(&a)));
+        a.sin_addr.s_addr = htonl(0x0a4d4d17);  // a LAN address
+        CHECK(!web::addr_is_loopback(reinterpret_cast<sockaddr*>(&a)));
+        a.sin_addr.s_addr = htonl(0xc0a80105);
+        CHECK(!web::addr_is_loopback(reinterpret_cast<sockaddr*>(&a)));
+        sockaddr_in6 b{};
+        b.sin6_family = AF_INET6;
+        b.sin6_addr = in6addr_loopback;
+        CHECK(web::addr_is_loopback(reinterpret_cast<sockaddr*>(&b)));
+        b.sin6_addr = in6addr_any;
+        b.sin6_addr.s6_addr[0] = 0xfe;
+        b.sin6_addr.s6_addr[1] = 0x80;
+        CHECK(!web::addr_is_loopback(reinterpret_cast<sockaddr*>(&b)));
+        CHECK(!web::addr_is_loopback(nullptr));
+        int sv[2];
+        CHECK(::socketpair(AF_UNIX, SOCK_STREAM, 0, sv) == 0);
+        CHECK(!web::peer_is_loopback(sv[0]));  // not an IP peer: not this box's loopback
+        ::close(sv[0]);
+        ::close(sv[1]);
+        int fd = tcp_connect("127.0.0.1", port, 2000);
+        CHECK(fd >= 0 && web::peer_is_loopback(fd));
+        close_fd(fd);
+    }
+
     // Handshake.
     {
         Ws w = ws_open(port);
@@ -305,7 +344,7 @@ int main() {
         w = ws_open(port, "Origin: http://localhost:%P\r\n");
         CHECK(code_of(w.head) == 101);
         close_fd(w.fd);
-        w = ws_open(port, "");  // no Origin: a local program, not a browser page
+        w = ws_open(port, "");  // no Origin: a local program on this box, not a browser page
         CHECK(code_of(w.head) == 101);
         close_fd(w.fd);
         for (const char* o : {"Origin: http://evil.example\r\n", "Origin: http://127.0.0.1:1\r\n",

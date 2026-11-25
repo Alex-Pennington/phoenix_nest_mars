@@ -18,6 +18,8 @@
 #include <string>
 #include <thread>
 
+#include <sys/socket.h>
+
 namespace pna {
 
 class WebServer {
@@ -89,6 +91,17 @@ enum class Got { Need, Frame, Error };
 Got read_frame(std::string& buf, Frame& f, size_t max, int* close_code);
 // A server frame: never masked.
 std::string make_frame(int op, const std::string& payload);
+// The WebSocket's Origin rule (phoenix_nest_mars#3): a browser page must
+// send an Origin naming this port on 127.0.0.1 or localhost. A request with
+// no Origin header at all is not a browser page; it is taken only when it
+// comes from this box itself (a loopback peer), and refused from anywhere
+// else, whatever address the port is later bound to.
+bool ws_origin_allowed(bool has_origin, bool origin_ok, bool peer_loopback);
+// True when the socket's peer is 127.0.0.0/8 or ::1 (an IPv4-mapped
+// 127.x address too).
+bool peer_is_loopback(int fd);
+bool addr_is_loopback(const ::sockaddr* sa);
+
 // A client frame (masked), for the tests.
 std::string make_client_frame(int op, const std::string& payload, bool fin = true, uint32_t mask = 0x1a2b3c4d);
 

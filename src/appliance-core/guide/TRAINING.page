@@ -20,6 +20,11 @@ While training is on:
    your real station keeps receiving underneath.
  - Keys are practice keys, made for training. Your real tapes and cards
    are never used.
+ - Resending stays in training too: a resend reaches the practice
+   station only, never the radio, and your real store doesn't change.
+ - If another screen on this box turns training on or off while you
+   work, your next action is not done. The screen tells you which store
+   is in force now; look, then do it again.
 
 Turn training off to go back. The practice store stays until you reload
 it, so you can pick up where you left off.

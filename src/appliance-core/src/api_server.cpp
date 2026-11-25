@@ -2616,7 +2616,48 @@ void ApiServer::client_loop(int fd) {
     close_fd(fd);
 }
 
+// The store a reply came from, put last in it (ok stays first).
+static std::string with_store_mode(const std::string& reply, const char* mode) {
+    if (reply.size() < 2 || reply[0] != '{' || reply.back() != '}') return reply;
+    std::string f = std::string("\"store_mode\":\"") + mode + "\"";
+    return reply == "{}" ? "{" + f + "}" : reply.substr(0, reply.size() - 1) + "," + f + "}";
+}
+
 std::string ApiServer::handle(Core& core, const std::string& line) {
+    std::map<std::string, std::string> req;
+    if (!parse_flat_object(line, req)) return with_store_mode(error_reply("request must be one flat JSON object"), "real");
+    const std::string cmd = req["cmd"];
+    // Turning training on or off is what changes the store, so it isn't held
+    // to the store a front end expects.
+    const bool toggle = cmd == "training" || cmd == "training_status";
+    const char* mode = training_for(core) ? "training" : "real";
+    auto it = req.find("expect_store");
+    if (!toggle && it != req.end() && !it->second.empty()) {
+        if (it->second != "real" && it->second != "training")
+            return with_store_mode(error_reply("expect_store is real or training"), mode);
+        if (it->second != mode) {
+            JsonWriter w;
+            w.begin_object()
+                .field("ok", false)
+                .field("error", std::string("training is ") + (std::string(mode) == "training" ? "on" : "off") +
+                                    " now, so this was answered from the " + mode +
+                                    " store: nothing was done. Look again and send it once more.")
+                .field("store_mismatch", true)
+                .field("expected", it->second)
+                .end_object();
+            return with_store_mode(w.str(), mode);
+        }
+    }
+    std::string reply = handle_call(core, line);
+    // Where it was answered: a call the practice station answered is marked
+    // so (mark_training), even if training changed while it ran. The
+    // toggle's own reply names the store now in force.
+    if (toggle) mode = training_for(core) ? "training" : "real";
+    else mode = reply.rfind("{\"training\":true", 0) == 0 ? "training" : "real";
+    return with_store_mode(reply, mode);
+}
+
+std::string ApiServer::handle_call(Core& core, const std::string& line) {
     std::map<std::string, std::string> req;
     if (!parse_flat_object(line, req)) return error_reply("request must be one flat JSON object");
     const std::string cmd = req["cmd"];
@@ -2662,7 +2703,7 @@ std::string ApiServer::handle(Core& core, const std::string& line) {
             if (auto r = handle_guide(core, cmd, req, true)) return mark_training(*r);
         std::string why = training_refuses(cmd, req);
         if (!why.empty()) return mark_training(error_reply(why));
-        return mark_training(handle(t->core(), line));
+        return mark_training(handle_call(t->core(), line));
     }
 
     if (auto r = handle_forms(core, cmd, req)) return *r;

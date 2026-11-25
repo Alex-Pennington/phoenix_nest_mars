@@ -92,7 +92,7 @@ std::optional<std::string> handle_guide(Core& core, const std::string& cmd, std:
         JsonWriter q;
         q.begin_object().field("cmd", "compose_form").field("template", id).end_object();
         JsonValue v;
-        if (!parse_json(ApiServer::handle(core, q.str()), v)) return out;
+        if (!parse_json(ApiServer::handle_call(core, q.str()), v)) return out;
         const JsonValue* f = v.get("fields");
         if (!f || !f->is_array()) return out;
         for (auto& x : f->arr) {

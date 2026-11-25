@@ -229,6 +229,8 @@ int main() {
     // ---- mark_all ----
     JsonValue ma_err = call(a, {{"cmd", "mark_all"}, {"list", "errors"}});
     CHECK(ok(ma_err) && num(ma_err, "marked") == 1 && str(ma_err, "state") == "discarded");
+    // The ids it marked come back (phoenix_nest_mars#3).
+    CHECK(len(ma_err, "ids") == 1 && at(ma_err, "ids", 0).s == garbled);
     CHECK(num(call(a, {{"cmd", "pending"}}), "errors_count") == 0);
     CHECK(!ok(call(a, {{"cmd", "mark_all"}, {"list", "everything"}})));
 
@@ -443,6 +445,38 @@ int main() {
         for (auto& ev : a.events(0, 2000))
             if (ev.text.rfind("purged ", 0) == 0) said = true;
         CHECK(said);
+    }
+
+    // ---- reply_draft (phoenix_nest_mars#3): to and subject filled in, nothing sent ----
+    {
+        const size_t out_before = c.list(1000).size() + a.list(1000).size();
+        JsonValue rd = call(a, {{"cmd", "reply_draft"}, {"id", s31}});
+        CHECK(ok(rd));
+        CHECK(str(rd, "to_station") == "AAR9AA" && str(rd, "to") == "AAR9AA");
+        CHECK(str(rd, "template") == "GENADMIN");
+        CHECK(rd.get("values") && str(*rd.get("values"), "to") == "AAR9AA");
+        CHECK(rd.get("in_reply_to") && str(*rd.get("in_reply_to"), "id") == s31);
+        CHECK(!ok(call(a, {{"cmd", "reply_draft"}, {"id", "NOPE-1"}})));
+        // A message with a subject and an FM line.
+        CHECK(!c.submit("AAM497", 'P',
+                        "VZCZC\r\nPP AAM497 DE AAR7ZZ #0025 3291300\r\nZNR UUUUU\r\nP 251300Z NOV 26\r\n"
+                        "FM MARS STATION AAR7ZZ\r\nTO MARS STATION AAM497\r\nBT\r\nUNCLAS\r\n"
+                        "MSGID/GENADMIN/AAR7ZZ/25//\r\nSUBJ/NET SCHEDULE CHANGE//\r\nRMKS/SEE YOU THERE//\r\nBT\r\n#0025\r\nNNNN\r\n",
+                        &e)
+                    .empty());
+        std::string s25;
+        CHECK(wait_for([&] {
+            s25 = id_by_serial(call(a, {{"cmd", "list"}, {"dir", "in"}, {"include_processed", "Y"}}), "0025");
+            return !s25.empty();
+        }));
+        JsonValue r2 = call(a, {{"cmd", "reply_draft"}, {"id", s25}});
+        CHECK(ok(r2) && str(r2, "subject") == "NET SCHEDULE CHANGE");
+        CHECK(str(r2, "to_station") == "AAR7ZZ" && str(r2, "to") == "MARS STATION AAR7ZZ");
+        CHECK(r2.get("values") && str(*r2.get("values"), "subj") == "NET SCHEDULE CHANGE");
+        CHECK(str(r2, "prec") == "P");
+        // The draft opens in compose and checks there.
+        CHECK(ok(call(a, {{"cmd", "compose_form"}, {"template", str(r2, "template")}, {"procedure", str(r2, "procedure")}})));
+        CHECK(c.list(1000).size() + a.list(1000).size() == out_before + 2);  // only the one C sent, at each end
     }
 
     a.stop();

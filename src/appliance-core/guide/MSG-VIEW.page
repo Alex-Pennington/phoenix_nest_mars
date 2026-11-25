@@ -2,8 +2,9 @@ PAGE MSG-VIEW
 TITLE Reading a message
 KIND screen
 SCREENS MSG-VIEW
-HELP Left/Right tabs  k QSL  x processed  t tag  T transmit  ? guide
+HELP Left/Right tabs  r reply  k QSL  x processed  t tag  T transmit  ? guide
 KEY Left/Right Moves between the tabs: TEXT, DECODED, EVENTS, PROPS.
+KEY r Replies: opens Compose with To, Subject and precedence filled in from this message.
 KEY k QSL it.
 KEY x Marks it processed.
 KEY d Discards it.
@@ -19,6 +20,9 @@ message in the clear, when this station holds the key; otherwise it says
 there is no key here. EVENTS is its history, oldest first. PROPS lists
 precedence, key name (never the key itself), source, destination, ALE
 address, data rate and checksum.
+
+r starts a reply. Compose opens with the sender as To and the original
+Subject; you write the text. Nothing goes out until you send it there.
 
 T is the only key on this screen that transmits. It names the route and
 asks first. While EMCON is on, nothing goes out.

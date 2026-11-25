@@ -17,6 +17,7 @@
 #include <sstream>
 #include <vector>
 
+#include <netinet/in.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/time.h>
@@ -42,6 +43,32 @@ std::string canonical(const std::string& p) {
 }
 
 }  // namespace
+
+bool ws_origin_allowed(bool has_origin, bool origin_ok, bool peer_loopback) {
+    if (has_origin) return origin_ok;
+    return peer_loopback;
+}
+
+bool addr_is_loopback(const sockaddr* sa) {
+    if (!sa) return false;
+    if (sa->sa_family == AF_INET) {
+        const auto* a = reinterpret_cast<const sockaddr_in*>(sa);
+        return (ntohl(a->sin_addr.s_addr) >> 24) == 127;
+    }
+    if (sa->sa_family == AF_INET6) {
+        const auto* a = reinterpret_cast<const sockaddr_in6*>(sa);
+        if (IN6_IS_ADDR_LOOPBACK(&a->sin6_addr)) return true;
+        return IN6_IS_ADDR_V4MAPPED(&a->sin6_addr) && a->sin6_addr.s6_addr[12] == 127;
+    }
+    return false;
+}
+
+bool peer_is_loopback(int fd) {
+    sockaddr_storage ss{};
+    socklen_t len = sizeof ss;
+    if (::getpeername(fd, reinterpret_cast<sockaddr*>(&ss), &len) != 0) return false;
+    return addr_is_loopback(reinterpret_cast<const sockaddr*>(&ss));
+}
 
 bool resolve(const std::string& root_real, const std::string& target, std::string& file) {
     if (root_real.empty() || target.empty() || target[0] != '/') return false;
@@ -447,7 +474,10 @@ void WebServer::serve(int fd) {
     } else if (method != "GET") {
         send_plain(fd, 404);
     } else if (target.substr(0, target.find('?')) == "/ws") {
-        if (h.count("origin") && !origin_ok(h["origin"])) send_plain(fd, 403);
+        // A page must name this port; no Origin at all: this box only.
+        if (!web::ws_origin_allowed(h.count("origin") > 0, h.count("origin") && origin_ok(h["origin"]),
+                                    web::peer_is_loopback(fd)))
+            send_plain(fd, 403);
         else if (lower(h["upgrade"]) != "websocket" || !has_token(h["connection"], "upgrade")) send_plain(fd, 400);
         else if (h["sec-websocket-version"] != "13") send_plain(fd, 426, "Sec-WebSocket-Version: 13\r\n");
         else {

@@ -840,7 +840,10 @@ std::string mark_all(Core& core, Db& db, std::map<std::string, std::string>& req
     core.note("in box: " + std::to_string(got.size()) + " message(s) on the " + list + " list marked " + st +
               " by the operator");
     JsonWriter w;
-    w.begin_object().field("ok", true).field("marked", static_cast<int>(got.size())).field("state", st).end_object();
+    // The ids marked, so a screen can update its rows without reading the list again.
+    w.begin_object().field("ok", true).field("marked", static_cast<int>(got.size())).field("state", st).begin_array("ids");
+    for (auto& it : got) w.field("", it.row.m.id);
+    w.end_array().end_object();
     return w.str();
 }
 
@@ -1036,6 +1039,92 @@ std::string correct(Core& core, Db& db, std::map<std::string, std::string>& req)
                                              : "corrected copy saved by the operator; the message as received is kept");
     JsonWriter w;
     w.begin_object().field("ok", true).field("id", r->m.id).field("corrected", !trim(body).empty()).end_object();
+    return w.str();
+}
+
+// reply_draft: a reply to a message received, filled in for MSG-COMPOSE.
+// Nothing is sent and nothing is stored: the screen opens the compose form
+// with these values and the operator writes the text.
+std::string strip_cm(std::string c) {
+    c = upper(first_word(c));
+    if (c.size() > 3 && c.compare(c.size() - 3, 3, "-CM") == 0) c.resize(c.size() - 3);
+    return c;
+}
+
+std::string subject_of(const std::vector<std::string>& text) {
+    for (auto& l : text) {
+        std::string u = trim(l);
+        std::string up = upper(u);
+        if (up.compare(0, 5, "SUBJ/") == 0 || up.compare(0, 5, "SUBJ:") == 0) {
+            std::string v = trim(u.substr(5));
+            while (!v.empty() && v.back() == '/') v.pop_back();
+            return trim(v);
+        }
+    }
+    return "";
+}
+
+std::string reply_draft(Core& core, Db& db, std::map<std::string, std::string>& req) {
+    std::string why;
+    auto r = incoming(db, req["id"], &why);
+    if (!r) return err_reply(why);
+    std::map<std::string, std::string> v;
+    std::string tmpl = "GENADMIN", proc, subject, to_station;
+    received::Message rm;
+    acp201::Chat chat;
+    const std::string first_line = r->m.body.substr(0, r->m.body.find_first_of("\r\n"));
+    if (received::parse(r->m.body, rm, nullptr)) {
+        to_station = strip_cm(rm.originator.empty() ? r->m.src : rm.originator);
+        std::string to;
+        if (!rm.from.ri.empty() && !rm.from.plain.empty()) to = rm.from.ri + "/" + rm.from.plain;
+        else to = !rm.from.ri.empty() ? rm.from.ri : rm.from.plain;
+        if (to.empty()) to = to_station;
+        proc = received::procedure(rm);
+        if (proc == "ACP127_CODRESS") proc.clear();  // a reply goes in the clear unless the operator picks a key
+        subject = subject_of(rm.text);
+        v["to"] = to;
+        v["to_station"] = to_station;
+        if (proc == "ACP127_PLAINDRESS" && !rm.originator.empty()) v["routing"] = first_word(rm.originator);
+        if (rm.prec) v["prec"] = std::string(1, rm.prec);
+    } else if (acp201::parse(first_line, chat, nullptr)) {
+        tmpl = "FREE_FORM";
+        proc = "ACP201_CHAT";
+        to_station = strip_cm(chat.from.empty() ? r->m.src : chat.from);
+        v["to"] = to_station;
+        v["to_station"] = to_station;
+    } else {
+        tmpl = "FREE_FORM";
+        to_station = strip_cm(r->m.src);
+        v["to"] = to_station;
+        v["to_station"] = to_station;
+    }
+    if (v["prec"].empty()) v["prec"] = std::string(1, r->m.prec ? r->m.prec : 'R');
+    // Only a procedure the template takes; else the template's own.
+    compose::Context ctx;
+    ctx.station = core.station();
+    std::string err;
+    if (!proc.empty() && compose::form(tmpl, proc, ctx, &err).empty()) proc.clear();
+    if (tmpl == "GENADMIN") v["subj"] = subject;
+    JsonWriter w;
+    w.begin_object()
+        .field("ok", true)
+        .field("id", r->m.id)
+        .field("template", tmpl)
+        .field("procedure", proc)
+        .field("to", v["to"])
+        .field("to_station", to_station)
+        .field("subject", subject)
+        .field("prec", v["prec"]);
+    w.begin_object("values");
+    for (auto& [k, x] : v) w.field(k, x);
+    w.end_object();
+    w.begin_object("in_reply_to")
+        .field("id", r->m.id)
+        .field("from", to_station)
+        .field("subject", subject)
+        .field("serial", rm.serial)
+        .end_object();
+    w.end_object();
     return w.str();
 }
 
@@ -1544,7 +1633,8 @@ void write_inbox_extras(JsonWriter& w, Core& core, const Message& m, bool read) 
 
 std::optional<std::string> handle_inbox(Core& core, const std::string& cmd, std::map<std::string, std::string>& req) {
     static const std::set<std::string> calls = {"pending", "mark",   "mark_all", "qsl",    "export", "retransmit",
-                                                "tag",     "correct", "search",  "report", "activity_counters", "purge"};
+                                                "tag",     "correct", "search",  "report", "activity_counters", "purge",
+                                                "reply_draft"};
     const bool list_in = cmd == "list" && req.count("dir");
     const bool log_stream_call = cmd == "log" && req.count("stream");
     if (!calls.count(cmd) && !list_in && !log_stream_call) return std::nullopt;
@@ -1563,6 +1653,7 @@ std::optional<std::string> handle_inbox(Core& core, const std::string& cmd, std:
         if (cmd == "search") return search(core, db, req);
         if (cmd == "activity_counters") return activity_counters(core, db);
         if (cmd == "purge") return purge(core, db, req);
+        if (cmd == "reply_draft") return reply_draft(core, db, req);
         return report(core, db, req);
     } catch (const std::exception& e) {
         return err_reply(e.what());

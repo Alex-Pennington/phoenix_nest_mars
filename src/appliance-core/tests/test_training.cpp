@@ -108,6 +108,79 @@ static void toggle_with_others_open(Station& s) {
     CHECK(ok(call(core, {{"cmd", "training"}, {"on", "N"}})));
 }
 
+static std::string str(const JsonValue& v, const char* k) {
+    const JsonValue* x = v.get(k);
+    return x && x->type == JsonValue::Type::String ? x->s : std::string();
+}
+
+// Every reply names its store; a front end that expected the other store is
+// refused and nothing is done (phoenix_nest_mars#3, per-connection training).
+static void store_mode(Station& s) {
+    Core& core = *s.core;
+    JsonValue st = call(core, {{"cmd", "status"}});
+    CHECK(ok(st) && str(st, "store_mode") == "real");
+    CHECK(ok(call(core, {{"cmd", "status"}, {"expect_store", "real"}})));
+    JsonValue bad = call(core, {{"cmd", "status"}, {"expect_store", "sideways"}});
+    CHECK(!ok(bad) && str(bad, "store_mode") == "real");
+    // Another connection turns training on.
+    JsonValue on = call(core, {{"cmd", "training"}, {"on", "Y"}});
+    CHECK(ok(on) && str(on, "store_mode") == "training");
+    // This one still thinks it is on the real store: its send is refused.
+    const size_t real_before = core.list(1000).size();
+    JsonValue r = call(core, {{"cmd", "send"}, {"to", "STA-X"}, {"body", "MEANT FOR THE AIR"}, {"expect_store", "real"}});
+    CHECK(!ok(r) && str(r, "store_mode") == "training");
+    CHECK(r.get("store_mismatch") && r.get("store_mismatch")->b);
+    CHECK(core.list(1000).size() == real_before);
+    JsonValue tl = call(core, {{"cmd", "list"}, {"expect_store", "training"}});
+    CHECK(ok(tl) && str(tl, "store_mode") == "training");
+    // Guide replies too.
+    CHECK(str(call(core, {{"cmd", "status"}}), "store_mode") == "training");
+    JsonValue off = call(core, {{"cmd", "training"}, {"on", "N"}});
+    CHECK(ok(off) && str(off, "store_mode") == "real");
+    r = call(core, {{"cmd", "list"}, {"expect_store", "training"}});
+    CHECK(!ok(r) && str(r, "store_mode") == "real");
+}
+
+// Resend while training is on reaches the training store only: the real
+// radio's far end hears nothing and the real store doesn't change
+// (phoenix_nest_mars#3).
+static void resend_in_training(Station& s) {
+    Core& core = *s.core;
+    std::this_thread::sleep_for(std::chrono::milliseconds(300));
+    const size_t heard_before = s.heard.load();
+    auto real_rows = [&] {
+        std::string all;
+        for (auto& m : core.list(1000)) all += m.id + ":" + m.state + ":" + std::to_string(m.attempts) + ";";
+        return all;
+    };
+    const std::string real_before = real_rows();
+    CHECK(ok(call(core, {{"cmd", "training"}, {"on", "Y"}})));
+    JsonValue in = call(core, {{"cmd", "list"}, {"dir", "in"}, {"include_processed", "Y"}});
+    std::vector<std::string> ids;
+    if (const JsonValue* a = in.get("messages"))
+        for (auto& m : a->arr) ids.push_back(str(m, "id"));
+    CHECK(!ids.empty());
+    int tried = 0;
+    for (size_t i = 0; i < ids.size() && i < 3; ++i) {
+        JsonValue r = call(core, {{"cmd", "retransmit"}, {"id", ids[i]}, {"to", "STA-X"}, {"confirm", "Y"}});
+        CHECK(str(r, "store_mode") == "training");
+        tried += ok(r);
+    }
+    CHECK(tried > 0);
+    // The out box's own resends, in training.
+    JsonValue out = call(core, {{"cmd", "list"}});
+    if (const JsonValue* a = out.get("messages"))
+        for (auto& m : a->arr) call(core, {{"cmd", "requeue"}, {"id", str(m, "id")}});
+    call(core, {{"cmd", "parts_queue_send"}, {"confirm", "Y"}});
+    std::this_thread::sleep_for(std::chrono::seconds(2));
+    CHECK(s.heard.load() == heard_before);  // 0 bytes on the real radio
+    CHECK(real_rows() == real_before);      // the real store as it was
+    CHECK(ok(call(core, {{"cmd", "training"}, {"on", "N"}})));
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    CHECK(s.heard.load() == heard_before);
+    CHECK(real_rows() == real_before);
+}
+
 int main() {
     fs::path dir = fs::temp_directory_path() / ("pna_training_" + std::to_string(::getpid()));
     fs::remove_all(dir);
@@ -116,6 +189,8 @@ int main() {
         Station s;
         make_station(dir, s);
         toggle_with_others_open(s);
+        store_mode(s);
+        resend_in_training(s);
         s.core->stop();
         s.far->stop();
     }

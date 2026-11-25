@@ -17,7 +17,7 @@ namespace {
 
 JsonValue call(Core& core, const std::string& line) {
     JsonValue v;
-    parse_json(ApiServer::handle(core, line), v);
+    parse_json(ApiServer::handle_call(core, line), v);
     return v;
 }
 // A reply kept for the length of a loop over it (a temporary would be gone
@@ -216,7 +216,7 @@ std::optional<std::string> handle_forms(Core& core, const std::string& cmd, std:
     forms::Context ctx;
     ctx.choices = [&](const std::string& src) { return choices(core, lib, src); };
     ctx.prefill = [&](const std::string& kind, const std::string& key) { return prefill(core, lib, kind, key); };
-    ctx.run = [&](const std::string& line) { return ApiServer::handle(core, line); };
+    ctx.run = [&](const std::string& line) { return ApiServer::handle_call(core, line); };
     // The station is set up: SETUP is done.
     std::vector<std::string> ids;
     for (auto& e : lib.list())

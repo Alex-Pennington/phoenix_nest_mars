@@ -32,7 +32,7 @@ std::string call_api(Core& c, std::initializer_list<std::pair<std::string, std::
     w.begin_object();
     for (auto& [k, v] : kv) w.field(k, v);
     w.end_object();
-    return ApiServer::handle(c, w.str());
+    return ApiServer::handle_call(c, w.str());
 }
 bool reply_ok(const std::string& reply, JsonValue* out = nullptr) {
     JsonValue v;
@@ -218,7 +218,7 @@ bool Training::fill(std::string* error) {
         w.begin_object();
         for (auto& [k, x] : r) w.field(k, x);
         w.end_object();
-        return reply_ok(ApiServer::handle(*ncs_, w.str()));
+        return reply_ok(ApiServer::handle_call(*ncs_, w.str()));
     };
     auto from_ncs = [&] {
         int got = 0;

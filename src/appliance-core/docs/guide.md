@@ -104,6 +104,18 @@ The practice station:
 The real station keeps running underneath: it receives and acknowledges as
 always, and `training_status` shows its counts in `real`.
 
+Resending in training stays in training: `retransmit`, `requeue`,
+`parts_queue_send` and every other resend reach the practice store and
+TRAIN-NCS only. The real radio hears nothing and the real store doesn't
+change (test_training checks both).
+
+Every reply names its store in `store_mode`: `"real"` or `"training"`. A
+screen that may share the core with another one (gale-web in the kiosk and
+on a laptop) sends `"expect_store"` with the store it is showing. If another
+screen has turned training on or off since, the call is refused with
+`store_mismatch: true` and the store now in force, and nothing is done: the
+screen shows the change and asks again.
+
 Training refuses what would reach outside the practice copy: writing files
 (`out`), reading files in (`file`; its material is built in), and
 `station_backup`, `station_restore`, `cipher_install`, `cipher_remove`.
