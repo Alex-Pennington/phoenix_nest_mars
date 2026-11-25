@@ -13,6 +13,8 @@
 #include "../src/loopback_modem.h"
 #include "check.h"
 
+#include <sqlite3.h>
+
 #include <chrono>
 #include <ctime>
 #include <filesystem>
@@ -392,6 +394,56 @@ int main() {
     CHECK(!ok(call(a, {{"cmd", "report"}, {"kind", "station_log"}, {"from", "2026-11-10"}, {"to", "2026-11-01"}})));
     JsonValue old = call(a, {{"cmd", "report"}, {"kind", "station_log"}, {"from", "2020-01-01"}, {"to", "2020-01-02"}});
     CHECK(ok(old) && str(old, "text").find("NOTHING LOGGED") != std::string::npos);
+
+    // ---- purge: old processed/discarded and finished outgoing; dry run first ----
+    CHECK(ok(call(a, {{"cmd", "mark"}, {"id", s21}, {"state", "processed"}})));  // QSL'd above
+    CHECK(wait_for([&] {
+        for (auto& m : a.list(100))
+            if (m.direction == "out" && (m.state == "queued" || m.state == "sending")) return false;
+        return true;
+    }, 15000));
+    {
+        sqlite3* db = nullptr;
+        CHECK(sqlite3_open((dir / "a.db").string().c_str(), &db) == SQLITE_OK);
+        sqlite3_busy_timeout(db, 2000);
+        const std::string old = std::to_string(static_cast<long long>(std::time(nullptr)) - 40 * 86400);
+        CHECK(sqlite3_exec(db, ("UPDATE inbox_flags SET done_at = " + old + " WHERE done <> ''").c_str(), nullptr,
+                           nullptr, nullptr) == SQLITE_OK);
+        CHECK(sqlite3_exec(db, ("UPDATE messages SET created_at = " + old + ", updated_at = " + old).c_str(), nullptr,
+                           nullptr, nullptr) == SQLITE_OK);
+        sqlite3_close(db);
+    }
+    int finished_out = 0, owed_out = 0;
+    for (auto& m : a.list(100)) {
+        if (m.direction != "out") continue;
+        if (m.state == "acked" || m.state == "cancelled" || m.state == "failed" || m.state == "expired") ++finished_out;
+        if (m.state == "sent") ++owed_out;
+    }
+    JsonValue pd = call(a, {{"cmd", "purge"}});
+    CHECK(ok(pd) && flag(pd, "dry_run"));
+    CHECK(num(pd, "days") == 30);
+    CHECK(num(pd, "in") == 2);  // the discarded garbled one and s21 (processed, QSL'd)
+    CHECK(num(pd, "out") == finished_out);
+    CHECK(num(pd, "purged") == 0);
+    CHECK(pd.get("kept") && num(*pd.get("kept"), "owed_qsl") == 1 + owed_out);  // s22: processed, never QSL'd
+    CHECK(pd.get("kept") && num(*pd.get("kept"), "pending") >= 2);             // s23 and s31: never marked
+    CHECK(ok(call(a, {{"cmd", "get"}, {"id", garbled}})));  // the dry run took nothing
+    CHECK(num(call(a, {{"cmd", "purge"}, {"days", "60"}}), "count") == 0);
+    CHECK(!ok(call(a, {{"cmd", "purge"}, {"days", "0"}})));
+    JsonValue pr = call(a, {{"cmd", "purge"}, {"dry_run", "N"}});
+    CHECK(ok(pr) && !flag(pr, "dry_run") && num(pr, "purged") == num(pd, "count"));
+    CHECK(!ok(call(a, {{"cmd", "get"}, {"id", garbled}})));
+    CHECK(!ok(call(a, {{"cmd", "get"}, {"id", s21}})));
+    CHECK(ok(call(a, {{"cmd", "get"}, {"id", s22}})));  // owed a QSL: kept
+    CHECK(ok(call(a, {{"cmd", "get"}, {"id", s31}})));  // pending: kept
+    CHECK(num(call(a, {{"cmd", "activity_counters"}}), "purged_session") == num(pr, "purged"));
+    CHECK(num(call(a, {{"cmd", "purge"}}), "count") == 0);
+    {
+        bool said = false;
+        for (auto& ev : a.events(0, 2000))
+            if (ev.text.rfind("purged ", 0) == 0) said = true;
+        CHECK(said);
+    }
 
     a.stop();
     b.stop();

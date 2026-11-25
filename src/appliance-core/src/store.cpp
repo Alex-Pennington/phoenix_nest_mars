@@ -148,6 +148,11 @@ std::optional<Message> Store::get(const std::string& id) {
     return row(s);
 }
 
+void Store::remove(const std::string& id) {
+    Stmt(db_, "DELETE FROM messages WHERE id = ?").bind(1, id).step();
+    Stmt(db_, "DELETE FROM clear WHERE id = ?").bind(1, id).step();
+}
+
 std::vector<Message> Store::list(int limit) {
     Stmt s(db_, (std::string("SELECT ") + kCols +
                  " FROM messages ORDER BY updated_at DESC, rowid DESC LIMIT ?")

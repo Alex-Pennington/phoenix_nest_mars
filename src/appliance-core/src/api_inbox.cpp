@@ -2,6 +2,7 @@
 
 #include "acp127.h"
 #include "acp201.h"
+#include "bbs.h"
 #include "cipher_slot.h"
 #include "codress.h"
 #include "compose.h"
@@ -89,6 +90,7 @@ public:
         exec("CREATE TABLE IF NOT EXISTS inbox_flags (msg_id TEXT PRIMARY KEY, read_at INTEGER NOT NULL DEFAULT 0,"
              " done TEXT NOT NULL DEFAULT '', done_at INTEGER NOT NULL DEFAULT 0, qsl_at INTEGER NOT NULL DEFAULT 0,"
              " tag TEXT NOT NULL DEFAULT '', corrected BLOB, corrected_at INTEGER NOT NULL DEFAULT 0)");
+        exec("CREATE TABLE IF NOT EXISTS inbox_purge (at INTEGER NOT NULL, count INTEGER NOT NULL)");
     }
     ~Db() { sqlite3_close(db_); }
     Db(const Db&) = delete;
@@ -1199,6 +1201,8 @@ std::string activity_counters(Core&, Db& db) {
                          [&](Stmt& s) { s.bind(1, seq); });
     int64_t processed = count("SELECT COUNT(*) FROM inbox_flags WHERE done = 'processed' AND done_at >= ?",
                               [&](Stmt& s) { s.bind(1, ts); });
+    int64_t purged = count("SELECT COALESCE(SUM(count), 0) FROM inbox_purge WHERE at >= ?",
+                           [&](Stmt& s) { s.bind(1, ts); });
     int64_t routes = db.has("bbs_rule") ? count("SELECT COUNT(*) FROM bbs_rule", [](Stmt&) {}) : 0;
     bool routing = false;
     if (db.has("bbs_meta")) {
@@ -1215,8 +1219,7 @@ std::string activity_counters(Core&, Db& db) {
         .field("received_session", static_cast<int>(received))
         .field("processed_session", static_cast<int>(processed))
         .field("duplicates_session", static_cast<int>(dups))
-        .field("purged_session", 0)
-        .field("purge", "not built yet: nothing is deleted from the store")
+        .field("purged_session", static_cast<int>(purged))
         .end_object();
     return w.str();
 }
@@ -1358,6 +1361,135 @@ std::string report(Core& core, Db& db, std::map<std::string, std::string>& req) 
     return w.str();
 }
 
+
+// Old traffic out of the store (BBS-SETUP: purge processed/discarded after N
+// days). In box: processed or discarded, marked longer ago than the age.
+// Out box: acked, cancelled, failed or expired, last changed longer ago.
+// Never: anything still pending, a sent message still waiting for its ack or
+// QSL, plain traffic this station hasn't QSL'd, routed traffic not yet sent,
+// a message on a QRU list just given, or a sent part a resend may need.
+// A dry run (the default) only says what would go.
+std::string purge(Core& core, Db& db, std::map<std::string, std::string>& req) {
+    const bool dry_run = req["dry_run"].empty() || truthy(req["dry_run"]);
+    int days = bbs::engine(core).settings().purge_days;
+    bool bad = false;
+    days = int_of(req, "days", days, 1, 3650, &bad);
+    if (bad) return err_reply("days must be 1 to 3650");
+    const int64_t now = now_s(), cutoff = now - static_cast<int64_t>(days) * 86400;
+    auto flags = load_flags(db);
+    std::set<std::string> routing_due, on_qru, part_sent;
+    if (db.has("bbs_routed")) {
+        Stmt s(db.get(), "SELECT msg_id FROM bbs_routed WHERE state = 'due'");
+        while (s.step()) routing_due.insert(s.text(0));
+    }
+    if (db.has("bbs_qru")) {
+        Stmt s(db.get(), "SELECT msg_id FROM bbs_qru");
+        while (s.step()) on_qru.insert(s.text(0));
+    }
+    if (db.has("part_asks")) {
+        Stmt s(db.get(), "SELECT sent_id FROM part_asks WHERE sent_id <> ''");
+        while (s.step()) part_sent.insert(s.text(0));
+    }
+    auto qsl_answered = [&](const std::string& id) {
+        Stmt s(db.get(), "SELECT 1 FROM events WHERE text LIKE ? LIMIT 1");
+        s.bind(1, "%(QSL " + id + ")%");
+        return s.step();
+    };
+    struct Pick {
+        std::string id, dir, state;
+        int64_t age_days;
+    };
+    std::vector<Pick> picks;
+    std::map<std::string, int> kept;
+    each_row(db, "in", 0, [&](const Row& r) {
+        auto fi = flags.find(r.m.id);
+        const Flags f = fi == flags.end() ? Flags{} : fi->second;
+        if (f.done.empty()) {
+            if (r.m.created_at < cutoff) ++kept["pending"];
+            return true;
+        }
+        if (f.done_at >= cutoff) return true;
+        if (routing_due.count(r.m.id)) {
+            ++kept["routing_due"];
+            return true;
+        }
+        if (on_qru.count(r.m.id)) {
+            ++kept["on_qru"];
+            return true;
+        }
+        if (f.done == "processed" && r.m.state == "received" && r.m.id.compare(0, 6, "PLAIN-") == 0 && !f.qsl_at &&
+            !qsl_answered(r.m.id)) {
+            ++kept["owed_qsl"];
+            return true;
+        }
+        picks.push_back({r.m.id, "in", f.done, (now - f.done_at) / 86400});
+        return true;
+    });
+    each_row(db, "out", 0, [&](const Row& r) {
+        if (r.m.updated_at >= cutoff) return true;
+        const auto& st = r.m.state;
+        if (st == "sent") {
+            ++kept["owed_qsl"];
+            return true;
+        }
+        if (st != "acked" && st != "cancelled" && st != "failed" && st != "expired") {
+            ++kept["pending"];
+            return true;
+        }
+        if (part_sent.count(r.m.id)) {
+            ++kept["part_resend"];
+            return true;
+        }
+        picks.push_back({r.m.id, "out", st, (now - r.m.updated_at) / 86400});
+        return true;
+    });
+    int n_in = 0, n_out = 0;
+    for (auto& p : picks) (p.dir == "in" ? n_in : n_out)++;
+    int purged = 0;
+    if (!dry_run && !picks.empty()) {
+        std::vector<std::string> ids;
+        for (auto& p : picks) ids.push_back(p.id);
+        purged = core.purge(ids, "older than " + std::to_string(days) + " days (in box " + std::to_string(n_in) +
+                                     ", out box " + std::to_string(n_out) + "), by the operator");
+        db.exec("BEGIN");
+        try {
+            for (auto& id : ids) {
+                Stmt(db.get(), "DELETE FROM inbox_flags WHERE msg_id = ?").bind(1, id).step();
+                if (db.has("bbs_routed")) Stmt(db.get(), "DELETE FROM bbs_routed WHERE msg_id = ?").bind(1, id).step();
+            }
+            Stmt(db.get(), "INSERT INTO inbox_purge (at, count) VALUES (?, ?)").bind(1, now).bind(2, static_cast<int64_t>(purged)).step();
+            db.exec("COMMIT");
+        } catch (...) {
+            db.exec("ROLLBACK");
+            throw;
+        }
+    }
+    bool bad_limit = false;
+    int limit = int_of(req, "limit", 200, 1, 5000, &bad_limit);
+    JsonWriter w;
+    w.begin_object()
+        .field("ok", true)
+        .field("dry_run", dry_run)
+        .field("days", days)
+        .field("count", static_cast<int>(picks.size()))
+        .field("in", n_in)
+        .field("out", n_out)
+        .field("purged", purged);
+    w.begin_object("kept");
+    for (const char* k : {"pending", "owed_qsl", "routing_due", "on_qru", "part_resend"}) w.field(k, kept[k]);
+    w.end_object();
+    w.begin_array("items");
+    for (size_t i = 0; i < picks.size() && static_cast<int>(i) < limit; ++i)
+        w.begin_object()
+            .field("id", picks[i].id)
+            .field("direction", picks[i].dir)
+            .field("state", picks[i].state)
+            .field("age_days", static_cast<long long>(picks[i].age_days))
+            .end_object();
+    w.end_array().end_object();
+    return w.str();
+}
+
 }  // namespace
 
 void write_inbox_extras(JsonWriter& w, Core& core, const Message& m, bool read) {
@@ -1412,7 +1544,7 @@ void write_inbox_extras(JsonWriter& w, Core& core, const Message& m, bool read) 
 
 std::optional<std::string> handle_inbox(Core& core, const std::string& cmd, std::map<std::string, std::string>& req) {
     static const std::set<std::string> calls = {"pending", "mark",   "mark_all", "qsl",    "export", "retransmit",
-                                                "tag",     "correct", "search",  "report", "activity_counters"};
+                                                "tag",     "correct", "search",  "report", "activity_counters", "purge"};
     const bool list_in = cmd == "list" && req.count("dir");
     const bool log_stream_call = cmd == "log" && req.count("stream");
     if (!calls.count(cmd) && !list_in && !log_stream_call) return std::nullopt;
@@ -1430,6 +1562,7 @@ std::optional<std::string> handle_inbox(Core& core, const std::string& cmd, std:
         if (cmd == "correct") return correct(core, db, req);
         if (cmd == "search") return search(core, db, req);
         if (cmd == "activity_counters") return activity_counters(core, db);
+        if (cmd == "purge") return purge(core, db, req);
         return report(core, db, req);
     } catch (const std::exception& e) {
         return err_reply(e.what());

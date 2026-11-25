@@ -297,6 +297,19 @@ void Core::note_on(const std::string& msg_id, const std::string& text) {
     log(msg_id, text);
 }
 
+int Core::purge(const std::vector<std::string>& ids, const std::string& why) {
+    std::lock_guard<std::mutex> g(mu_);
+    int n = 0;
+    for (auto& id : ids) {
+        if (!store_.exists(id)) continue;
+        store_.remove(id);
+        told_waiting_.erase(id);
+        ++n;
+    }
+    log("", "purged " + std::to_string(n) + " message(s): " + why);
+    return n;
+}
+
 std::optional<std::pair<std::string, std::string>> Core::clear(const std::string& id) {
     std::lock_guard<std::mutex> g(mu_);
     return store_.clear(id);

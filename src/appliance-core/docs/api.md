@@ -817,7 +817,7 @@ answered later.
 | `zee_max_bytes` | 0 | 0: worked out from `data_rate_bps` x `duty_s` / 8 (256 to 8192) |
 | `data_rate_bps`, `duty_s` | 600, 120 | for that |
 | `remote_sync` | false | refused either way for now |
-| `purge_days`, `auto_mark_days` | 30, 0 | stored for the inbox marks |
+| `purge_days`, `auto_mark_days` | 30, 0 | `purge_days` is the age `purge` uses (In box, below); `auto_mark_days` is stored, not acted on yet |
 | `auto_per_hour` | 12 | automatic sends an hour, all kinds; 0 is none |
 | `routing` | false | send matching traffic on by the rules |
 | `broadcast_ri` | empty | struck from routed traffic, never picks a route |
@@ -1002,9 +1002,31 @@ Poll with the reply's `last` as `after`. `log` without `stream` is the
 plain call above.
 
 `{"cmd":"activity_counters"}` →
-`{"ok":true,"session_since","watched_routes","routing","stored","received_session","processed_session","duplicates_session","purged_session":0,"purge"}`.
+`{"ok":true,"session_since","watched_routes","routing","stored","received_session","processed_session","duplicates_session","purged_session"}`.
 The session starts when the core last started. `watched_routes` counts the
-routing rules. Nothing is purged yet (`purge` says so).
+routing rules. `purged_session` counts what `purge` deleted since then.
+
+### purge (BBS-SETUP: purge processed/discarded after N days)
+
+`{"cmd":"purge","dry_run":"Y","days":30,"limit":200}` →
+`{"ok":true,"dry_run":true,"days":30,"count","in","out","purged","kept":{"pending","owed_qsl","routing_due","on_qru","part_resend"},"items":[{"id","direction","state","age_days"}]}`
+
+A dry run unless `dry_run` is `N`: the screen shows `count` first, then
+asks (default No). `days` defaults to the BBS setting `purge_days`. It runs
+only when called; nothing is purged by itself.
+
+- In box: messages marked processed or discarded more than `days` ago.
+- Out box: acked, cancelled, failed or expired, last changed more than
+  `days` ago.
+- Never: anything not yet processed or discarded (`pending`), a sent
+  message still waiting for its ack or QSL, processed plain traffic this
+  station hasn't QSL'd (`owed_qsl`), routed traffic not yet sent
+  (`routing_due`), a message on a QRU list just given (`on_qru`), a sent part
+  a resend may need (`part_resend`). `kept` counts the old ones held back,
+  by reason.
+
+The message and its plain copy go; its event lines stay. One log line says
+how many went.
 
 ### report (MSG-REPORTS)
 

@@ -163,6 +163,9 @@ public:
     void note(const std::string& text);
     // The same, against one message (its EVENTS tab): operator marks, QSLs, retransmits.
     void note_on(const std::string& msg_id, const std::string& text);
+    // Deletes these messages (the in box's purge, api_inbox.cpp, which picks
+    // them) and writes one line saying so. Returns how many went.
+    int purge(const std::vector<std::string>& ids, const std::string& why);
 
     // The station's own keypair (station.h). Set before start(); none: no
     // signing, no cards, no sealed tapes.

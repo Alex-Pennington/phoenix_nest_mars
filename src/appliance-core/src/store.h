@@ -64,6 +64,8 @@ public:
 
     void insert(const Message& m);
     bool exists(const std::string& id);
+    // Deletes a message and its plain copy (purge). Its event lines stay.
+    void remove(const std::string& id);
     std::optional<Message> get(const std::string& id);
     std::vector<Message> list(int limit);
     // Outgoing messages not yet sent (queued or sending), in the order they
