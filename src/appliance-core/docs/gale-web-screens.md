@@ -1,4 +1,4 @@
-# gale-web: operator screen as a kiosk web app — build spec v1.0
+# gale-web: operator screen as a kiosk web app — build spec v1.1 (v1.1: section 8, complexity)
 
 Owner of this spec: MARS core coordinator (pilot, "duet"). Builder: Ymir (greybeard-ale).
 Replaces gale-term as the operator screen on tty1. gale-term stays as the fallback (tty2, SSH, serial).
@@ -104,9 +104,18 @@ hover = help line). The keyboard stays complete; nothing is mouse-only.
 - W4 Guide pages for every screen id, training mode banner and store.
 - W5 Kiosk unit in the image, first boot on the HP.
 
-## 8. Open
+## 8. Member complaint about MSC: complexity (Alex, Nov 25)
 
-- Member complaints about MSC: Alex to recall; each one becomes a check in the screen walk.
+Complexity was the complaint. Every screen is checked against these rules, and the Playwright walk tests them:
+- Two layers. The default "Operate" layer shows only what a member needs on a normal net: inbox, read, compose,
+  send, outbox, status. Everything else (BBS, guard, routes, reports, search filters, tuner, resends) sits under
+  a "Station" layer behind one key (`F8`), labelled as setup.
+- Every field has a default that works. A member can send a correct message by filling only To, Subject and Text;
+  precedence, classification, DTG, serial, route and key are filled for them and shown, not asked.
+- One decision per panel. No screen asks more than one question at a time; the guide tells them the next step.
+- Plain words first, MARS terms second ("Waiting to send (OUTBOX)").
+- Walk test: a first-time member sends one message from power-on using only the Operate layer, under 10 keystrokes
+  beyond typing the text, with no guide page opened.
 
 ## 9. Done means
 
