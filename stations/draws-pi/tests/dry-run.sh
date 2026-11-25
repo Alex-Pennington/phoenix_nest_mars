@@ -2,8 +2,9 @@
 # Runs the DRAWS helpers with no Pi, no hat and no radio (DRAWS_DRY_RUN=1).
 # Checks: keying refused without the enable file, a WAV converts and the
 # key/play/unkey sequence runs in order, an over-long WAV is refused before
-# keying, and the recorder writes an 8 kHz mono file.
-# Needs bash, sox, soxi, flock, setsid, awk.
+# keying, the recorder writes an 8 kHz mono file, the port finder picks the
+# port with audio, and (tests/findcat-test.py) the CAT finder.
+# Needs bash, sox, soxi, flock, setsid, awk, python3.
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 T="$(mktemp -d)"
@@ -77,5 +78,25 @@ kill -9 "$pid"; wait "$pid" 2>/dev/null || true
 sleep 8.5
 [[ "$(tail -1 "$PTT_LOG")" == off ]] || fail "watchdog did not unkey after kill -9"
 pass "watchdog unkeyed after the sender was killed"
+
+# 7. Port finder: picks the port with audio, writes DRAWS_PORT, refuses a tie.
+for side in right left; do
+    DRAWS_FAKE_SIDE=$side FINDPORT_SECONDS=1 "$HERE/bin/draws-findport" --write "$T/station.env" >/dev/null
+    grep -qx "DRAWS_PORT=$side" "$T/station.env" || fail "findport did not pick $side"
+done
+if DRAWS_FAKE_SIDE=none FINDPORT_SECONDS=1 "$HERE/bin/draws-findport" --write "$T/station.env" >/dev/null 2>&1; then
+    fail "findport picked a port with no audio on either"
+fi
+grep -qx "DRAWS_PORT=left" "$T/station.env" || fail "findport changed DRAWS_PORT on a tie"
+pass "port finder picks the port with audio, refuses when it cannot tell"
+
+# 8. Right port: PTT follows DRAWS_PORT to BCM23.
+sed -i 's/^DRAWS_PORT=.*/DRAWS_PORT=right/' "$T/station.env"
+[[ "$("$HERE/bin/draws-ptt" off)" == "DRY: pinctrl set 23 op dl" ]] || fail "right port ptt pin"
+pass "right port: PTT on BCM23"
+
+# 9. CAT finder (pseudo-terminals as fake ports).
+if ! python3 -I "$HERE/tests/findcat-test.py" | sed 's/^/     /'; then fail "findcat tests"; fi
+pass "CAT finder tests"
 
 echo "all dry-run checks passed"

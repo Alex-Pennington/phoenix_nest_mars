@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - stations/draws-pi: plan, Pi config, PTT/TX/RX helpers and hands-on checklist for a Raspberry Pi 4 + NW Digital Radio DRAWS second HF station (FT-857D). No modem code; keying needs an enable file on the Pi.
+- stations/draws-pi: the CAT port, DRAWS port and optional filter are found at the bench, not assumed. `draws-findcat` probes USB serial ports with one read-only CAT query at the configured rate only; `draws-findport` picks the DRAWS port by receive level; the checklist reads the filter menu on both radios. rigctld runs with no PTT. Any FT-817/818/857/897 on either port; FT-857D stays the worked example.
 - Initial open source release
 - Communications Processor (CP) - Qt6 message processor
 - Station Mapper Linux (SMLinux) - NCS operations tool

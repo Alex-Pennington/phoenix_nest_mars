@@ -1,0 +1,70 @@
+#!/bin/bash
+# draws-findport: find which DRAWS port (left or right) the radio is cabled to.
+#
+#   draws-findport                  listen, print the level on each port
+#   draws-findport --write ENVFILE  listen, then set DRAWS_PORT in ENVFILE
+#
+# Receive only: it records both ports for FINDPORT_SECONDS (default 10) and
+# compares their levels. The port with the radio carries its receive audio;
+# the empty port is near silence. Nothing is keyed. Tune the radio to a band
+# with noise or signals first (DATA OUT is fixed level; AF gain does not
+# matter). The PTT line follows DRAWS_PORT, so set this before any keying.
+# DRAWS_DRY_RUN=1 records a sox test signal on DRAWS_FAKE_SIDE instead.
+set -euo pipefail
+
+ENV_FILE="${DRAWS_ENV:-/etc/draws-station/station.env}"
+# shellcheck source=/dev/null
+source "$ENV_FILE"
+
+die() { echo "draws-findport: $*" >&2; exit "${2:-1}"; }
+command -v sox >/dev/null || die "sox is not installed"
+
+WRITE=""
+case "${1:-}" in
+    "") ;;
+    --write) WRITE="${2:-}"; [[ -n "$WRITE" ]] || die "usage: draws-findport [--write ENVFILE]" 2 ;;
+    *) die "usage: draws-findport [--write ENVFILE]" 2 ;;
+esac
+
+SECS="${FINDPORT_SECONDS:-10}"
+WORK="$(mktemp -d "${TMPDIR:-/tmp}/draws-findport.XXXXXX")"
+trap 'rm -rf "$WORK"' EXIT
+REC="$WORK/both.wav"
+
+if [[ "${DRAWS_DRY_RUN:-0}" == 1 ]]; then
+    case "${DRAWS_FAKE_SIDE:-left}" in
+        left)  sox -q -n -r 48000 -c 2 -b 16 "$REC" synth "$SECS" pinknoise pinknoise remix 1v0.2 2v0.001 ;;
+        right) sox -q -n -r 48000 -c 2 -b 16 "$REC" synth "$SECS" pinknoise pinknoise remix 1v0.001 2v0.2 ;;
+        none)  sox -q -n -r 48000 -c 2 -b 16 "$REC" synth "$SECS" pinknoise pinknoise remix 1v0.001 2v0.001 ;;
+    esac
+else
+    arecord -q -D "$RX_PCM" -f S16_LE -r 48000 -c 2 -d "$SECS" "$REC"
+fi
+
+rms_db() { sox "$REC" -n remix "$1" stats 2>&1 | awk '/^RMS lev dB/ { print $4 }'; }
+L="$(rms_db 1)"; R="$(rms_db 2)"
+# A silent channel reports -inf.
+[[ "$L" == *inf* ]] && L=-150
+[[ "$R" == *inf* ]] && R=-150
+echo "left port:  RMS ${L} dBFS"
+echo "right port: RMS ${R} dBFS"
+
+PORT="$(awk -v l="$L" -v r="$R" 'BEGIN {
+    if (l - r >= 6) print "left"; else if (r - l >= 6) print "right"; else print "" }')"
+if [[ -z "$PORT" ]]; then
+    die "cannot tell: the two ports are within 6 dB. Check the cable and tune the radio to a band with noise or signals."
+fi
+echo "DRAWS_PORT=$PORT"
+
+if [[ -n "$WRITE" ]]; then
+    tmp="$WRITE.findport"
+    if grep -q '^DRAWS_PORT=' "$WRITE"; then
+        sed "s/^DRAWS_PORT=.*/DRAWS_PORT=$PORT/" "$WRITE" > "$tmp"
+    else
+        { cat "$WRITE"; echo "DRAWS_PORT=$PORT"; } > "$tmp"
+    fi
+    chmod --reference="$WRITE" "$tmp"
+    chown --reference="$WRITE" "$tmp" 2>/dev/null || true
+    mv "$tmp" "$WRITE"
+    echo "Wrote DRAWS_PORT to $WRITE"
+fi

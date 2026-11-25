@@ -28,7 +28,7 @@ command -v sox >/dev/null || die "sox is not installed"
 command -v soxi >/dev/null || die "soxi is not installed (comes with sox)"
 
 case "${DRAWS_PORT:-left}" in
-    left)  PCM="${TX_PCM:-draws_left_tx}" ;;
+    left)  PCM="${TX_PCM_LEFT:-draws_left_tx}" ;;
     right) PCM="${TX_PCM_RIGHT:-draws_right_tx}" ;;
     *) die "DRAWS_PORT must be left or right" 2 ;;
 esac

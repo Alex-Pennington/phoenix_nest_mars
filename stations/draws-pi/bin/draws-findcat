@@ -1,0 +1,309 @@
+#!/usr/bin/python3 -I
+"""draws-findcat: find which serial port the Yaesu CAT cable is on.
+
+    draws-findcat --list            list the candidate ports, open nothing
+    draws-findcat                   probe each candidate, print what answered
+    draws-findcat --write ENVFILE   probe, then put the port that answered
+                                    into RIG_DEVICE (and RIG_BAUD) in ENVFILE
+    draws-findcat --device PATH     probe only this port (repeatable)
+    draws-findcat --baud N          probe at N instead of RIG_BAUD
+
+Candidates are the USB serial ports under /dev/serial/by-id (the DRAWS GPS
+and the Pi's own UARTs are skipped). Each candidate gets one read-only query:
+the FT-817/857/897 "read frequency and mode" frame, 00 00 00 00 03. A radio
+answers with five bytes: the frequency in BCD and the mode. Nothing else is
+ever sent: no PTT, no 0xBE, no writes to the radio.
+
+Only one baud rate is tried per run: RIG_BAUD from the station file
+(38400 unless changed), which must match the radio's CAT RATE menu. Trying
+other rates is not safe: bytes sent at the wrong rate reach the radio as other
+bytes, and a 9600 query read by a radio set to 4800 can decode as 0x08,
+which is PTT on. If nothing answers, check the radio's menus; do not guess
+rates. Use --baud only to match a CAT RATE you have read off the radio.
+
+Opening a serial port raises its DTR and RTS lines for a moment on many USB
+adapters. The probe drops both at once. Yaesu CAT cables do not use them,
+but an audio interface that keys on RTS would blip, so only the radio's CAT
+cable should be plugged into the Pi's USB while this runs.
+
+Exit codes: 0 one radio answered, 1 none answered, 2 usage, 3 a port is busy
+(stop rigctld first), 4 more than one answered (pick one with --device).
+
+Environment, for tests: DRAWS_ENV (station file to read),
+DRAWS_SERIAL_GLOB (candidate glob), DRAWS_CAT_TIMEOUT (seconds).
+"""
+
+import argparse
+import errno
+import fcntl
+import glob
+import os
+import select
+import struct
+import sys
+import termios
+import time
+
+ENV_FILE = os.environ.get("DRAWS_ENV", "/etc/draws-station/station.env")
+SERIAL_GLOB = os.environ.get("DRAWS_SERIAL_GLOB", "/dev/serial/by-id/*")
+TIMEOUT = float(os.environ.get("DRAWS_CAT_TIMEOUT", "0.4"))
+
+# The only frame this program can send. Read frequency and mode (opcode 0x03).
+READ_FREQ_MODE = bytes([0x00, 0x00, 0x00, 0x00, 0x03])
+ALLOWED_FRAMES = frozenset([READ_FREQ_MODE])
+# Never sent, checked anyway: PTT on, PTT off, power on, power off,
+# EEPROM write, factory reset.
+FORBIDDEN_OPCODES = frozenset([0x08, 0x88, 0x0F, 0x8F, 0xBC, 0xBE])
+assert all(f[4] not in FORBIDDEN_OPCODES for f in ALLOWED_FRAMES)
+
+# Rates the 817/857/897 CAT RATE menu offers.
+RADIO_BAUDS = {4800: termios.B4800, 9600: termios.B9600, 38400: termios.B38400}
+
+# Mode byte in the reply (Hamlib ft857.c / ft897.c).
+MODES = {0x00: "LSB", 0x01: "USB", 0x02: "CW", 0x03: "CWR", 0x04: "AM",
+         0x06: "WFM", 0x08: "FM", 0x0A: "DIG", 0x0C: "PKT", 0x82: "CW-N",
+         0x83: "CWR-N", 0x84: "AM-N", 0x88: "FM-N", 0x8A: "DIG-N", 0x8C: "PKT-N"}
+
+# On-board UARTs: the DRAWS GPS (ttySC*) and the Pi's own ports. Never probed.
+ONBOARD_PREFIXES = ("/dev/ttySC", "/dev/ttyAMA", "/dev/ttyS", "/dev/serial0",
+                    "/dev/serial1")
+
+
+def read_env(path):
+    vals = {}
+    try:
+        with open(path) as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                k, v = line.split("=", 1)
+                vals[k.strip()] = v.strip().strip('"').strip("'")
+    except FileNotFoundError:
+        pass
+    return vals
+
+
+def candidates(explicit):
+    paths = explicit if explicit else sorted(glob.glob(SERIAL_GLOB))
+    out = []
+    for p in paths:
+        real = os.path.realpath(p)
+        if real.startswith(ONBOARD_PREFIXES):
+            continue
+        out.append((p, real))
+    return out
+
+
+def holders(real):
+    """PIDs (other than us) that have this device open. Best effort."""
+    found = []
+    for pid in os.listdir("/proc"):
+        if not pid.isdigit() or int(pid) == os.getpid():
+            continue
+        fd_dir = f"/proc/{pid}/fd"
+        try:
+            for fd in os.listdir(fd_dir):
+                try:
+                    if os.readlink(f"{fd_dir}/{fd}") == real:
+                        found.append(int(pid))
+                        break
+                except OSError:
+                    continue
+        except OSError:
+            continue
+    return found
+
+
+def drop_dtr_rts(fd):
+    bits = struct.pack("i", termios.TIOCM_DTR | termios.TIOCM_RTS)
+    try:
+        fcntl.ioctl(fd, termios.TIOCMBIC, bits)
+    except OSError as e:
+        if e.errno not in (errno.ENOTTY, errno.EINVAL):  # ptys in tests
+            raise
+
+
+def setup_port(fd, speed):
+    """Raw 8N2, no flow control, local, the given speed."""
+    attrs = termios.tcgetattr(fd)
+    iflag, oflag, cflag, lflag = 0, 1, 2, 3
+    attrs[iflag] = 0
+    attrs[oflag] = 0
+    attrs[lflag] = 0
+    cflag_v = attrs[cflag]
+    cflag_v &= ~(termios.CSIZE | termios.PARENB | termios.CRTSCTS)
+    cflag_v |= termios.CS8 | termios.CSTOPB | termios.CREAD | termios.CLOCAL
+    attrs[cflag] = cflag_v
+    attrs[4] = speed  # ispeed
+    attrs[5] = speed  # ospeed
+    attrs[6][termios.VMIN] = 0
+    attrs[6][termios.VTIME] = 0
+    termios.tcsetattr(fd, termios.TCSANOW, attrs)
+    termios.tcflush(fd, termios.TCIOFLUSH)
+
+
+def send_frame(fd, frame):
+    if frame not in ALLOWED_FRAMES or frame[4] in FORBIDDEN_OPCODES:
+        raise RuntimeError("refusing to send a frame that is not a read-only query")
+    os.write(fd, frame)
+
+
+def read_reply(fd, want, timeout):
+    buf = b""
+    end = time.monotonic() + timeout
+    while len(buf) < want:
+        left = end - time.monotonic()
+        if left <= 0:
+            break
+        r, _, _ = select.select([fd], [], [], left)
+        if not r:
+            break
+        try:
+            chunk = os.read(fd, 64)
+        except OSError as e:
+            if e.errno in (errno.EAGAIN, errno.EIO):
+                time.sleep(0.01)
+                continue
+            raise
+        if not chunk:
+            time.sleep(0.01)
+            continue
+        buf += chunk
+    # Anything trailing straight after is a sign this is not a Yaesu radio.
+    r, _, _ = select.select([fd], [], [], 0.05)
+    if r:
+        try:
+            buf += os.read(fd, 64)
+        except OSError:
+            pass
+    return buf
+
+
+def decode(reply):
+    """Frequency in Hz and mode name, or None if this is not a 817/857/897 reply."""
+    if len(reply) != 5:
+        return None
+    digits = []
+    for b in reply[:4]:
+        hi, lo = b >> 4, b & 0x0F
+        if hi > 9 or lo > 9:
+            return None
+        digits += [hi, lo]
+    units = int("".join(map(str, digits)))  # tens of Hz
+    hz = units * 10
+    if not 100_000 <= hz <= 470_000_000:
+        return None
+    return hz, MODES.get(reply[4], f"0x{reply[4]:02X}")
+
+
+def probe(path, real, baud):
+    fd = os.open(path, os.O_RDWR | os.O_NOCTTY | os.O_NONBLOCK)
+    try:
+        drop_dtr_rts(fd)
+        setup_port(fd, RADIO_BAUDS[baud])
+        drop_dtr_rts(fd)
+        send_frame(fd, READ_FREQ_MODE)
+        reply = read_reply(fd, 5, TIMEOUT)
+    finally:
+        os.close(fd)
+    return reply, decode(reply)
+
+
+def write_env(path, device, baud):
+    with open(path) as f:
+        lines = f.read().splitlines()
+    done = {"RIG_DEVICE": False, "RIG_BAUD": False}
+    new = {"RIG_DEVICE": device, "RIG_BAUD": str(baud)}
+    for i, line in enumerate(lines):
+        for key in done:
+            if line.startswith(key + "="):
+                lines[i] = f"{key}={new[key]}"
+                done[key] = True
+    for key, ok in done.items():
+        if not ok:
+            lines.append(f"{key}={new[key]}")
+    tmp = path + ".findcat"
+    st = os.stat(path)
+    with open(tmp, "w") as f:
+        f.write("\n".join(lines) + "\n")
+    os.chmod(tmp, st.st_mode & 0o7777)
+    try:
+        os.chown(tmp, st.st_uid, st.st_gid)
+    except PermissionError:
+        pass
+    os.replace(tmp, path)
+
+
+def main():
+    ap = argparse.ArgumentParser(add_help=True, description=__doc__.split("\n")[0])
+    ap.add_argument("--list", action="store_true")
+    ap.add_argument("--write", metavar="ENVFILE")
+    ap.add_argument("--device", action="append", default=[])
+    ap.add_argument("--baud", type=int)
+    a = ap.parse_args()
+
+    env = read_env(ENV_FILE)
+    baud = a.baud if a.baud else int(env.get("RIG_BAUD", "38400") or 38400)
+    if baud not in RADIO_BAUDS:
+        print(f"draws-findcat: {baud} is not a CAT RATE the radio offers "
+              f"({', '.join(map(str, RADIO_BAUDS))})", file=sys.stderr)
+        return 2
+
+    cands = candidates(a.device)
+    if not cands:
+        print("draws-findcat: no USB serial ports found. Is the CAT cable "
+              "plugged into the Pi? (ls /dev/serial/by-id/)", file=sys.stderr)
+        return 1
+    print(f"Candidate ports ({len(cands)}):")
+    for p, real in cands:
+        print(f"  {p} -> {real}")
+    if a.list:
+        return 0
+
+    busy = [(p, holders(real)) for p, real in cands]
+    busy = [(p, h) for p, h in busy if h]
+    if busy:
+        for p, h in busy:
+            print(f"draws-findcat: {p} is open by pid {', '.join(map(str, h))}. "
+                  f"Stop rigctld first (sudo systemctl stop rigctld-draws).",
+                  file=sys.stderr)
+        return 3
+
+    print(f"Probing at {baud} baud, 8N2, read frequency and mode only:")
+    answered = []
+    for p, real in cands:
+        try:
+            reply, got = probe(p, real, baud)
+        except OSError as e:
+            print(f"  {p}: could not open ({e.strerror})")
+            continue
+        if got:
+            hz, mode = got
+            print(f"  {p}: radio answered, {hz / 1e6:.5f} MHz {mode}")
+            answered.append(p)
+        elif reply:
+            print(f"  {p}: answered, but not like a FT-817/857/897 ({reply[:8].hex(' ')})")
+        else:
+            print(f"  {p}: no answer")
+
+    if not answered:
+        print("No radio answered. On the radio check: CAT/LIN/TUN menu = CAT, "
+              f"CAT RATE = {baud}, the radio is on, the cable is in the CAT jack.",
+              file=sys.stderr)
+        return 1
+    if len(answered) > 1:
+        print("More than one radio answered. Run again with --device and the "
+              "port of the radio on the DRAWS.", file=sys.stderr)
+        return 4
+
+    print(f"RIG_DEVICE={answered[0]}")
+    print(f"RIG_BAUD={baud}")
+    if a.write:
+        write_env(a.write, answered[0], baud)
+        print(f"Wrote RIG_DEVICE and RIG_BAUD to {a.write}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

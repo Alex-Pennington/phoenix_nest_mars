@@ -2,7 +2,7 @@
 Description=DRAWS PTT lines low (unkeyed) at boot and at shutdown
 DefaultDependencies=no
 After=local-fs.target
-Before=sysinit.target draws-rxrec.service rigctld-ft857d.service
+Before=sysinit.target draws-rxrec.service rigctld-draws.service
 
 [Service]
 Type=oneshot

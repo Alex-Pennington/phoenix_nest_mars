@@ -1,0 +1,17 @@
+[Unit]
+Description=Hamlib rigctld for the radio on the DRAWS (CAT only, localhost)
+After=network.target draws-ptt-safe.service
+Wants=draws-ptt-safe.service
+
+[Service]
+EnvironmentFile=/etc/draws-station/station.env
+User=draws
+Group=dialout
+# Frequency and mode only. -P NONE: rigctld has no PTT, so CAT cannot key.
+# Keying is the DRAWS hardware PTT line only, never CAT, never VOX.
+ExecStart=/usr/bin/rigctld -m ${RIG_MODEL} -r ${RIG_DEVICE} -s ${RIG_BAUD} -P NONE -T 127.0.0.1 -t 4532
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

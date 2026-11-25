@@ -1,5 +1,5 @@
 [Unit]
-Description=DRAWS receive recorder (left port, 8 kHz mono files)
+Description=DRAWS receive recorder (port from station.env, 8 kHz mono files)
 After=sound.target draws-ptt-safe.service
 Wants=draws-ptt-safe.service
 

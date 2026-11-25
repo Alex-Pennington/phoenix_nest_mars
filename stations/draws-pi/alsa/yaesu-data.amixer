@@ -1,9 +1,11 @@
-# Starting codec levels for an FT-857D on the DRAWS (both ports set the same).
-# Use:  amixer -c udrc -s < ft857d.amixer   then   sudo alsactl store
-# Based on the vendor's FT-817 preset (n7nix bin/setalsa-ft817.sh); the 857D
-# DATA jack is the same family. Final TX level is set on the radio's ALC meter.
+# Starting codec levels for a Yaesu FT-817/818/857/897 DATA jack on the DRAWS
+# (both ports set the same, so either port works). Worked example: FT-857D.
+# Use:  amixer -c udrc -s < yaesu-data.amixer   then   sudo alsactl store
+# Based on the vendor's FT-817 preset (n7nix bin/setalsa-ft817.sh); the
+# 857D and 897D DATA jacks are the same family. Final TX level is set on the
+# radio's ALC meter.
 #
-# Transmit (into 857D DATA IN, pin 1)
+# Transmit (into DATA IN, pin 1)
 sset 'PCM' -16.5dB,-16.5dB
 sset 'LO Driver Gain' -6.0dB,-6.0dB
 sset 'DAC Left Playback PowerTune' P3
@@ -12,7 +14,7 @@ sset 'LO DAC' on
 sset 'LOL Output Mixer L_DAC' on
 sset 'LOR Output Mixer R_DAC' on
 #
-# Receive (857D DATA OUT 1200, pin 5, into IN2)
+# Receive (DATA OUT 1200, pin 5, into IN2)
 sset 'ADC Level' -2.0dB,-2.0dB
 sset 'IN1_L to Left Mixer Positive Resistor' 'Off'
 sset 'IN1_R to Right Mixer Positive Resistor' 'Off'
