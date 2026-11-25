@@ -1,0 +1,16 @@
+[Unit]
+Description=DRAWS receive recorder (left port, 8 kHz mono files)
+After=sound.target draws-ptt-safe.service
+Wants=draws-ptt-safe.service
+
+[Service]
+User=draws
+Group=audio
+Environment=DRAWS_ENV=/etc/draws-station/station.env
+ExecStart=/usr/local/bin/draws-rxrec
+Restart=on-failure
+RestartSec=5
+Nice=-5
+
+[Install]
+WantedBy=multi-user.target

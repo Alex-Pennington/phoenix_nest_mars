@@ -1,0 +1,44 @@
+#!/bin/bash
+# draws-ptt: key, unkey or show the PTT line of the DRAWS port in station.env.
+#
+#   draws-ptt on       key the radio (refused unless TX_ENABLE_FILE exists)
+#   draws-ptt off      unkey the radio (always allowed)
+#   draws-ptt status   show the GPIO state
+#
+# Uses pinctrl with plain BCM numbers, so newer kernels' sysfs GPIO numbering
+# does not matter. DRAWS_DRY_RUN=1 prints the commands instead of running them.
+set -euo pipefail
+
+ENV_FILE="${DRAWS_ENV:-/etc/draws-station/station.env}"
+# shellcheck source=/dev/null
+source "$ENV_FILE"
+
+run() {
+    if [[ "${DRAWS_DRY_RUN:-0}" == 1 ]]; then echo "DRY: $*"; else "$@"; fi
+}
+
+case "${DRAWS_PORT:-left}" in
+    left)  PIN="$PTT_GPIO_LEFT" ;;
+    right) PIN="$PTT_GPIO_RIGHT" ;;
+    *) echo "draws-ptt: DRAWS_PORT must be left or right" >&2; exit 2 ;;
+esac
+
+case "${1:-}" in
+    on)
+        if [[ ! -e "$TX_ENABLE_FILE" ]]; then
+            echo "draws-ptt: keying is off ($TX_ENABLE_FILE does not exist)" >&2
+            exit 3
+        fi
+        run pinctrl set "$PIN" op dh
+        ;;
+    off)
+        run pinctrl set "$PIN" op dl
+        ;;
+    status)
+        run pinctrl get "$PIN"
+        ;;
+    *)
+        echo "usage: draws-ptt on|off|status" >&2
+        exit 2
+        ;;
+esac

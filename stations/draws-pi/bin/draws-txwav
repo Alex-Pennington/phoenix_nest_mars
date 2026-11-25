@@ -1,0 +1,83 @@
+#!/bin/bash
+# draws-txwav: send one WAV out the DRAWS port in station.env.
+#
+#   draws-txwav BURST.wav
+#
+# Converts the WAV (gale-tx writes 8 kHz mono) to 48 kHz mono with sox, keys
+# PTT, plays it to the port's channel, and unkeys. Refuses to key unless
+# TX_ENABLE_FILE exists. PTT is cut at TX_MAX_SECONDS whatever happens: by the
+# exit trap, by timeout on aplay, and by a separate watchdog that outlives
+# this script if it is killed. One transmission at a time (flock).
+# DRAWS_DRY_RUN=1 prints the key and play commands instead of running them.
+set -euo pipefail
+
+ENV_FILE="${DRAWS_ENV:-/etc/draws-station/station.env}"
+# shellcheck source=/dev/null
+source "$ENV_FILE"
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PTT="${DRAWS_PTT:-$HERE/draws-ptt}"
+DRY="${DRAWS_DRY_RUN:-0}"
+
+die() { echo "draws-txwav: $*" >&2; exit "${2:-1}"; }
+
+[[ $# -eq 1 ]] || die "usage: draws-txwav BURST.wav" 2
+IN="$1"
+[[ -f "$IN" ]] || die "no such file: $IN" 2
+[[ -e "$TX_ENABLE_FILE" ]] || die "keying is off ($TX_ENABLE_FILE does not exist)" 3
+command -v sox >/dev/null || die "sox is not installed"
+command -v soxi >/dev/null || die "soxi is not installed (comes with sox)"
+
+case "${DRAWS_PORT:-left}" in
+    left)  PCM="${TX_PCM:-draws_left_tx}" ;;
+    right) PCM="${TX_PCM_RIGHT:-draws_right_tx}" ;;
+    *) die "DRAWS_PORT must be left or right" 2 ;;
+esac
+
+# Length check before anything is keyed.
+DUR="$(soxi -D "$IN")"
+BUDGET_MS=$(( TX_MAX_SECONDS * 1000 - PTT_LEAD_MS - PTT_TAIL_MS ))
+DUR_MS="$(awk -v d="$DUR" 'BEGIN { printf "%d", d * 1000 + 0.5 }')"
+(( DUR_MS > 0 )) || die "$IN has no audio"
+(( DUR_MS <= BUDGET_MS )) || die "$IN is ${DUR}s; the limit is ${TX_MAX_SECONDS}s with PTT lead and tail"
+
+# One transmission at a time.
+LOCK="${DRAWS_LOCK:-/run/lock/draws-tx.lock}"
+exec 9>"$LOCK" || die "cannot open lock $LOCK"
+flock -n 9 || die "another transmission is running"
+
+WORK="$(mktemp -d "${TMPDIR:-/tmp}/draws-tx.XXXXXX")"
+TXFILE="$WORK/tx48k.wav"
+# High-quality resample to the card rate, mono; asound.conf routes it to the port.
+sox -q "$IN" -r 48000 -c 1 -b 16 -e signed-integer "$TXFILE" rate -v 48000
+
+WATCHDOG_PID=""
+unkey() {
+    "$PTT" off >&2 || true
+    if [[ -n "$WATCHDOG_PID" ]]; then kill "$WATCHDOG_PID" 2>/dev/null || true; fi
+    rm -rf "$WORK"
+}
+trap unkey EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM HUP
+
+# Watchdog: its own session, so it survives a kill of this script. It must not
+# hold the lock (fd 9), or back-to-back sends would be refused. If a killed
+# send's watchdog is still waiting, it may cut the next send short: safe side.
+# shellcheck disable=SC2016  # $1 and $2 are for the inner bash
+setsid bash -c 'sleep "$1"; "$2" off' _ "$TX_MAX_SECONDS" "$PTT" </dev/null >/dev/null 2>&1 9>&- &
+WATCHDOG_PID=$!
+
+START="$(date -u +%Y-%m-%dT%H:%M:%S.%3NZ)"
+"$PTT" on
+sleep "$(awk -v m="$PTT_LEAD_MS" 'BEGIN { printf "%.3f", m / 1000 }')"
+if [[ "$DRY" == 1 ]]; then
+    echo "DRY: aplay -q -D $PCM $TXFILE ($(soxi -r "$TXFILE") Hz, $(soxi -c "$TXFILE") ch)"
+else
+    timeout --signal=KILL "$TX_MAX_SECONDS" aplay -q -D "$PCM" "$TXFILE"
+fi
+sleep "$(awk -v m="$PTT_TAIL_MS" 'BEGIN { printf "%.3f", m / 1000 }')"
+"$PTT" off
+END="$(date -u +%Y-%m-%dT%H:%M:%S.%3NZ)"
+
+printf '{"event":"tx","port":"%s","file":"%s","audio_s":%s,"ptt_on":"%s","ptt_off":"%s"}\n' \
+    "${DRAWS_PORT:-left}" "$(basename "$IN")" "$DUR" "$START" "$END"

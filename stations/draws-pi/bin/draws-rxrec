@@ -1,0 +1,51 @@
+#!/bin/bash
+# draws-rxrec: record one DRAWS port to 8 kHz mono WAV files, back to back.
+#
+#   draws-rxrec            run until stopped (systemd: draws-rxrec.service)
+#   draws-rxrec --once     record one file and stop
+#
+# Records the card at 48 kHz stereo through dsnoop, keeps the port's channel,
+# and writes RX_FILE_SECONDS-long files named rx-<UTC start>-<port>.wav into
+# RX_SPOOL. A file appears under its final name only when whole. These files
+# are temporary: they belong on the data store.
+# DRAWS_DRY_RUN=1 records from a sox noise generator instead of the card.
+set -euo pipefail
+
+ENV_FILE="${DRAWS_ENV:-/etc/draws-station/station.env}"
+# shellcheck source=/dev/null
+source "$ENV_FILE"
+
+die() { echo "draws-rxrec: $*" >&2; exit "${2:-1}"; }
+command -v sox >/dev/null || die "sox is not installed"
+
+case "${DRAWS_PORT:-left}" in
+    left)  CH=1 ;;
+    right) CH=2 ;;
+    *) die "DRAWS_PORT must be left or right" 2 ;;
+esac
+
+ONCE=0
+[[ "${1:-}" == "--once" ]] && ONCE=1
+mkdir -p "$RX_SPOOL"
+
+record_one() {
+    local stamp out part
+    stamp="$(date -u +%Y%m%dT%H%M%SZ)"
+    out="$RX_SPOOL/rx-$stamp-${DRAWS_PORT:-left}.wav"
+    part="$RX_SPOOL/.rx-$stamp.part.wav"
+    if [[ "${DRAWS_DRY_RUN:-0}" == 1 ]]; then
+        sox -q -n -r 48000 -c 2 -b 16 -e signed-integer -t raw - \
+            synth "$RX_FILE_SECONDS" pinknoise vol 0.1
+    else
+        arecord -q -D "$RX_PCM" -f S16_LE -r 48000 -c 2 -t raw -d "$RX_FILE_SECONDS"
+    fi | sox -q -t raw -r 48000 -c 2 -b 16 -e signed-integer - \
+            -r 8000 -c 1 -b 16 "$part" remix "$CH" rate -v 8000
+    mv "$part" "$out"
+    echo "$out"
+}
+
+if (( ONCE )); then
+    record_one
+else
+    while true; do record_one; done
+fi

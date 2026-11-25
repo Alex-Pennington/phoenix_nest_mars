@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- stations/draws-pi: plan, Pi config, PTT/TX/RX helpers and hands-on checklist for a Raspberry Pi 4 + NW Digital Radio DRAWS second HF station (FT-857D). No modem code; keying needs an enable file on the Pi.
 - Initial open source release
 - Communications Processor (CP) - Qt6 message processor
 - Station Mapper Linux (SMLinux) - NCS operations tool

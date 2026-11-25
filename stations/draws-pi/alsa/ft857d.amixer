@@ -1,0 +1,48 @@
+# Starting codec levels for an FT-857D on the DRAWS (both ports set the same).
+# Use:  amixer -c udrc -s < ft857d.amixer   then   sudo alsactl store
+# Based on the vendor's FT-817 preset (n7nix bin/setalsa-ft817.sh); the 857D
+# DATA jack is the same family. Final TX level is set on the radio's ALC meter.
+#
+# Transmit (into 857D DATA IN, pin 1)
+sset 'PCM' -16.5dB,-16.5dB
+sset 'LO Driver Gain' -6.0dB,-6.0dB
+sset 'DAC Left Playback PowerTune' P3
+sset 'DAC Right Playback PowerTune' P3
+sset 'LO DAC' on
+sset 'LOL Output Mixer L_DAC' on
+sset 'LOR Output Mixer R_DAC' on
+#
+# Receive (857D DATA OUT 1200, pin 5, into IN2)
+sset 'ADC Level' -2.0dB,-2.0dB
+sset 'IN1_L to Left Mixer Positive Resistor' 'Off'
+sset 'IN1_R to Right Mixer Positive Resistor' 'Off'
+sset 'IN2_L to Left Mixer Positive Resistor' '10 kOhm'
+sset 'IN2_R to Right Mixer Positive Resistor' '10 kOhm'
+sset 'CM_L to Left Mixer Negative Resistor' '10 kOhm'
+sset 'CM_R to Right Mixer Negative Resistor' '10 kOhm'
+#
+# Unused inputs off
+sset 'IN1_L to Right Mixer Negative Resistor' 'Off'
+sset 'IN1_R to Left Mixer Positive Resistor' 'Off'
+sset 'IN2_L to Right Mixer Positive Resistor' 'Off'
+sset 'IN2_R to Left Mixer Negative Resistor' 'Off'
+sset 'IN3_L to Left Mixer Positive Resistor' 'Off'
+sset 'IN3_L to Right Mixer Negative Resistor' 'Off'
+sset 'IN3_R to Left Mixer Negative Resistor' 'Off'
+sset 'IN3_R to Right Mixer Positive Resistor' 'Off'
+sset 'Mic PGA' off
+sset 'PGA Level' 0
+#
+# No codec AGC: the modem needs a steady level
+sset 'ADCFGA Right Mute' off
+sset 'ADCFGA Left Mute' off
+sset 'AGC Left' off
+sset 'AGC Right' off
+#
+# Headphone outputs off
+sset 'HP DAC' off
+sset 'HP Driver Gain' 0
+sset 'HPL Output Mixer L_DAC' off
+sset 'HPR Output Mixer R_DAC' off
+sset 'HPL Output Mixer IN1_L' off
+sset 'HPR Output Mixer IN1_R' off

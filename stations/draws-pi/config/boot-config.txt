@@ -1,0 +1,17 @@
+# Lines to add at the END of /boot/firmware/config.txt on the DRAWS Pi.
+# (Raspberry Pi OS Bookworm and later keep config.txt in /boot/firmware.)
+
+# The DRAWS hat: codec, GNSS serial (ttySC0/ttySC1), PPS on BCM7, ADC.
+# alsaname=udrc gives the card the name the vendor tools and our helpers use.
+dtoverlay=
+dtoverlay=draws,alsaname=udrc
+
+# PTT lines low (unkeyed) from the moment the firmware starts, before Linux.
+# BCM12 = left DRAWS port PTT, BCM23 = right DRAWS port PTT.
+gpio=12,23=op,dl
+
+# Steady core clock. The vendor sets this for the codec's I2S clocking.
+force_turbo=1
+
+# The Pi's own audio is not needed. Leaving it off keeps udrc the only card.
+dtparam=audio=off

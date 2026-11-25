@@ -1,0 +1,17 @@
+[Unit]
+Description=DRAWS PTT lines low (unkeyed) at boot and at shutdown
+DefaultDependencies=no
+After=local-fs.target
+Before=sysinit.target draws-rxrec.service rigctld-ft857d.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# BCM12 = left port PTT, BCM23 = right port PTT. Same as gpio= in config.txt.
+ExecStart=/usr/bin/pinctrl set 12 op dl
+ExecStart=/usr/bin/pinctrl set 23 op dl
+ExecStop=/usr/bin/pinctrl set 12 op dl
+ExecStop=/usr/bin/pinctrl set 23 op dl
+
+[Install]
+WantedBy=sysinit.target

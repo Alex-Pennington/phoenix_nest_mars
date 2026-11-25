@@ -1,0 +1,6 @@
+# /etc/default/gpsd on the DRAWS Pi.
+# The DRAWS GNSS talks on ttySC0; PPS comes in on BCM7 as /dev/pps0.
+START_DAEMON="true"
+USBAUTO="false"
+DEVICES="/dev/ttySC0 /dev/pps0"
+GPSD_OPTIONS="-n"
