@@ -584,6 +584,28 @@ exactly as without one. Keying is by CAT or a hardware PTT line only: a
 keyer that keys any other way, VOX above all, is refused. The core keys
 nothing today; this sequence is ready for when transmit is unpinned.
 
+## Modem decodes: unverified, whole
+
+Every burst greybeard-ale's 110A or 110D modem decodes (each payload file its
+`CAPTURE.modems.json` lists, its size and sha256 checked) goes into the inbox
+as it came, before the core reads it (issue 3 ruling: flagged UNVERIFIED, no
+bytes hidden):
+
+- id `DEC-` and the first 12 hex digits of the burst's sha256; `direction`
+  `in`; `core_state` `unverified`, and `"unverified": true` on each `list`,
+  `get` and `search` row; from and to `UNKNOWN`; precedence R.
+- The body is every byte: printable ASCII and line feeds as they are, a
+  backslash as `\\`, tab as `\t`, carriage return as `\r`, any other byte as
+  `\xNN`, so the bytes can be had back exactly.
+- Nothing about it is checked by the core and nothing is acked. The log line
+  names the waveform, the byte count, the payload file and the sha256.
+- The core still reads the same bytes as usual, so a message, ack or chat it
+  finds in them is its own row too, with its own state.
+- The same bytes heard again (another capture of the same burst) aren't stored
+  twice.
+- `status` counts them as `unverified`. They aren't in `pending` (not a
+  message to act on) or its errors.
+
 ## The radio side: scanner, calls heard, health, recordings (gale-web)
 
 greybeard-ale's scanner, decoder and clock write files and answer on the

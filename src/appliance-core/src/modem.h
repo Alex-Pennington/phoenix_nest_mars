@@ -8,6 +8,12 @@
 
 namespace pna {
 
+// One decoded burst: its bytes, where they came from (the payload file's
+// name), the waveform ("110A", "110D"...), and its sha256 when the modem gave one.
+struct ModemDecode {
+    std::string bytes, source, waveform, sha256;
+};
+
 class ModemDriver {
 public:
     struct Callbacks {
@@ -17,6 +23,11 @@ public:
         std::function<void(bool ok, const std::string& error)> on_tx_done;
         // Human-readable state changes for the log.
         std::function<void(const std::string& text)> on_event;
+        // One whole decoded burst, as the modem gave it, before the core reads
+        // it (issue 3 ruling: decodes go into the inbox flagged UNVERIFIED,
+        // with no bytes hidden). Called just before on_rx gets the same bytes.
+        // Optional: a modem that has no bursts never calls it.
+        std::function<void(const ModemDecode& d)> on_decode;
     };
 
     virtual ~ModemDriver() = default;

@@ -355,6 +355,7 @@ void write_item(JsonWriter& w, const Item& it, bool with_body = false) {
         .field("type", it.type)
         .field("state", it.label)
         .field("core_state", it.row.m.state)
+        .field("unverified", it.row.m.state == "unverified")
         .field("mine", it.mine)
         .field("read", it.read)
         .field("processed", it.processed)

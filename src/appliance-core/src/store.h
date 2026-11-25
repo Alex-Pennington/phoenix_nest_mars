@@ -18,7 +18,9 @@ namespace pna {
 // time, core.h expire_h).
 // Incoming states: received; overheard (traffic for another station, kept
 // as CP keeps every burst, never acked); garbled (a damaged copy, kept so
-// the operator can ask for a repeat, never acked).
+// the operator can ask for a repeat, never acked); unverified (a modem
+// decode, kept whole as it came, checked by nobody, never acked: core.cpp
+// decode_in).
 struct Message {
     std::string id;
     std::string direction;  // "out" or "in"
@@ -45,7 +47,7 @@ struct Event {
 
 struct QueueCounts {
     int queued = 0, sending = 0, sent = 0, acked = 0, failed = 0, received = 0;
-    int unacked = 0, held = 0, cancelled = 0, overheard = 0, garbled = 0;
+    int unacked = 0, held = 0, cancelled = 0, overheard = 0, garbled = 0, unverified = 0;
 };
 
 class Store {

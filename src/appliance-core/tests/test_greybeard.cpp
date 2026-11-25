@@ -1,5 +1,6 @@
 // The greybeard-ale adapter: SHA-256, the JSON reader, payload listings, and two
 // cores passing traffic through the stand-in gale-tx and the stand-in channel.
+#include "../src/api_server.h"
 #include "../src/core.h"
 #include "../src/greybeard_modem.h"
 #include "../src/json.h"
@@ -42,11 +43,13 @@ struct Rx {
     std::mutex mu;
     std::string got;
     std::vector<std::string> events;
+    std::vector<ModemDecode> decodes;
     ModemDriver::Callbacks cb() {
         ModemDriver::Callbacks c;
         c.on_rx = [this](const std::string& b) { std::lock_guard<std::mutex> g(mu); got += b; };
         c.on_event = [this](const std::string& e) { std::lock_guard<std::mutex> g(mu); events.push_back(e); };
         c.on_tx_done = [](bool, const std::string&) {};
+        c.on_decode = [this](const ModemDecode& d) { std::lock_guard<std::mutex> g(mu); decodes.push_back(d); };
         return c;
     }
     std::string text() { std::lock_guard<std::mutex> g(mu); return got; }
@@ -121,6 +124,14 @@ int main() {
             write(cap / "c.modems.json", listing("../secret.bin", "X"));
             std::this_thread::sleep_for(std::chrono::milliseconds(700));
             CHECK(rx.text() == "HELLO");
+            {
+                // Each burst also comes whole, named, before the core reads it.
+                std::lock_guard<std::mutex> g(rx.mu);
+                CHECK(rx.decodes.size() == 1);
+                CHECK(!rx.decodes.empty() && rx.decodes[0].bytes == "HELLO" &&
+                      rx.decodes[0].source == "a.m110a.0.bin" && rx.decodes[0].waveform == "110A" &&
+                      rx.decodes[0].sha256 == sha256_hex("HELLO"));
+            }
             m.stop();
         }
         // A restart does not feed handled bursts again.
@@ -132,6 +143,10 @@ int main() {
         CHECK(wait_for([&] { return rx2.text() == "AFTER"; }, 2000));
         std::this_thread::sleep_for(std::chrono::milliseconds(200));
         CHECK(rx2.text() == "AFTER");
+        {
+            std::lock_guard<std::mutex> g(rx2.mu);
+            CHECK(rx2.decodes.size() == 1 && rx2.decodes[0].waveform == "110D");
+        }
         m2.stop();
     }
 
@@ -203,6 +218,40 @@ int main() {
         channel.join();
         a.stop();
         b.stop();
+    }
+
+    // A decode goes into the inbox whole, flagged unverified (issue 3 ruling):
+    // every byte shown, nothing acked, the same burst stored once.
+    {
+        std::string cap = (dir / "U-cap").string();
+        fs::create_directories(cap);
+        GreybeardConfig c;
+        c.mode = "600S";
+        c.captures_dir = cap;
+        c.work_dir = (dir / "U-work").string();
+        c.outbox_dir = (dir / "U-outbox").string();
+        c.state_file = (dir / "U-seen.txt").string();
+        c.poll_ms = 50;
+        Core u(CoreConfig{"U", (dir / "U.db").string(), 3, 1, true}, std::make_unique<GreybeardModem>(c));
+        u.start();
+        const std::string raw = std::string("NOISE A\\B\x00\x7f\xff\tT\rR\nLINE 2", 23);
+        write(fs::path(cap) / "u.m110a.0.bin", raw);
+        write(fs::path(cap) / "u.modems.json", listing("u.m110a.0.bin", raw));
+        const std::string id = "DEC-" + sha256_hex(raw).substr(0, 12);
+        CHECK(wait_for([&] { return u.get(id).has_value(); }, 3000));
+        auto m = u.get(id);
+        CHECK(m && m->state == "unverified" && m->direction == "in" && m->src == "UNKNOWN");
+        CHECK(m && m->body == "NOISE A\\\\B\\x00\\x7F\\xFF\\tT\\rR\nLINE 2");
+        // The same bytes again (another capture of the same burst): one row.
+        write(fs::path(cap) / "v.m110a.0.bin", raw);
+        write(fs::path(cap) / "v.modems.json", listing("v.m110a.0.bin", raw));
+        std::this_thread::sleep_for(std::chrono::milliseconds(400));
+        CHECK(u.status().counts.unverified == 1);
+        // The inbox list and status say so.
+        std::string ls = ApiServer::handle(u, R"({"cmd":"list","dir":"in"})");
+        CHECK(ls.find("\"id\":\"" + id + "\"") != std::string::npos && ls.find("\"unverified\":true") != std::string::npos);
+        CHECK(ApiServer::handle(u, R"({"cmd":"status"})").find("\"unverified\":1") != std::string::npos);
+        u.stop();
     }
 
     fs::remove_all(dir);

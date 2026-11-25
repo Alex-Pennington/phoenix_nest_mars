@@ -256,6 +256,7 @@ public:
 private:
     void loop();
     void handle_rx(const std::string& bytes);
+    void decode_in(const ModemDecode& d);
     void handle_tx_done(bool ok, const std::string& err);
     void log(const std::string& msg_id, const std::string& text);
     void release_due_parts();  // caller holds mu_

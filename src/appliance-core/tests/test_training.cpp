@@ -61,7 +61,7 @@ static void make_station(const fs::path& dir, Station& s) {
     s.far_owner = std::make_unique<LoopbackModem>(0);
     LoopbackModem::connect(*radio, *s.far_owner);
     s.far = s.far_owner.get();
-    s.far->start({[&s](const std::string& b) { s.heard += b.size(); }, nullptr, nullptr});
+    s.far->start({[&s](const std::string& b) { s.heard += b.size(); }, nullptr, nullptr, nullptr});
     CoreConfig cfg{"STA-T", base + ".db", 3, 1, true};
     s.core = std::make_unique<Core>(cfg, std::move(radio));
     auto kr = std::make_shared<keys::Keyring>(base + ".keys");

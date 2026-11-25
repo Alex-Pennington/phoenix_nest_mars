@@ -253,7 +253,7 @@ bool GreybeardModem::handle_listing(const std::string& name) {
         return give_up;  // may still be being written
     }
     auto entries = entries_of(v);
-    std::vector<std::string> payloads;
+    std::vector<ModemDecode> payloads;
     size_t listed = 0;
     for (const JsonValue* e : entries) {
         // modem_verdict.py: one verdict per burst found; only a decoded data
@@ -279,10 +279,23 @@ bool GreybeardModem::handle_listing(const std::string& name) {
             continue;
         }
         if (!h) event("note: " + f->s + " has no sha256 in " + name);
-        payloads.push_back(std::move(data));
+        ModemDecode d;
+        d.source = f->s;
+        const JsonValue* wf = first_of(*e, {"waveform", "modem"});
+        if (wf && wf->type == JsonValue::Type::String) d.waveform = wf->s;
+        else if (f->s.find(".m110d.") != std::string::npos) d.waveform = "110D";
+        else if (f->s.find(".m110a.") != std::string::npos) d.waveform = "110A";
+        else d.waveform = cfg_.waveform;
+        for (auto& c : d.waveform) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+        d.sha256 = sha256_hex(data);
+        d.bytes = std::move(data);
+        payloads.push_back(std::move(d));
     }
-    for (auto& p : payloads)
-        if (cb_.on_rx && !p.empty()) cb_.on_rx(p);
+    for (auto& p : payloads) {
+        if (p.bytes.empty()) continue;
+        if (cb_.on_decode) cb_.on_decode(p);
+        if (cb_.on_rx) cb_.on_rx(p.bytes);
+    }
     if (listed == 0) event(name + " lists no payload files");
     return true;
 }

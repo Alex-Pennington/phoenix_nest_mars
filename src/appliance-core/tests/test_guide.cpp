@@ -236,7 +236,7 @@ static void training(const fs::path& dir) {
     // The real radio's far end: counts every byte the real station keys up with.
     std::atomic<size_t> heard{0};
     LoopbackModem* far_radio = far.get();
-    far_radio->start({[&](const std::string& b) { heard += b.size(); }, nullptr, nullptr});
+    far_radio->start({[&](const std::string& b) { heard += b.size(); }, nullptr, nullptr, nullptr});
     CoreConfig cfg{"STA-T", base + ".db", 3, 1, true};
     Core core(cfg, std::move(radio));
     auto kr = std::make_shared<keys::Keyring>(base + ".keys");

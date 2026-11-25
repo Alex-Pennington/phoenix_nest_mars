@@ -6,6 +6,7 @@
 #include "received.h"
 #include "filemsg.h"
 #include "parts.h"
+#include "sha256.h"
 
 #include <cctype>
 #include <ctime>
@@ -45,6 +46,7 @@ void Core::start() {
     }
     ModemDriver::Callbacks cb;
     cb.on_rx = [this](const std::string& b) { handle_rx(b); };
+    cb.on_decode = [this](const ModemDecode& d) { decode_in(d); };
     cb.on_tx_done = [this](bool ok, const std::string& e) { handle_tx_done(ok, e); };
     cb.on_event = [this](const std::string& t) {
         std::lock_guard<std::mutex> g(mu_);
@@ -568,6 +570,46 @@ void Core::handle_tx_done(bool ok, const std::string& err) {
         store_.schedule_retry(f.id, now_utc() + delay, err);
         log(f.id, "send failed (" + err + "), retry in " + std::to_string(delay) + " s");
     }
+}
+
+// Every byte of a burst, as text that hides none: printable ASCII and line
+// ends as they are; a backslash as \\; a tab as \t, a carriage return as \r;
+// any other byte as \xNN. The bytes can be had back exactly from it.
+std::string decode_text(const std::string& bytes) {
+    static const char* hex = "0123456789ABCDEF";
+    std::string out;
+    out.reserve(bytes.size() + bytes.size() / 8);
+    for (unsigned char c : bytes) {
+        if (c == '\\') out += "\\\\";
+        else if (c == '\n') out += '\n';
+        else if (c == '\t') out += "\\t";
+        else if (c == '\r') out += "\\r";
+        else if (c >= 0x20 && c < 0x7f) out += static_cast<char>(c);
+        else {
+            out += "\\x";
+            out += hex[c >> 4];
+            out += hex[c & 15];
+        }
+    }
+    return out;
+}
+
+// A modem decode, into the inbox as it came: state "unverified", nothing
+// checked, nothing acked, no byte left out. The core still reads the same
+// bytes as usual (handle_rx), so a message found in them is its own row too.
+void Core::decode_in(const ModemDecode& d) {
+    if (d.bytes.empty()) return;
+    std::lock_guard<std::mutex> g(mu_);
+    const std::string sha = d.sha256.empty() ? sha256_hex(d.bytes) : d.sha256;
+    const std::string id = "DEC-" + sha.substr(0, 12);
+    if (store_.exists(id)) {
+        log(id, "the same modem decode came again (" + d.source + "), not stored twice");
+        return;
+    }
+    store_in(id, "", "", 'R', decode_text(d.bytes), "unverified",
+             "UNVERIFIED modem decode: " + (d.waveform.empty() ? std::string("modem") : d.waveform) + ", " +
+                 std::to_string(d.bytes.size()) + " bytes from " + d.source + ", sha256 " + sha +
+                 "; not checked by the core, shown whole");
 }
 
 void Core::handle_rx(const std::string& bytes) {

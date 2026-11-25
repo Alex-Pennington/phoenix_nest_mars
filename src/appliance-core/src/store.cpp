@@ -262,6 +262,7 @@ QueueCounts Store::counts() {
         else if (st == "cancelled") c.cancelled = n;
         else if (st == "overheard") c.overheard = n;
         else if (st == "garbled") c.garbled = n;
+        else if (st == "unverified") c.unverified = n;
     }
     return c;
 }
