@@ -1,0 +1,21 @@
+PAGE MSG-COMPOSE
+TITLE Composing a message
+KIND screen
+SCREENS MSG-COMPOSE
+HELP Tab next field  ? guide for this type  Enter check  F5 send
+KEY Tab Moves to the next box.
+KEY ? Shows this page and the page for the message type you picked.
+KEY Enter Checks the message: every error and how to fix it.
+KEY F5 Sends it, once it has no errors (asks first).
+SEE MSG-OUTBOX TRAINING
+BEGIN_TEXT
+Pick a message type, then fill in its boxes. Each type has its own guide
+page with what goes in each box, and the box checks as you go: format,
+precedence, addresses from the station book, date-time groups.
+
+A message is sent only when it has no errors left. Frequencies are never
+sent in the clear: name the channel by its designator.
+
+Serial numbers are taken only when it is sent, so a message you drop
+leaves no gap.
+END

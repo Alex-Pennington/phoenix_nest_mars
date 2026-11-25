@@ -1,0 +1,18 @@
+PAGE KEYS
+TITLE Cards, keymasters and key tapes
+KIND topic
+SCREENS KEYS
+SEE START FORM-KEYMASTER FORM-KEY_OPEN FORM-HANDOUT_LOAD
+BEGIN_TEXT
+Your card is your station's public half: its call and fingerprint. Give
+it freely. The fingerprint, read aloud or checked in person, is how
+another station knows the card is really yours.
+
+A keymaster issues key tapes. You choose whose tapes you take: check
+their fingerprint by voice or in person, then accept them. No bundle,
+handout or message can name a keymaster for you.
+
+A key tape is sealed to your card, so only your box can open it. A long
+tape comes over the air in numbered parts; the box holds them until every
+part is here. Missing parts are asked for by number (PARTS_ASK).
+END

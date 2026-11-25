@@ -1,0 +1,19 @@
+PAGE BBS-SETUP
+TITLE Machine mode
+KIND screen
+SCREENS BBS-SETUP
+HELP Tab next field  Enter save (asks first)  Esc back  ? guide
+KEY Enter Saves the settings (asks first, No by default).
+SEE BBS-GUARD BBS-ROUTES EMCON
+BEGIN_TEXT
+Machine mode lets other stations pull traffic from this one, and this box
+answers them by itself: it acknowledges, lists what it holds and sends it
+when asked. It is off until you turn it on.
+
+When it is on, the box keys the radio without you, but only for those
+answers. It still obeys EMCON and the hourly airtime cap, and everything
+it sends shows in the Out Box and in Activity.
+
+Accept commands only on enciphered circuits unless your net says
+otherwise.
+END

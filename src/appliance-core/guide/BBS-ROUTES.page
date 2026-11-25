@@ -1,0 +1,21 @@
+PAGE BBS-ROUTES
+TITLE Routing rules
+KIND screen
+SCREENS BBS-ROUTES
+HELP a add  Enter edit  Del remove  +/- order  R re-run  ? guide
+KEY a Adds a rule.
+KEY Enter Edits the rule.
+KEY Del Removes it (asks first).
+KEY + Moves it up. The first rule that matches wins.
+KEY - Moves it down.
+KEY R Runs the rules again over unprocessed traffic (shows the count first).
+SEE BBS-SETUP BBS-GUARD
+BEGIN_TEXT
+Each rule matches a routing indicator, part of one, or a call with a
+wildcard (UHE*), and names the route, the ALE addresses to call in order,
+the key, a schedule, and whether to compress.
+
+Routed traffic keys the radio only while machine mode and routing are
+both on. Calling the ALE addresses is the radio's job; this screen only
+lists them.
+END

@@ -1,0 +1,16 @@
+PAGE MSG-ACTIVITY
+TITLE Activity
+KIND screen
+SCREENS MSG-ACTIVITY
+HELP Left/Right tabs  c clear view  Esc back  ? guide
+KEY Left/Right Moves between IN/OUT, APP and EVENTS.
+KEY c Clears the view only. Nothing is deleted.
+SEE MSG-INBOX MSG-OUTBOX
+BEGIN_TEXT
+IN/OUT is everything received and sent, as it happens, with the time and
+the route. APP is the box's own log. EVENTS finds the history of the
+messages you search for.
+
+The top line counts routes watched, files processed, messages stored, and
+duplicates and purges this session.
+END

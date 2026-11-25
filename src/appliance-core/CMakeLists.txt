@@ -34,6 +34,39 @@ endforeach()
 file(WRITE ${PNA_FORMS_CPP}.new "// Made by CMake from forms/*.form. Don't edit.\n#include \"${CMAKE_CURRENT_SOURCE_DIR}/src/forms.h\"\nnamespace pna {\nnamespace forms {\nconst std::vector<std::pair<std::string, std::string>>& builtin_texts() {\n    static const std::vector<std::pair<std::string, std::string>> t = {\n${_pna_forms_body}    };\n    return t;\n}\n}  // namespace forms\n}  // namespace pna\n")
 configure_file(${PNA_FORMS_CPP}.new ${PNA_FORMS_CPP} COPYONLY)
 
+# The guide's pages (guide/*.page, src/guide.h), built in the same way.
+file(GLOB PNA_PAGE_FILES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/guide/*.page)
+list(SORT PNA_PAGE_FILES)
+set(PNA_PAGES_CPP ${CMAKE_CURRENT_BINARY_DIR}/builtin_pages.cpp)
+set(_pna_pages_body "")
+foreach(_f ${PNA_PAGE_FILES})
+  file(READ ${_f} _t)
+  get_filename_component(_n ${_f} NAME_WE)
+  string(APPEND _pna_pages_body "        {\"${_n}\", R\"PNAPAGE(${_t})PNAPAGE\"},\n")
+endforeach()
+file(WRITE ${PNA_PAGES_CPP}.new "// Made by CMake from guide/*.page. Don't edit.\n#include \"${CMAKE_CURRENT_SOURCE_DIR}/src/guide.h\"\nnamespace pna {\nnamespace guide {\nconst std::vector<std::pair<std::string, std::string>>& builtin_texts() {\n    static const std::vector<std::pair<std::string, std::string>> t = {\n${_pna_pages_body}    };\n    return t;\n}\n}  // namespace guide\n}  // namespace pna\n")
+configure_file(${PNA_PAGES_CPP}.new ${PNA_PAGES_CPP} COPYONLY)
+
+# Training's sample traffic (src/training.h): the scrubbed MARS samples in
+# tests/fixtures, kept byte for byte (they hold the stray bytes of noisy
+# receptions), so built in as hex.
+file(GLOB PNA_SAMPLE_FILES CONFIGURE_DEPENDS
+  ${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/mars-samples/*.txt
+  ${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/mars-samples-b2/*.txt)
+list(SORT PNA_SAMPLE_FILES)
+set(PNA_SAMPLES_CPP ${CMAKE_CURRENT_BINARY_DIR}/builtin_samples.cpp)
+set(_pna_samples_body "")
+foreach(_f ${PNA_SAMPLE_FILES})
+  file(READ ${_f} _h HEX)
+  string(REGEX REPLACE "([0-9a-f][0-9a-f])" "\\\\x\\1" _h "${_h}")
+  get_filename_component(_d ${_f} DIRECTORY)
+  get_filename_component(_d ${_d} NAME)
+  get_filename_component(_n ${_f} NAME_WE)
+  string(APPEND _pna_samples_body "        {\"${_d}/${_n}\", std::string(\"${_h}\", sizeof(\"${_h}\") - 1)},\n")
+endforeach()
+file(WRITE ${PNA_SAMPLES_CPP}.new "// Made by CMake from tests/fixtures/mars-samples*/*.txt. Don't edit.\n#include \"${CMAKE_CURRENT_SOURCE_DIR}/src/training.h\"\nnamespace pna {\nconst std::vector<std::pair<std::string, std::string>>& training_samples() {\n    static const std::vector<std::pair<std::string, std::string>> t = {\n${_pna_samples_body}    };\n    return t;\n}\n}  // namespace pna\n")
+configure_file(${PNA_SAMPLES_CPP}.new ${PNA_SAMPLES_CPP} COPYONLY)
+
 add_library(pna_core STATIC
   src/frame.cpp
   src/store.cpp
@@ -66,6 +99,11 @@ add_library(pna_core STATIC
     src/forms.cpp
     src/api_forms.cpp
     ${PNA_FORMS_CPP}
+    src/guide.cpp
+    src/api_guide.cpp
+    ${PNA_PAGES_CPP}
+    src/training.cpp
+    ${PNA_SAMPLES_CPP}
   src/table.cpp
   src/channels.cpp
   src/mars_import.cpp
@@ -108,7 +146,7 @@ add_library(test_template_module MODULE sdk/cipher_template.c)
 set_target_properties(test_template_module PROPERTIES PREFIX "" C_VISIBILITY_PRESET hidden)
 target_include_directories(test_template_module PRIVATE sdk)
 
-foreach(t test_frame test_core test_greybeard test_acp127 test_received test_templates test_compose test_link test_ops test_sched test_config test_crypto test_codress test_station test_badday test_import test_s5066 test_appa test_appa_m110 test_cipher_slot test_cp_link test_acp127_ops test_groundzero test_firststart test_forms test_parts)
+foreach(t test_frame test_core test_greybeard test_acp127 test_received test_templates test_compose test_link test_ops test_sched test_config test_crypto test_codress test_station test_badday test_import test_s5066 test_appa test_appa_m110 test_cipher_slot test_cp_link test_acp127_ops test_groundzero test_firststart test_forms test_parts test_guide)
   add_executable(${t} tests/${t}.cpp)
   target_link_libraries(${t} PRIVATE pna_core)
   target_compile_definitions(${t} PRIVATE PNA_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}" PNA_BUILD_DIR="${CMAKE_CURRENT_BINARY_DIR}")

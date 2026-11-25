@@ -1,0 +1,18 @@
+PAGE RESENDS
+TITLE Missing parts and the resend queue
+KIND topic
+SCREENS RESENDS
+SEE FORM-PARTS_ASK FORM-PARTS_QUEUE FORM-PARTS_REPEAT EMCON
+BEGIN_TEXT
+Long key tapes and bundles go in numbered parts. A member missing some
+asks for them by number (PARTS_ASK).
+
+At net control the asks pool into one queue. A part several members
+missed goes once to the whole net; a part one member missed goes to that
+member. The queue shows as one line, such as "7 sends for 20 stations",
+and goes with one press, now or at the next net slot (PARTS_QUEUE).
+
+At most 12 resends go in an hour. A member who asks again for a part
+already sent twice is flagged: look into their antenna or path, then send
+it by hand if you choose (PARTS_REPEAT).
+END

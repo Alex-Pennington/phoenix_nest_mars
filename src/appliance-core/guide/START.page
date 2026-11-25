@@ -1,0 +1,40 @@
+; The first-start walkthrough. guide_start adds the steps, done or not,
+; from what the station holds.
+PAGE START
+TITLE Getting started
+KIND start
+SCREENS START
+HELP Enter open the next step  Up/Down steps  Esc back  ? guide
+KEY Enter Opens the form for the next step still to do.
+KEY t Turns training on, to practice with sample traffic first.
+SEE MAIN TRAINING KEYS
+BEGIN_TEXT
+This box sends and receives MARS traffic with no shell and no settings
+file. Everything goes in through forms, and every screen has its own page
+in this guide: press ? on any screen.
+
+Seven steps take a box from the can to its first message. The box ticks
+each one off as it sees it done, so you can stop and come back.
+
+ 1. Give the box your call.
+ 2. Show your card to your keymaster.
+ 3. Choose whose authority you take.
+ 4. Enter your channels.
+ 5. Know when your nets meet.
+ 6. Load your key tape.
+ 7. Send your first message.
+
+The choice of keymaster is yours alone. Nothing on the box, in a bundle or
+in a handout picks one for you.
+
+Not sure yet? Turn on training. It loads sample traffic into a separate
+practice store, so you can try every screen. Nothing you do in training
+goes on the air, and none of it mixes with your real traffic.
+END
+BEGIN_EXAMPLE
+A member opens a sealed box after an outage. The box asks for the call
+(step 1). At the rally point net control reads its fingerprint aloud; the
+member checks it and accepts net control as keymaster (steps 2 and 3).
+Net control's startup bundle brings channels and schedules (4 and 5), the
+sealed tape comes over the air (6), and the member sends a check-in (7).
+END

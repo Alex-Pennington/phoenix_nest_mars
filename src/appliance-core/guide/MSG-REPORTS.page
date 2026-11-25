@@ -1,0 +1,14 @@
+PAGE MSG-REPORTS
+TITLE Reports
+KIND screen
+SCREENS MSG-REPORTS
+HELP 1 station log  2 COMTRAFSTAT  3 COMTRAFSUM  e export  ? guide
+KEY 1 Station log for the dates you picked.
+KEY 2 COMTRAFSTAT: traffic still pending.
+KEY 3 COMTRAFSUM: a period summary, opened as a draft to send.
+KEY e Exports the report to a file.
+SEE MSG-COMPOSE
+BEGIN_TEXT
+Pick the first and last day (UTC), then the report. A summary opens in
+Compose as a draft: check it, then send it like any message.
+END

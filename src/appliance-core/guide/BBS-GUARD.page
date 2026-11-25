@@ -1,0 +1,15 @@
+PAGE BBS-GUARD
+TITLE Guard list and aliases
+KIND screen
+SCREENS BBS-GUARD
+HELP a add  Enter edit  Del remove  Tab other list  ? guide
+KEY a Adds an entry.
+KEY Enter Edits the entry.
+KEY Del Removes it (asks first).
+KEY Tab Moves between the guard list and the alias map.
+SEE BBS-SETUP BBS-ROUTES
+BEGIN_TEXT
+The guard list holds the calls and routing indicators this station
+delivers for: traffic to them is yours to deliver. The alias map turns a
+collective routing indicator into its member stations.
+END

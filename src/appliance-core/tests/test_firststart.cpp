@@ -45,6 +45,12 @@ using namespace pna;
 // 5000000). Digits inside a key, signature or sealed block don't count.
 static bool leaks(const std::string& text, const std::string& needle) {
     for (size_t at = text.find(needle); at != std::string::npos; at = text.find(needle, at + 1)) {
+        // A number standing alone: not the start of a longer one (a date-time
+        // group such as 250012Z holds 2500).
+        const size_t end = at + needle.size();
+        if (std::isdigit(static_cast<unsigned char>(needle.back())) && end < text.size() &&
+            std::isdigit(static_cast<unsigned char>(text[end])))
+            continue;
         if (at == 0) return true;
         unsigned char before = static_cast<unsigned char>(text[at - 1]);
         if (!std::isalnum(before) && before != '+' && before != '/') return true;

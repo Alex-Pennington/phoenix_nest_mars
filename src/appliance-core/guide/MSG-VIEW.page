@@ -1,0 +1,25 @@
+PAGE MSG-VIEW
+TITLE Reading a message
+KIND screen
+SCREENS MSG-VIEW
+HELP Left/Right tabs  k QSL  x processed  t tag  T transmit  ? guide
+KEY Left/Right Moves between the tabs: TEXT, DECODED, EVENTS, PROPS.
+KEY k QSL it.
+KEY x Marks it processed.
+KEY d Discards it.
+KEY e Exports it.
+KEY t Adds your own tag to it, a note only this station sees.
+KEY E Edits a corrected copy. The message as received is kept.
+KEY y Copies the code groups.
+KEY T Sends it on (asks first, No by default): keys the radio.
+SEE MSG-INBOX MSG-OUTBOX EMCON
+BEGIN_TEXT
+TEXT is the message as it came over the air. DECODED shows an enciphered
+message in the clear, when this station holds the key; otherwise it says
+there is no key here. EVENTS is its history, oldest first. PROPS lists
+precedence, key name (never the key itself), source, destination, ALE
+address, data rate and checksum.
+
+T is the only key on this screen that transmits. It names the route and
+asks first. While EMCON is on, nothing goes out.
+END

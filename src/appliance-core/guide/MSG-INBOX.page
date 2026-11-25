@@ -1,0 +1,31 @@
+PAGE MSG-INBOX
+TITLE In Box
+KIND screen
+SCREENS MSG-INBOX
+HELP Enter open  k QSL  x processed  e export  M D P filters  ? guide
+KEY Enter Opens the message.
+KEY k QSL it: tells the sender you have it.
+KEY x Marks it processed: you have acted on it.
+KEY e Exports it to the export folder.
+KEY M Shows only messages for this station.
+KEY D Hides delivered messages.
+KEY P Shows processed messages too.
+KEY / Filters the list as you type.
+SEE MSG-VIEW MSG-PENDING MSG-SEARCH
+BEGIN_TEXT
+Every message that came in, newest first. Columns: number, date-time
+group, precedence, from, to, message id and state.
+
+States: NEW (not opened), READ, QSL (receipt sent), PROC (processed),
+DISC (discarded), DELIV (delivered on to its addressee).
+
+Higher precedence comes first within a day: FLASH (Z), IMMEDIATE (O),
+PRIORITY (P), ROUTINE (R). Each has a time to handle it in; a message
+past its time shows in the status strip.
+END
+BEGIN_EXAMPLE
+A PRIORITY message from NCS-A arrives at 1412Z. It shows at the top as
+NEW. Enter opens it; k sends the QSL and the state becomes QSL. When you
+have done what it asks, x marks it processed and it leaves the default
+view (P shows it again).
+END

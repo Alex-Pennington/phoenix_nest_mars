@@ -1,5 +1,6 @@
 #include "api_server.h"
 #include "api_forms.h"
+#include "api_guide.h"
 #include "forms.h"
 
 #include "api_ops.h"
@@ -21,6 +22,7 @@
 #include "received.h"
 #include "json.h"
 #include "net.h"
+#include "training.h"
 
 #include <sys/socket.h>
 
@@ -31,6 +33,8 @@
 #include <chrono>
 #include <ctime>
 #include <map>
+#include <memory>
+#include <mutex>
 #include <set>
 #include <filesystem>
 #include <fstream>
@@ -2337,6 +2341,58 @@ std::optional<std::string> station_cmd(Core& core, const std::string& cmd, std::
     return w.str();
 }
 
+
+// ---- Training (src/training.h, docs/guide.md) ----
+//
+// One practice station per real station while training is on. The real
+// station keeps receiving underneath; the API answers from the practice one.
+
+std::mutex g_training_mu;
+std::map<const Core*, std::shared_ptr<Training>> g_training;
+
+std::shared_ptr<Training> training_for(const Core& core) {
+    std::lock_guard<std::mutex> g(g_training_mu);
+    auto it = g_training.find(&core);
+    return it == g_training.end() ? nullptr : it->second;
+}
+
+std::string training_dir(const Core& core) {
+    std::string db = core.db_path();
+    if (db.size() > 3 && db.compare(db.size() - 3, 3, ".db") == 0) db.resize(db.size() - 3);
+    return db + ".training";
+}
+
+// Marks a reply as from the practice station.
+std::string mark_training(const std::string& reply) {
+    if (reply.size() < 2 || reply[0] != '{') return reply;
+    return reply == "{}" ? std::string("{\"training\":true}") : "{\"training\":true," + reply.substr(1);
+}
+
+// What training doesn't do: write files out of the box, read files in (its
+// material is built in), or change the real station's backup or cipher.
+std::string training_refuses(const std::string& cmd, std::map<std::string, std::string>& req) {
+    static const std::set<std::string> never = {"station_backup", "station_restore", "cipher_install", "cipher_remove"};
+    if (never.count(cmd)) return cmd + " isn't done in training: turn training off first";
+    if (!req["out"].empty()) return "training doesn't write files: turn training off first";
+    if (!req["file"].empty()) return "training doesn't read files in: its traffic is built in";
+    return "";
+}
+
+void write_training(JsonWriter& w, Core& core, const std::shared_ptr<Training>& t) {
+    w.field("on", t != nullptr)
+        .field("since", static_cast<long long>(t ? t->since() : 0))
+        .field("samples", t ? t->samples_played() : 0)
+        .field("practice_station", std::string(Training::kNcs));
+    // The real station's traffic, so the operator knows what waits outside.
+    CoreStatus s = core.status();
+    w.begin_object("real")
+        .field("received", s.counts.received)
+        .field("queued", s.counts.queued)
+        .field("unacked", s.counts.unacked)
+        .field("emcon", s.emcon)
+        .end_object();
+}
+
 }  // namespace
 
 ApiServer::ApiServer(Core& core, uint16_t port) : core_(core), port_(port) {}
@@ -2402,7 +2458,52 @@ std::string ApiServer::handle(Core& core, const std::string& line) {
     std::map<std::string, std::string> req;
     if (!parse_flat_object(line, req)) return error_reply("request must be one flat JSON object");
     const std::string cmd = req["cmd"];
+
+    // Training: turned on and off here, on the real station.
+    if (cmd == "training" || cmd == "training_status") {
+        auto t = training_for(core);
+        if (cmd == "training") {
+            std::string on = req["on"], reload = req["reload"];
+            for (auto* x : {&on, &reload})
+                for (auto& c : *x) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+            if (!on.empty() && on != "Y" && on != "N") return error_reply("on is Y or N");
+            std::string err;
+            if (on == "N") {
+                if (t) t->stop();
+                std::lock_guard<std::mutex> g(g_training_mu);
+                g_training.erase(&core);
+                t = nullptr;
+            } else if (on == "Y" || reload == "Y") {
+                if (!t) {
+                    t = std::make_shared<Training>(training_dir(core), core.station());
+                    if (!t->start(&err)) return error_reply("training didn't start: " + err);
+                    std::lock_guard<std::mutex> g(g_training_mu);
+                    g_training[&core] = t;
+                }
+                if (reload == "Y" && !t->reload(&err)) {
+                    std::lock_guard<std::mutex> g(g_training_mu);
+                    g_training.erase(&core);
+                    return error_reply("training didn't reload: " + err);
+                }
+            }
+        }
+        JsonWriter w;
+        w.begin_object().field("ok", true);
+        write_training(w, core, t);
+        w.end_object();
+        return w.str();
+    }
+    if (auto t = training_for(core)) {
+        // The guide speaks of training while it is on.
+        if (cmd.rfind("guide_", 0) == 0)
+            if (auto r = handle_guide(core, cmd, req, true)) return mark_training(*r);
+        std::string why = training_refuses(cmd, req);
+        if (!why.empty()) return mark_training(error_reply(why));
+        return mark_training(handle(t->core(), line));
+    }
+
     if (auto r = handle_forms(core, cmd, req)) return *r;
+    if (auto r = handle_guide(core, cmd, req)) return *r;
 
     if (cmd == "status") {
         CoreStatus s = core.status();

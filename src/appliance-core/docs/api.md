@@ -69,6 +69,39 @@ the top level of the request, beside `cmd` and `form`.
 - `form_template_reset {form}`: drops the local copy. `result`: `built in
   again`, or `removed` for a form that isn't built in.
 
+## Guide
+
+The operator guide (docs/guide.md). Every page comes with `lines`: the page
+laid out for the 80x25 screen (title, text, keys, example, see also), ready
+to draw. These answer in setup mode too, from the built-in pages.
+
+- `guide_list`: `pages`, each `id`, `title`, `kind` (`start`, `screen`,
+  `topic`, `form`, `type`), `origin` and `screens`.
+- `guide_get {id}`: `found`, and `page` with `id`, `title`, `kind`, `help`
+  (the key strip), `screens`, `keys` (each `key`, `what`), `text`,
+  `example`, `see`, `origin` and `lines`.
+- `guide_help {screen, type?}`: the page for `?` on that screen. With
+  `type` on the compose screen, also `type`, that message type's page. A
+  screen with no page yet gives the MAIN page with `found` false.
+- `guide_start`: the walkthrough. `steps` (each `n`, `id`, `title`, `form`,
+  `screen`, `how`, `done`), `done`, `of`, `next`, `next_title`,
+  `next_screen`, and the START page.
+- `guide_page_get {id}`, `guide_page_put {text}`, `guide_page_reset {id}`:
+  edit a written page, as `form_template_*` do for forms. A page holding a
+  frequency is refused, and so is a FORM- or TYPE- id.
+
+Every guide reply has `training`.
+
+## Training
+
+- `training {on:Y|N, reload:Y}` and `training_status`: `on`, `since`,
+  `samples` (sample messages played in), `practice_station` (TRAIN-NCS) and
+  `real` (`received`, `queued`, `unacked`, `emcon` of the real station).
+  These two are always answered by the real station.
+
+While training is on, every other call is answered by the practice station
+and its reply has `"training":true`. See docs/guide.md, Training mode.
+
 ## status
 
 `{"cmd":"status"}` →

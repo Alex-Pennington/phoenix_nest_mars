@@ -1,0 +1,19 @@
+PAGE MSG-PENDING
+TITLE Pending
+KIND screen
+SCREENS MSG-PENDING
+HELP Enter open  x processed  X all processed  d discard  ? guide
+KEY Enter Opens the message.
+KEY x Marks it processed.
+KEY X Marks every pending message processed (asks first, No by default).
+KEY d Discards a message with format errors (errors list only).
+KEY D Discards every message with format errors (asks first).
+SEE MSG-INBOX MSG-VIEW
+BEGIN_TEXT
+Two lists. The top one is every message not yet acted on. The bottom one
+is every message that came in with format errors, with what is wrong.
+
+A message with errors is kept as it came. Open it to read it anyway: a
+garbled line on a noisy band is often still readable. Ask for a repeat
+when it matters.
+END

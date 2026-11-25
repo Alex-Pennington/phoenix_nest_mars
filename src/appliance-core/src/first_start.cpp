@@ -1,6 +1,7 @@
 // First start: see first_start.h and docs/quick-start.md.
 #include "first_start.h"
 #include "forms.h"
+#include "guide.h"
 
 #include "frame.h"
 #include "json.h"
@@ -68,6 +69,19 @@ std::string handle(const std::string& db_dir, int64_t now, const std::string& li
     }
     std::string have;
     bool set = saved_call(db_dir, have);
+    if (cmd.rfind("guide_", 0) == 0) {
+        // The guide as it came with the box: its pages and the setup form's
+        // page. Pages can't be changed until the station starts.
+        std::map<std::string, std::string> flat;
+        if (!parse_flat_object(line, flat)) return error_reply("request must be one flat JSON object");
+        guide::Library pages("");
+        forms::Library lib("");
+        guide::Context ctx;
+        ctx.pages = &pages;
+        ctx.forms = &lib;
+        ctx.steps = [set] { return guide::setup_steps(set); };
+        if (auto out = guide::handle(ctx, cmd, flat)) return *out;
+    }
     if (cmd == "setup_status" || cmd == "status") {
         JsonWriter w;
         w.begin_object().field("ok", true).field("setup_needed", !set);

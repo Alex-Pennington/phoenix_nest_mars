@@ -1,0 +1,12 @@
+PAGE EMCON
+TITLE EMCON: radio silence
+KIND topic
+SCREENS EMCON
+SEE MSG-OUTBOX RESENDS
+BEGIN_TEXT
+EMCON stops every transmission from this box. Messages stay queued and
+held ones stay held; nothing is lost. Receiving goes on as normal.
+
+Anything that asks to send now is refused while EMCON is on. Turn it off
+and the queue goes in precedence order.
+END

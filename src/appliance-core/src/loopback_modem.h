@@ -31,6 +31,9 @@ public:
     void corrupt_next_deliveries(int n) { corrupt_ = n; }
     // While held, the modem reports not ready, so the core queues traffic.
     void hold(bool on) { held_ = on; }
+    // Puts bytes on the channel as if this radio sent them, past the queue:
+    // training plays its sample traffic this way.
+    void play(const std::string& bytes) { deliver(bytes); }
 
     void start(Callbacks cb) override;
     void stop() override;

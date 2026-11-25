@@ -1,0 +1,26 @@
+PAGE MAIN
+TITLE Main screen
+KIND screen
+SCREENS MAIN
+HELP m inbox  o outbox  c compose  p pending  ? guide  q quit
+KEY m In Box: every message that came in.
+KEY p Pending: messages still to act on, and ones with format errors.
+KEY o Out Box: waiting to go, on the air, or failed.
+KEY c Compose a new message.
+KEY s Search the messages.
+KEY a Activity: what came in and went out, as it happens.
+KEY r Reports: station log, traffic status and summary.
+KEY b Machine mode (BBS) settings.
+KEY g Guard list and collective aliases.
+KEY u Routing rules.
+KEY ? This guide, for the screen you are on.
+SEE START TRAINING EMCON
+BEGIN_TEXT
+The main screen shows the station at a glance: your call and the UTC clock
+on the top line, the help line at the bottom, and below it the status
+strip: messages queued, one on the air, failures, the link, and EMCON.
+
+Forms (setup, cards, keymasters, channels, schedules, tapes and bundles)
+and training are on the main menu. Getting started (START) walks you
+through the first steps in order.
+END

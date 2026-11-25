@@ -1,0 +1,34 @@
+PAGE TRAINING
+TITLE Training mode
+KIND topic
+SCREENS TRAINING
+HELP t training on or off  Enter open  Esc back  ? guide
+KEY t Turns training on or off. Off returns you to your real traffic.
+KEY Enter In training: reload the sample traffic, as new.
+SEE START MSG-INBOX MSG-COMPOSE
+BEGIN_TEXT
+Training is a practice copy of the box. It has its own store, filled with
+sample traffic: real-shaped MARS messages with made-up calls and routing
+indicators, addressed to your call. You can read them, compose, reply and
+send, and watch it all work.
+
+While training is on:
+ - TRAINING shows on line 2 of every screen.
+ - Nothing goes on the air. What you send goes to a practice station
+   inside the box, TRAIN-NCS, which acknowledges like a real one.
+ - Your real traffic is kept apart: nothing you do here touches it, and
+   your real station keeps receiving underneath.
+ - Keys are practice keys, made for training. Your real tapes and cards
+   are never used.
+
+Turn training off to go back. The practice store stays until you reload
+it, so you can pick up where you left off.
+END
+BEGIN_EXAMPLE
+Turn training on. The In Box fills with about eighty sample messages, a
+few overheard or garbled as on a real net, and three from TRAIN-NCS: a
+welcome, a check-in request, and one sent enciphered in a practice key
+that the box already holds. Answer the check-in: compose to TRAIN-NCS
+and send. It is acknowledged and shows in the Out Box as acknowledged.
+No radio was keyed.
+END

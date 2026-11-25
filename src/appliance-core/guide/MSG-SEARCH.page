@@ -1,0 +1,15 @@
+PAGE MSG-SEARCH
+TITLE Search
+KIND screen
+SCREENS MSG-SEARCH
+HELP Tab next box  Enter search  Esc back  ? guide
+KEY Enter Searches with what you typed. Enter on a result opens it.
+SEE MSG-INBOX MSG-VIEW
+BEGIN_TEXT
+Search by sender, serial, date-time group, recipient or message type.
+% stands for anything: 18% finds every DTG that starts 18.
+
+The advanced line takes a filter such as
+  sender = NCS-A AND (prec = P OR prec = O)
+The line under the results shows the filter in use.
+END
