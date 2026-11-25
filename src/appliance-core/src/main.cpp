@@ -5,6 +5,7 @@
 //
 // See README.md for every option.
 #include "api_server.h"
+#include "bbs.h"
 #include "compose.h"
 #include "config.h"
 #include "first_start.h"
@@ -196,6 +197,7 @@ bool start_station(Station& s, CoreConfig cfg, std::unique_ptr<ModemDriver> mode
     }
     s.core->on_log([name](const std::string& t) { log_line(name, t); });
     s.core->start();
+    bbs::start(*s.core);  // machine mode and routing (bbs.h); off until the operator turns them on
     s.api = std::make_unique<ApiServer>(*s.core, port);
     if (!s.api->start()) {
         log_line(name, "cannot open API port " + std::to_string(port));
@@ -542,6 +544,7 @@ int main(int argc, char** argv) {
 
     for (auto& s : stations) {
         if (s.api) s.api->stop();
+        if (s.core) bbs::stop(*s.core);
         if (s.core) s.core->stop();
     }
     if (g_link) g_link->stop();

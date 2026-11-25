@@ -1,4 +1,5 @@
 #include "api_server.h"
+#include "api_bbs.h"
 #include "api_forms.h"
 #include "api_guide.h"
 #include "forms.h"
@@ -2504,6 +2505,7 @@ std::string ApiServer::handle(Core& core, const std::string& line) {
 
     if (auto r = handle_forms(core, cmd, req)) return *r;
     if (auto r = handle_guide(core, cmd, req)) return *r;
+    if (auto r = handle_bbs(core, cmd, req)) return *r;
 
     if (cmd == "status") {
         CoreStatus s = core.status();

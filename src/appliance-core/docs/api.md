@@ -759,3 +759,108 @@ before the file. The reply is `send_acp127`'s.
 saying why the file can't be read (no file, cut short, wrong size or CRC).
 
 `requeue` takes an `expired` message too.
+
+## BBS: machine mode, guard list, routing
+
+The core side of the BBS-SETUP, BBS-GUARD and BBS-ROUTES screens
+(docs/gale-term-mm-bbs-screens.md, section 3). Code in src/bbs.h. State lives
+in the station's database (`bbs_*` tables). All of it is off until the
+operator turns it on.
+
+Nothing here keys the radio by itself unless the operator turned machine mode
+on (and routing on, for routed traffic). Every automatic send is refused or
+waits while EMCON is on, counts against `auto_per_hour`, and goes into the
+ordinary queue, so it shows in the Out Box and Activity and goes out the
+pinned transmit route. A command heard while machine mode was off is never
+answered later.
+
+### Settings
+
+- `bbs_get` returns the settings: `machine_mode`, `suffix` (`-CM`),
+  `machine_call` (this call with `-CM`), `accept`, `ack`, `ack_delay_ms`,
+  `ack_to`, `commands_ct_only`, `max_errors`, `accept_malformed`,
+  `zee_multi`, `zee_max_bytes`, `data_rate_bps`, `duty_s`, `zee_limit` (the
+  ZEE answer size used), `remote_sync`, `duplicates` (the rule, as text),
+  `purge_days`, `auto_mark_days`, `auto_per_hour`, `auto_sent_last_hour`,
+  `routing`, `broadcast_ri`, `version`, and `auto_send` with
+  `auto_send_why_not` (empty, or `machine mode is off`, `EMCON is on`,
+  `the hourly cap of N automatic sends is used up`, ...).
+- `bbs_set` takes any of those keys and returns the same reply. A bad value
+  refuses the whole call and changes nothing.
+
+| key | default | values |
+|---|---|---|
+| `machine_mode` | false | answer `-CM` commands |
+| `accept` | `calls` | `calls` (traffic to this call), `calls_ris` (and RIs on the guard list), `all` (everything heard) |
+| `ack` | `auto` | `auto` sends a QSL receipt for plain ACP 127 traffic received, `off` |
+| `ack_delay_ms` | 2000 | 0 to 600000 |
+| `ack_to` | empty | empty is the sender; a call. Never `ALL` |
+| `commands_ct_only` | true | act on commands only when they came enciphered |
+| `max_errors` | 3 | a message with more parse warnings isn't held |
+| `accept_malformed` | false | hold those anyway |
+| `zee_multi` | false | ZEE may send more than one message |
+| `zee_max_bytes` | 0 | 0: worked out from `data_rate_bps` x `duty_s` / 8 (256 to 8192) |
+| `data_rate_bps`, `duty_s` | 600, 120 | for that |
+| `remote_sync` | false | refused either way for now |
+| `purge_days`, `auto_mark_days` | 30, 0 | stored for the inbox marks |
+| `auto_per_hour` | 12 | automatic sends an hour, all kinds; 0 is none |
+| `routing` | false | send matching traffic on by the rules |
+| `broadcast_ri` | empty | struck from routed traffic, never picks a route |
+
+### Machine commands
+
+Another station sends an ACP 201 line to this call with `-CM`:
+`AAM402-CM DE AAR9AA // QRU // 1737Z K`. Enciphered, it is a codress message
+whose text starts with that line; the compose form takes no `//`, so single
+slashes (`AAM402-CM DE AAR9AA / QRU / 1737Z K`) are read the same. The answer
+goes to the sender as one block: `HHMMZ`, `DE <call>-CM`, the lines, `AR`.
+
+- `VER`: `VER PNA MESSAGE CORE BBS 1`.
+- `QRU [pattern,...]`: what is held here for those calls or RIs (default: the
+  sender). `QTC n [patterns]`, then one line each:
+  `n - <lines> <originator> #<serial> <filed> ---> <recipients>`. `QRU` when
+  none. Lines the sender has QSL'd aren't listed again.
+- `ZEE n[,n...] [COMP]`: sends lines of the sender's last list. With
+  `zee_multi` off, the first only, and it says so. Long answers come as pages
+  of at most `zee_limit` bytes, each starting `PAGE k OF m`. `[COMP]` is
+  noted; this station sends uncompressed.
+- `ZDK [n]`: page n of the last ZEE answer again (all pages with no n).
+- `QSL n[,n...]`: marks those lines QSL by the sender. No answer.
+- Anything else, or a plain command with `commands_ct_only` on, gets one
+  `ERROR ...` line saying why.
+
+`bbs_qsl {id}` returns `by`, the stations that sent QSL for that message.
+
+### Guard list and RI alias map
+
+- `guard_list` returns `items`. `guard_set {items}` replaces the list (comma
+  list; an empty string clears it). A `-CM` call is refused.
+- `alias_list` returns `aliases`, each `ri` and `members`.
+  `alias_set {ri, members}` (members separated by `;`), `alias_del {ri}`.
+
+### Routing rules
+
+Each rule: `id`, `pos`, `match` (RI, partial RI or call; `*` at the end says
+the same), `route` (a name), `ale` (ALE addresses in calling order), `key`
+(our cipher: a key indicator or net name; empty sends as received), `sched`
+(empty or `HHMMZ`; a time that has passed today means tomorrow), `compress`
+(noted, sent uncompressed), `mark_processed` (default true). First match by
+position wins.
+
+- `route_list` returns `routing`, `broadcast_ri`, `auto_send`,
+  `auto_send_why_not`, `rules`, and `routed` (the last 20: `msg_id`, `rule`,
+  `state` `due`/`queued`/`refused`, `out_id`, `due`, `processed`, `why`).
+- `route_set {id?, match, route, ale, key, sched, compress,
+  mark_processed}` adds a rule, or changes rule `id` keeping what isn't
+  named. Returns `id`. Needs at least one ALE address; an unknown key is
+  refused.
+- `route_del {id}`, `route_move {id, dir}` (`up` or `down`) or
+  `{id, to}` (a position).
+- `route_rerun {dry_run}` runs the rules over held traffic not routed yet.
+  A dry run unless `dry_run` is `false`. Returns `dry_run`, `count`, `items`
+  and `auto_send_why_not`.
+
+A routed message goes to the rule's first ALE address with the broadcast RI
+struck off; the log names the whole calling order. With `key` set, plain
+traffic is enciphered in our cipher slot first (it needs a date-time group
+line). Traffic this station originated isn't routed.
