@@ -205,6 +205,12 @@ With the station book on, `status` also has `on_duty`, `net` (the open net) and
   then `links_reported` is false, the list is empty, and `links_note` says "no
   link data from greybeard-ale yet". `tools/stub_ale_scan.py` sends the field.
 
+`tuner` is the LDG tuner daemon's status block, passed through unchanged
+(`--tuner-socket`; see Tuner below and greybeard-ale docs/ldg-tuner.md 5.4):
+`contract_rev`, `channel {ant_rx, ant_tx, recalled_on}`, `relays.antenna`,
+`keyed`, `tx_locked`, `meter` and the rest. It is read at most once a second.
+It is left out when no tuner socket is set or nothing answers on it.
+
 ## compose_templates
 
 `{"cmd":"compose_templates"}` →

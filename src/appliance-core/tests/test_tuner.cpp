@@ -583,6 +583,61 @@ static void socket_framing(const fs::path& dir) {
     CHECK(!r.reached && r.code == "no-tuner");
 }
 
+// ---------------------------------------------------------------- status and the guide page
+
+static void status_and_guide(const fs::path& dir) {
+    auto core = std::make_unique<Core>(CoreConfig{"STA-B", (dir / "STA-B.db").string(), 3, 1, true},
+                                       std::make_unique<LoopbackModem>(0));
+    core->set_ops(std::make_shared<Ops>("STA-B", (dir / "STA-B.db").string()));
+
+    // No tuner set up: status carries no tuner section.
+    JsonValue r = api(*core, R"({"cmd":"status"})");
+    CHECK(okv(r) && r.get("tuner") == nullptr);
+
+    // A tuner answering: its block, passed through whole.
+    auto stub = std::make_shared<StubTuner>();
+    auto tk = std::make_shared<TunerKeying>(stub, fast());
+    core->set_tuner(tk);
+    r = api(*core, R"({"cmd":"status"})");
+    CHECK(okv(r) && r.get("tuner") != nullptr);
+    const JsonValue& t = sub(r, "tuner");
+    CHECK(num(t, "contract_rev") == 2 && str(t, "protocol") == "ldg-tuner/1");
+    CHECK(num(sub(t, "channel"), "ant_rx") == 1 && num(sub(t, "channel"), "ant_tx") == 2 &&
+          num(sub(t, "channel"), "recalled_on") == 1);
+    CHECK(num(sub(t, "relays"), "antenna") == 1 && sub(t, "meter").get("ref_w") != nullptr);
+    // Read at most once a second: a second status within that reuses the read.
+    size_t reads = stub->sent.size();
+    api(*core, R"({"cmd":"status"})");
+    CHECK(stub->sent.size() == reads);
+    // The rest of status is as it was.
+    CHECK(r.get("station") && r.get("emcon") && r.get("cap"));
+
+    // The daemon gone: the section is left out, not an error.
+    auto gone = std::make_shared<StubTuner>();
+    gone->absent = true;
+    core->set_tuner(std::make_shared<TunerKeying>(gone, fast()));
+    r = api(*core, R"({"cmd":"status"})");
+    CHECK(okv(r) && r.get("tuner") == nullptr);
+    // An answer that isn't ldg-tuner/1: left out too.
+    auto odd = std::make_shared<StubTuner>();
+    odd->scripted["tuner_status"] = {R"({"protocol":"other","ok":true,"tuner":{"x":1}})"};
+    core->set_tuner(std::make_shared<TunerKeying>(odd, fast()));
+    r = api(*core, R"({"cmd":"status"})");
+    CHECK(okv(r) && r.get("tuner") == nullptr);
+
+    // The TUNER guide page: per-channel ports, RF-off switching, 25 W, refused while pinned.
+    r = api(*core, R"({"cmd":"guide_get","id":"TUNER"})");
+    CHECK(okv(r));
+    std::string text;
+    for (auto& l : sub(sub(r, "page"), "lines").arr) text += l.s + " ";
+    for (auto want : {"RX antenna", "TX antenna", "port 1", "RF on", "RF off", "25 W", "pinned", "refused", "VOX",
+                      "With no tuner"})
+        CHECK(contains(text, want));
+    bool see_channel = false;
+    for (auto& x : sub(sub(r, "page"), "see").arr) see_channel = see_channel || x.s == "FORM-CHANNEL";
+    CHECK(see_channel);
+}
+
 int main() {
     fs::path dir = fs::temp_directory_path() / ("pna_tuner_" + std::to_string(::getpid()));
     fs::remove_all(dir);
@@ -593,6 +648,7 @@ int main() {
     sequence();
     tune();
     socket_framing(dir);
+    status_and_guide(dir);
     fs::remove_all(dir);
     return check::report("test_tuner");
 }

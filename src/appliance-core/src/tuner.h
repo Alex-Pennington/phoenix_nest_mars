@@ -32,6 +32,7 @@
 #include "channels.h"
 #include "json.h"
 
+#include <chrono>
 #include <functional>
 #include <map>
 #include <memory>
@@ -105,6 +106,8 @@ struct TunerTiming {
     int post_tries = 8;        // tuner_post_tx tries on refused-keyed or busy
     int post_first_ms = 250;   // first backoff, doubled each try
     int post_max_ms = 4000;    // backoff ceiling
+    int status_ms = 1500;          // the core's status call: tuner_status read timeout
+    int status_max_age_ms = 1000;  // and how long one read serves
 };
 
 // The most a tune's carrier may be: the FT-897D roll-back is unconfirmed.
@@ -144,6 +147,11 @@ public:
     TunerOutcome channel(const Channel& c);
     std::string current_channel() const;
 
+    // The daemon's status block, as JSON text, for the core's status call:
+    // tuner_status read at most once a second, passed through unchanged.
+    // Empty when no tuner is set up or nothing answers.
+    std::string status_block();
+
     // One keyed transmit through the keyer, with the tuner around it.
     TunerOutcome transmit(Keyer& k, bool emcon);
     // The program's keyer, if any.
@@ -171,6 +179,10 @@ private:
     std::string channel_;
     std::function<void(const std::string&)> log_;
     std::mutex seq_mu_;  // one sequence at a time
+    std::mutex status_mu_;
+    bool status_read_ = false;
+    std::string status_;
+    std::chrono::steady_clock::time_point status_at_;
 };
 
 // The 4100 calls: tuner_status, tuner_channel, tuner_recall, tuner_bypass,

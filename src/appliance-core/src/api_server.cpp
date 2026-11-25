@@ -2739,6 +2739,13 @@ std::string ApiServer::handle(Core& core, const std::string& line) {
         w.field("advisor", adv ? adv->name() : std::string());
         // Link state from greybeard-ale (link_monitor.h); "link": null with no source.
         write_link(w, s);
+        // The tuner daemon's status block, passed through unchanged: channel
+        // {ant_rx, ant_tx, recalled_on}, contract_rev, relays.antenna, ...
+        // Left out when no tuner is set up or nothing answers.
+        if (TunerKeying* tk = core.tuner()) {
+            std::string tb = tk->status_block();
+            if (!tb.empty()) w.raw("tuner", tb);
+        }
         if (Ops* ops = core.ops()) {
             auto d = ops->duty_current();
             std::string net = ops->current_net();

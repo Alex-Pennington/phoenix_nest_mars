@@ -121,7 +121,13 @@ TunerReply parse_tuner_reply(const std::string& line) {
 }
 
 TunerReply TunerSocket::call(const std::string& cmd, const std::string& args_json, int timeout_ms) {
-    std::lock_guard<std::mutex> g(mu_);
+    // Each call has its own connection; only the id is shared. So a status
+    // read isn't held up behind a tune that takes its time.
+    long long id;
+    {
+        std::lock_guard<std::mutex> g(mu_);
+        id = next_id_++;
+    }
     sockaddr_un addr{};
     if (path_.empty() || path_.size() >= sizeof(addr.sun_path)) return not_reached("bad tuner socket path");
     int fd = ::socket(AF_UNIX, SOCK_STREAM, 0);
@@ -139,7 +145,7 @@ TunerReply TunerSocket::call(const std::string& cmd, const std::string& args_jso
         ::close(fd);
         return not_reached(why);
     }
-    std::string line = "{\"id\":" + std::to_string(next_id_++) + ",\"cmd\":" + quoted(cmd);
+    std::string line = "{\"id\":" + std::to_string(id) + ",\"cmd\":" + quoted(cmd);
     if (!args_json.empty()) line += ",\"args\":" + args_json;
     line += "}\n";
     // From here the daemon is there: a failure is a reply we couldn't get.
@@ -185,6 +191,18 @@ void TunerKeying::set_log(std::function<void(const std::string&)> log) {
 std::string TunerKeying::current_channel() const {
     std::lock_guard<std::mutex> g(mu_);
     return channel_;
+}
+
+std::string TunerKeying::status_block() {
+    if (!link_) return "";
+    std::lock_guard<std::mutex> g(status_mu_);
+    auto now = std::chrono::steady_clock::now();
+    if (status_read_ && now - status_at_ < std::chrono::milliseconds(t_.status_max_age_ms)) return status_;
+    TunerReply r = link_->call("tuner_status", "", t_.status_ms);
+    status_ = r.reached && r.valid && r.tuner != "null" && !r.tuner.empty() ? r.tuner : "";
+    status_at_ = std::chrono::steady_clock::now();
+    status_read_ = true;
+    return status_;
 }
 
 void TunerKeying::log(const std::string& s) {

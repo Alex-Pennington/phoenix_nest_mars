@@ -1,0 +1,29 @@
+PAGE TUNER
+TITLE The antenna tuner
+KIND topic
+SCREENS TUNER
+SEE FORM-CHANNEL EMCON
+BEGIN_TEXT
+The LDG tuner has two antenna ports, 1 and 2. Each channel names one port
+to listen on (RX antenna) and one to transmit on (TX antenna), on the
+CHANNEL form. A channel that names none uses port 1 for both. Use one port
+for both, or receive on a quiet antenna and transmit on the other.
+
+The tuner never switches with RF on. On a channel change it moves to the
+channel's RX port and recalls that channel's tuner memory. Before each
+transmit, with RF off, it moves to the TX port; the radio keys only once
+the tuner says it is there. After the transmit, once the radio is unkeyed
+and the keying program has stopped, it moves back to the RX port. If it
+can't, the receiver may still be on the TX antenna: the log says so.
+
+A tune keys a steady carrier of 25 W or less on the TX port, tunes, and
+stores the result in that channel's memory. The box holds the 25 W limit
+itself, and the tuner refuses more. A tune needs your Y each time.
+
+While transmit is pinned to recorded files, as it is today, a tune is
+refused: a tune is a transmit. EMCON refuses it too.
+
+Keying is by CAT or the radio's PTT line only. VOX is never used.
+
+With no tuner connected, the box sends as it would without one.
+END
