@@ -21,6 +21,12 @@ struct Channel {
     std::string mode;     // USB, LSB, ALE, DATA ...
     std::string use;      // what the card says it's for, frequency-free
     std::string source;   // which import it came from
+    // The LDG tuner's antenna port for this channel (Alex: "assign the ant1
+    // or 2 by channel tx and rx"): 1 or 2. 0 on a channel being put means
+    // "not given": the plan keeps what it held, or 1 for a new channel. A
+    // record written before these fields existed reads as 1 and 1.
+    int ant_rx = 0;       // the port the receiver listens on
+    int ant_tx = 0;       // the port each transmit, tune and tuner memory is on
 };
 
 class ChannelPlan {

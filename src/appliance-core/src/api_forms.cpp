@@ -179,6 +179,10 @@ std::map<std::string, std::string> prefill(Core& core, const forms::Library& lib
                 v["name"] = k;
                 v["mode"] = s_of(c, "mode");
                 v["use"] = s_of(c, "use");
+                for (auto f : {"ant_rx", "ant_tx"}) {
+                    const JsonValue* a = c.get(f);
+                    v[f] = a && a->type == JsonValue::Type::Number && a->n == 2 ? "2" : "1";
+                }
                 v["frequency?"] = "held";  // held here; never shown
             }
     } else if (kind == "schedule") {

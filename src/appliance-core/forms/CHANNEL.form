@@ -11,6 +11,8 @@ FIELD frequency Frequency(X) required secret check=frequency
 FIELD unit Unit(KHZ,MHZ,HZ) default=KHZ
 FIELD mode Mode(USB,LSB,ALE,DATA,AM,FM,CW) default=USB
 FIELD use What it is for(X) upper max=40
+FIELD ant_rx RX antenna, tuner port(1,2) default=1 fill
+FIELD ant_tx TX antenna, tuner port(1,2) default=1 fill
 NEXT CHANNEL SCHEDULE
 BEGIN_HELP
 Designator:
@@ -23,4 +25,12 @@ END
 
 What it is for:
 PRIMARY, SECONDARY, SCAN. No frequency here.
+END
+
+RX antenna, tuner port:
+Tuner port this channel listens on, 1 or 2. Selected on a channel change, with RF off. Blank means 1.
+END
+
+TX antenna, tuner port:
+Tuner port this channel transmits on, 1 or 2. The tuner switches to it before each transmit and back to RX after, with RF off. Tunes and tuner memories are on this port. Blank means 1.
 END

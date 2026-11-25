@@ -244,7 +244,14 @@ std::optional<std::string> handle_ops(Core& core, const std::string& cmd, std::m
         JsonWriter w;
         w.begin_object().field("ok", true).begin_array("channels");
         for (auto& c : ops->channels().list())
-            w.begin_object().field("name", c.name).field("mode", c.mode).field("use", c.use).field("source", c.source).end_object();
+            w.begin_object()
+                .field("name", c.name)
+                .field("mode", c.mode)
+                .field("use", c.use)
+                .field("source", c.source)
+                .field("ant_rx", c.ant_rx)
+                .field("ant_tx", c.ant_tx)
+                .end_object();
         w.end_array().end_object();
         return w.str();
     }
@@ -269,12 +276,24 @@ std::optional<std::string> handle_ops(Core& core, const std::string& cmd, std::m
         for (auto& ch : c.use) ch = static_cast<char>(std::toupper(static_cast<unsigned char>(ch)));
         if (compose::looks_like_frequency(c.use)) c.use.clear();
         c.source = "entered by hand";
+        // The tuner's antenna ports (docs/forms.md, CHANNEL): 1 or 2. Left
+        // out, the channel keeps what it had (1 for a new one); blank is 1.
+        for (auto [key, port] : {std::pair<const char*, int*>{"ant_rx", &c.ant_rx}, {"ant_tx", &c.ant_tx}}) {
+            if (!req.count(key)) continue;
+            const std::string& v = req[key];
+            if (v.empty() || v == "1") *port = 1;
+            else if (v == "2") *port = 2;
+            else return err_reply(std::string(key) + ": the tuner port, 1 or 2");
+        }
         auto old = ops->channels().get(c.name);
         if (old) {
             if (c.mode.empty()) c.mode = old->mode;
             if (!has_use) c.use = old->use;
         }
-        bool same = old && old->hz == c.hz && old->mode == c.mode && old->use == c.use;
+        if (c.ant_rx == 0) c.ant_rx = old ? old->ant_rx : 1;
+        if (c.ant_tx == 0) c.ant_tx = old ? old->ant_tx : 1;
+        bool same = old && old->hz == c.hz && old->mode == c.mode && old->use == c.use && old->ant_rx == c.ant_rx &&
+                    old->ant_tx == c.ant_tx;
         if (!same && !ops->channels().put(c, &err)) {
             c.hz = 0;
             return err_reply(err);
@@ -291,6 +310,8 @@ std::optional<std::string> handle_ops(Core& core, const std::string& cmd, std::m
             .field("frequency_changed", old && !same && old->hz != (now ? now->hz : 0))
             .field("mode", now ? now->mode : c.mode)
             .field("use", now ? now->use : c.use)
+            .field("ant_rx", now ? now->ant_rx : c.ant_rx)
+            .field("ant_tx", now ? now->ant_tx : c.ant_tx)
             .end_object();
         return w.str();
     }

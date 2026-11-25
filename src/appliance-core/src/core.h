@@ -11,6 +11,7 @@
 #include "link_monitor.h"
 #include "ops.h"
 #include "modem.h"
+#include "tuner.h"
 #include "store.h"
 
 #include <atomic>
@@ -126,6 +127,10 @@ public:
     CoreStatus status();
     // greybeard-ale's link state (see link_monitor.h). Set before start().
     void set_link_monitor(std::shared_ptr<LinkMonitor> m) { link_ = std::move(m); }
+    // The LDG tuner and the keying sequence around it (tuner.h). Set before
+    // start(); none: the tuner calls answer that no tuner is set up.
+    void set_tuner(std::shared_ptr<TunerKeying> t) { tuner_ = std::move(t); }
+    TunerKeying* tuner() const { return tuner_.get(); }
     // Whether a message to `station` would wait for a link now. A broadcast
     // (ALL) never waits: it goes out for whoever is listening.
     bool waits_for_link(const std::string& station) const;
@@ -289,6 +294,7 @@ private:
     std::atomic<bool> running_{false};
     std::function<void(const std::string&)> log_fn_;
     std::shared_ptr<LinkMonitor> link_;
+    std::shared_ptr<TunerKeying> tuner_;
     std::shared_ptr<Ops> ops_;
     std::shared_ptr<keys::Keyring> keys_;
     void tie_cipher();

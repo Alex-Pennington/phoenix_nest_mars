@@ -276,4 +276,10 @@ JsonWriter& JsonWriter::field_null(const std::string& k) {
     return *this;
 }
 
+JsonWriter& JsonWriter::raw(const std::string& k, const std::string& json) {
+    key(k);
+    s_ += json.empty() ? "null" : json;
+    return *this;
+}
+
 }  // namespace pna

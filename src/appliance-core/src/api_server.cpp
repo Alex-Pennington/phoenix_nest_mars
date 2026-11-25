@@ -2643,6 +2643,16 @@ std::string ApiServer::handle(Core& core, const std::string& line) {
     if (auto r = handle_guide(core, cmd, req)) return *r;
     if (auto r = handle_bbs(core, cmd, req)) return *r;
     if (auto r = handle_inbox(core, cmd, req)) return *r;
+    // The tuner (tuner.h): forwarded to greybeard-ale's ldg-tuner daemon. A
+    // channel goes by its designator; its frequency is looked up here and
+    // goes only to that local socket.
+    {
+        Ops* ops = core.ops();
+        auto lookup = [ops](const std::string& name) -> std::optional<Channel> {
+            return ops ? ops->channels().get(name) : std::nullopt;
+        };
+        if (auto r = handle_tuner(core.tuner(), cmd, req, lookup, core.emcon())) return *r;
+    }
 
     if (cmd == "status") {
         CoreStatus s = core.status();
@@ -3072,7 +3082,7 @@ std::string ApiServer::handle(Core& core, const std::string& line) {
     if (auto r = handle_ops(core, cmd, req)) return *r;
 
     return error_reply(
-        "unknown cmd; use status, send, list, get, queue, log, emcon, cancel, hold, release, requeue, link_format, orderwire, rx_raw, overdue, send_file, get_file, send_acp127, send_acp126, send_chat, parse_acp127, "
+        "unknown cmd; use status, tuner_status, tuner_channel, send, list, get, queue, log, emcon, cancel, hold, release, requeue, link_format, orderwire, rx_raw, overdue, send_file, get_file, send_acp127, send_acp126, send_chat, parse_acp127, "
         "parse_traffic, compose_templates, compose_form, compose_check, compose_send, compose_advise, key_import, keys_list, key_zeroize, key_open, cipher_status, cipher_install, cipher_remove, station_card, station_backup, station_restore, card_import, cards_list, card_check, card_send, net_tape, tape_seal, or the book's calls (docs/api.md): book_*, net_*, sched_*, duty_*, log_add, station_log, report_monthly");
 }
 

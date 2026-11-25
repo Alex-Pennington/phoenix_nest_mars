@@ -28,7 +28,7 @@ const std::vector<std::string>& config_keys() {
         "link",        "s5066-peers", "s5066-port",    "s5066-sap",   "s5066-ttl",  "s5066-confirm", "s5066-broadcast",
         "appa-port",   "ack-timeout", "ack-retries",   "tx-gap",
         "link-wait",   "expire-h",    "handling",      "raw-rx-log",  "parts-hold-h",
-        "parts-resend-per-hour"};
+        "parts-resend-per-hour", "tuner-socket"};
     return k;
 }
 

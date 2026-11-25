@@ -87,6 +87,9 @@ bool ChannelPlan::load(std::string* error) {
         }
         if (p.size() < 5) continue;
         Channel c{p[0], std::atoll(p[1].c_str()), p[2], p[3], p[4]};
+        // Antenna ports came later: a record without them is 1 and 1.
+        c.ant_rx = p.size() > 5 && p[5] == "2" ? 2 : 1;
+        c.ant_tx = p.size() > 6 && p[6] == "2" ? 2 : 1;
         if (valid_designator(c.name) && c.hz > 0) ch_.push_back(c);
     }
     return true;
@@ -101,7 +104,8 @@ bool ChannelPlan::save_locked(std::string* error) {
     }
     std::string out = std::string(kHead) + "\n";
     for (auto& c : ch_)
-        out += c.name + "|" + std::to_string(c.hz) + "|" + c.mode + "|" + c.use + "|" + c.source + "\n";
+        out += c.name + "|" + std::to_string(c.hz) + "|" + c.mode + "|" + c.use + "|" + c.source + "|" +
+               std::to_string(c.ant_rx == 2 ? 2 : 1) + "|" + std::to_string(c.ant_tx == 2 ? 2 : 1) + "\n";
     bool ok = ::write(fd, out.data(), out.size()) == static_cast<ssize_t>(out.size()) && ::fsync(fd) == 0;
     ::fchmod(fd, 0600);
     ::close(fd);
@@ -129,7 +133,17 @@ static bool check(Channel& c, std::string* error) {
     if (compose::looks_like_frequency(c.use)) c.use.clear();
     if (c.use.size() > 40) c.use.resize(40);
     if (c.mode.size() > 12) c.mode.resize(12);
+    if (c.ant_rx < 0 || c.ant_rx > 2 || c.ant_tx < 0 || c.ant_tx > 2) {
+        if (error) *error = "channel " + c.name + ": the tuner antenna is 1 or 2";
+        return false;
+    }
     return true;
+}
+
+// An antenna port not given (0) keeps what the plan held, or 1.
+static void keep_antennas(Channel& c, const Channel* old) {
+    if (c.ant_rx == 0) c.ant_rx = old ? old->ant_rx : 1;
+    if (c.ant_tx == 0) c.ant_tx = old ? old->ant_tx : 1;
 }
 
 bool ChannelPlan::put(const Channel& in, std::string* error) {
@@ -137,6 +151,7 @@ bool ChannelPlan::put(const Channel& in, std::string* error) {
     if (!check(c, error)) return false;
     std::lock_guard<std::mutex> g(mu_);
     auto it = std::find_if(ch_.begin(), ch_.end(), [&](const Channel& x) { return x.name == c.name; });
+    keep_antennas(c, it != ch_.end() ? &*it : nullptr);
     if (it != ch_.end()) *it = c;
     else ch_.push_back(c);
     return save_locked(error);
@@ -151,6 +166,7 @@ bool ChannelPlan::put_all(const std::vector<Channel>& cs, std::vector<std::strin
             continue;
         }
         auto it = std::find_if(ch_.begin(), ch_.end(), [&](const Channel& x) { return x.name == c.name; });
+        keep_antennas(c, it != ch_.end() ? &*it : nullptr);
         if (it != ch_.end()) *it = c;
         else ch_.push_back(c);
     }

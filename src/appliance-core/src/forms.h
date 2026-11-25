@@ -60,6 +60,7 @@ struct Field {
     std::string source;           // "@channels": choices from the station
     bool multi = false;           // "@cards+": more than one, joined by spaces
     bool required = false, upper = false, secret = false, send = true;
+    bool fill = false;  // a blank answer takes the default, not "leave as is"
     std::string def;    // default
     std::string check;  // a named check: station, designator, frequency, ...
     std::string again;  // must equal this other field (a passphrase twice)

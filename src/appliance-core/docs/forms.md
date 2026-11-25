@@ -88,6 +88,8 @@ PREFILL channel name
 FIELD name Designator(X) required upper max=12 check=designator
 FIELD frequency Frequency(X) required secret check=frequency
 FIELD unit Unit(KHZ,MHZ,HZ) default=KHZ
+FIELD ant_rx RX antenna, tuner port(1,2) default=1 fill
+FIELD ant_tx TX antenna, tuner port(1,2) default=1 fill
 NEXT CHANNEL SCHEDULE
 BEGIN_HELP
 Designator:
@@ -108,7 +110,7 @@ END
   book, channel, schedule or template. A secret is never filled; the field
   says it has a value.
 - **`FIELD key Label(mask)suffix flags`:** one field. The suffix is shown
-  after the box (`Z`, `kHz`).
+  after the box (`Z`, `kHz`). A label can't hold `(`: the mask starts there.
 - **`NEXT IDs`:** forms offered when this one is done.
 - **`BEGIN_HELP`:** help blocks, each a `Label:` line, text, then `END`.
 - **`;`:** a comment.
@@ -135,7 +137,8 @@ one choice, with how many of its parts are in.
 ### Flags
 
 `required`, `optional`, `upper`, `secret`, `nosend` (checked but not sent),
-`default=value` (may hold spaces), `again=key` (must match another field, as a
+`fill` (a blank answer takes the default; without it, a field left blank is
+not sent and the call keeps what is held), `default=value` (may hold spaces), `again=key` (must match another field, as a
 passphrase typed twice), `as=name` (sent under another name), `max=n`,
 `check=` one of station, stations, designator, frequency, hhmm, date,
 fingerprint, passphrase, number, path.

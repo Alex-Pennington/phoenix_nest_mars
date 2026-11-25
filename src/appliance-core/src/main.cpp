@@ -15,6 +15,7 @@
 #include "station.h"
 #include "greybeard_modem.h"
 #include "link_monitor.h"
+#include "tuner.h"
 #include "ops.h"
 #include "loopback_modem.h"
 #include "s5066.h"
@@ -123,7 +124,10 @@ void usage() {
         "  --link-socket PATH    read link state from greybeard-ale: ale-scan --control's\n"
         "                        socket (status every --link-poll-ms, default 2000)\n"
         "  --link-gate           hold each message until greybeard-ale reports a link to\n"
-        "                        its station (needs --link-socket)\n";
+        "                        its station (needs --link-socket)\n"
+        "  --tuner-socket PATH   greybeard-ale's LDG tuner daemon (ldg-tuner/1); the\n"
+        "                        tuner_* calls go there, and each channel's antenna\n"
+        "                        ports with them (default: no tuner)\n";
 }
 
 struct Station {
@@ -133,6 +137,7 @@ struct Station {
 };
 
 std::shared_ptr<LinkMonitor> g_link;
+std::string g_tuner_socket;
 bool g_link_gate = false;
 int g_ack_timeout = 120, g_ack_retries = 2, g_tx_gap = 6;
 bool g_tx_gap_set = false;
@@ -188,6 +193,13 @@ bool start_station(Station& s, CoreConfig cfg, std::unique_ptr<ModemDriver> mode
     // The station book (address book, nets, duty, log, reports) in the same file.
     s.core->set_ops(std::make_shared<Ops>(name, db));
     if (g_link) s.core->set_link_monitor(g_link);
+    // The LDG tuner (tuner.h). Transmit stays pinned to gale-tx/WAV: the core
+    // keys nothing, holds no keyer and refuses a tune.
+    if (!g_tuner_socket.empty()) {
+        auto tk = std::make_shared<TunerKeying>(std::make_shared<TunerSocket>(g_tuner_socket));
+        tk->set_log([name](const std::string& t) { log_line(name, t); });
+        s.core->set_tuner(tk);
+    }
     // Codress keys beside the database: STATION.keys (keys.h).
     {
         std::string kp = db.size() > 3 && db.compare(db.size() - 3, 3, ".db") == 0 ? db.substr(0, db.size() - 3) : db;
@@ -348,6 +360,7 @@ int main(int argc, char** argv) {
             else if (a == "--advisor") advisor_prog = next();
             else if (a == "--advisor-arg") advisor_args.push_back(next());
             else if (a == "--link-socket") link_socket = next();
+            else if (a == "--tuner-socket") g_tuner_socket = next();
             else if (a == "--link-poll-ms") link_poll_ms = std::stoi(next());
             else if (a == "--link-gate") link_gate = true;
             else if (a == "--link") link_kind = next();
@@ -496,6 +509,13 @@ int main(int argc, char** argv) {
                 notes.push_back("the link socket isn't there yet: start greybeard-ale's ale-scan with --control");
         } else {
             std::cout << "  link state     not read (no link-socket)\n";
+        }
+        if (!g_tuner_socket.empty()) {
+            std::cout << "  tuner          " << g_tuner_socket << " (transmit pinned: tunes refused)\n";
+            if (!fs::exists(g_tuner_socket, ec))
+                notes.push_back("the tuner socket isn't there yet: start greybeard-ale's ldg-tuner daemon");
+        } else {
+            std::cout << "  tuner          none (no tuner-socket)\n";
         }
         if (!advisor_prog.empty()) {
             std::string adv = find_program(advisor_prog);

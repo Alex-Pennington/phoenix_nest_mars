@@ -156,7 +156,7 @@ bool parse_field(const std::string& rest, Field& f, std::string* error) {
     }
     // A default may have spaces (default=BY VOICE): it runs to the next flag.
     std::vector<std::string> ws;
-    static const std::set<std::string> bare = {"required", "optional", "upper", "secret", "nosend"};
+    static const std::set<std::string> bare = {"required", "optional", "upper", "secret", "nosend", "fill"};
     for (auto& w : words(flags)) {
         bool flag = w.find('=') != std::string::npos || bare.count(lower(w));
         if (!flag && !ws.empty() && lower(ws.back()).rfind("default=", 0) == 0) ws.back() += " " + w;
@@ -175,6 +175,7 @@ bool parse_field(const std::string& rest, Field& f, std::string* error) {
         else if (k == "upper") f.upper = true;
         else if (k == "secret") f.secret = true;
         else if (k == "nosend") f.send = false;
+        else if (k == "fill") f.fill = true;
         else if (k == "default") f.def = v;
         else if (k == "again") f.again = v;
         else if (k == "as" && (valid_key(v) || v == "form")) f.as = v;
@@ -628,7 +629,7 @@ std::vector<std::pair<std::string, std::string>> check_values(const Template& t,
             if (v == "YES") v = "Y";
             if (v == "NO") v = "N";
         }
-        if (v.empty() && !f.def.empty() && !vals.count(f.key)) v = f.def;
+        if (v.empty() && !f.def.empty() && (!vals.count(f.key) || f.fill)) v = f.def;
         vals[f.key] = v;
     }
     for (auto& f : t.fields) {

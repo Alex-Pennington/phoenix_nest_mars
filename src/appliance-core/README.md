@@ -103,6 +103,18 @@ on the real scanner today. To try the gate, use the stand-in:
     appliance-cli send --to B "HELLO"          # waits: no link to B
     echo "link B linked" | socat - UNIX-CONNECT:data/scan.sock    # now it goes
 
+## The antenna tuner
+
+The LDG AT-200PC is greybeard-ale's: its daemon answers on a Unix socket. Given
+that socket, the core forwards the operator's `tuner_*` calls to it, names each
+channel's antenna ports on a channel change, and runs the daemon's pre-transmit
+and post-transmit steps around any keying it does (docs/api.md, Tuner). Each
+channel's RX and TX ports are on the CHANNEL form, 1 or 2.
+
+    appliance-core --station A ... --tuner-socket /run/user/1000/ldg-tuner/control.sock
+
+With no socket, or nothing on it, the core runs as it does without a tuner.
+
 ## Nets, the address book and the monthly report
 
 Each station keeps a book in its own store, offline: an address book with

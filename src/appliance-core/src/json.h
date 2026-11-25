@@ -47,6 +47,9 @@ public:
     JsonWriter& field(const std::string& key, int v) { return field(key, static_cast<long long>(v)); }
     JsonWriter& field(const std::string& key, bool v);
     JsonWriter& field_null(const std::string& key);
+    // A member whose value is JSON text already made (passed through from
+    // another program's reply). The caller vouches that it is valid JSON.
+    JsonWriter& raw(const std::string& key, const std::string& json);
     const std::string& str() const { return s_; }
 
 private:

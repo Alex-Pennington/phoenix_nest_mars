@@ -507,16 +507,67 @@ available to copy.
   file should look like is in docs/formats.md. Personal details are never
   imported, and frequencies go only to the channel plan's file.
 - `channels_list`: the channel plan as `channels`, each with `name` (the
-  designator), `mode`, `use` and `source`. Never a frequency.
-- `channel_put {name, frequency, unit?, mode?, use?}`: enters one channel by
-  hand, for a region with no documents. `frequency` reads as kHz (5000),
-  unless `unit` is `khz`, `mhz` or `hz`. A mode or use left out keeps the old
-  one. Returns `name`, `result` (`added`, `replaced` or `same`),
-  `frequency_changed`, `mode` and `use`. The frequency is stored like an
+  designator), `mode`, `use`, `source`, `ant_rx` and `ant_tx`. Never a
+  frequency.
+- `channel_put {name, frequency, unit?, mode?, use?, ant_rx?, ant_tx?}`:
+  enters one channel by hand, for a region with no documents. `frequency`
+  reads as kHz (5000), unless `unit` is `khz`, `mhz` or `hz`. A mode, use or
+  antenna left out keeps the old one. `ant_rx` and `ant_tx` are the tuner
+  ports the channel receives and transmits on: `1` or `2`, blank meaning 1;
+  anything else is refused. A new channel, and every channel in a plan
+  written before these fields, is 1 and 1. A frequency card imported again
+  keeps the ports set by hand. Returns `name`, `result` (`added`, `replaced`
+  or `same`), `frequency_changed`, `mode`, `use`, `ant_rx` and `ant_tx`. The frequency is stored like an
   imported one and never comes back in a reply or the log.
 - `channel_remove {name}`: takes a channel out of the plan.
 - `sched_put` also takes `channel`, a designator, and `sched_list` returns it.
   A frequency there is refused.
+
+## Tuner: the LDG AT-200PC through the core
+
+The tuner's driver is greybeard-ale's daemon (`ldg-tuner/1`, its
+docs/ldg-tuner.md section 5). The core forwards these calls to its socket,
+set with `--tuner-socket PATH` or `tuner-socket` in the settings file, and
+passes the reply through: `ok`, `result` as the daemon gave it, and on a
+refusal `code` and `error` as the daemon gave them (`refused-antenna`,
+`refused-power`, `refused-no-channel`, `refused-keyed`, `tuner-absent`,
+`busy`, `timeout`, ...). `tuner` is the daemon's whole status block,
+unchanged: `contract_rev`, `channel {ant_rx, ant_tx, recalled_on}`,
+`relays.antenna` and the rest. With no socket set, `tuner_status` answers ok
+with `tuner` null; the others answer `no-tuner`.
+
+A channel is named by its designator. A frequency never comes in or goes out
+on this port: the core looks it up and sends it only to the local socket. A
+request holding `freq_hz` is refused.
+
+- `tuner_status`: the status block.
+- `tuner_channel {channel}`: a channel change. Sends the daemon
+  `tuner_channel {freq_hz, ant_rx, ant_tx}` from the channel plan; it
+  switches to `ant_rx` with RF off and recalls the memory for `ant_tx`.
+  Returns `channel`, `steps`, `result` and `tuner`. A channel outside 1.8 to
+  54 MHz is refused (`refused-range`) without asking the daemon. With no
+  daemon there, ok: there is nothing to tell.
+- `tuner_recall {channel}`: recalls that channel's memory.
+- `tuner_bypass`, `tuner_store`, `tuner_pre_tx`, `tuner_post_tx`: as the
+  daemon's calls.
+- `tuner_antenna {port}`: `1` or `2`.
+- `tuner_set {L, C, hilo}`: L and C 0 to 127, hilo `hi` or `lo`.
+- `tuner_tune {kind, confirm, watts?, store?}`: refused while transmit is
+  pinned to gale-tx/WAV (`refused-tx-locked`), as it is today, because a
+  tune is a transmit. Unpinned, it is refused under EMCON, without the
+  operator's `confirm` of `Y`, or above 25 W (`refused-power`; `watts`
+  defaults to 10). Then: `tuner_pre_tx`, a carrier of `watts` keyed by CAT or
+  PTT, `tuner_tune`, `tuner_store` (unless `store` is `N`), carrier off,
+  `tuner_post_tx`.
+
+Around every keying the core does, it runs the daemon's sequence: with RF
+off, `tuner_pre_tx` (switch to the channel's `ant_tx`), and it keys only on
+ok; after unkey, once the keying process and its watchdog have exited,
+`tuner_post_tx` (back to `ant_rx`), retried on `refused-keyed` with a
+bounded backoff, each try in the log. With no tuner daemon there, keying is
+exactly as without one. Keying is by CAT or a hardware PTT line only: a
+keyer that keys any other way, VOX above all, is refused. The core keys
+nothing today; this sequence is ready for when transmit is unpinned.
 
 ## Keys, cards and signatures
 
