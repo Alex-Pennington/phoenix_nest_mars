@@ -42,6 +42,7 @@
 #include <filesystem>
 #include <fstream>
 #include <sstream>
+#include <thread>
 
 namespace pna {
 
@@ -2487,10 +2488,34 @@ std::optional<std::string> station_cmd(Core& core, const std::string& cmd, std::
 std::mutex g_training_mu;
 std::map<const Core*, std::shared_ptr<Training>> g_training;
 
+// One turn on, off or reload at a time, whichever connection asks.
+std::mutex g_training_toggle_mu;
+
 std::shared_ptr<Training> training_for(const Core& core) {
     std::lock_guard<std::mutex> g(g_training_mu);
     auto it = g_training.find(&core);
     return it == g_training.end() ? nullptr : it->second;
+}
+
+// Takes a practice station out of use. A call another connection is still
+// running on it holds its own reference, so the station is stopped only once
+// that call has finished: tearing it down under a running call crashed the
+// core (phoenix_nest_mars#3). Called with g_training_toggle_mu held and the
+// station already out of g_training, so no new call can reach it. False, with
+// the station put back as it was, if a call is still on it after `wait_ms`.
+bool retire_training(const Core& core, std::shared_ptr<Training>& t, int wait_ms, std::string* err) {
+    auto end = std::chrono::steady_clock::now() + std::chrono::milliseconds(wait_ms);
+    while (t.use_count() > 1) {
+        if (std::chrono::steady_clock::now() >= end) {
+            std::lock_guard<std::mutex> g(g_training_mu);
+            g_training[&core] = t;
+            *err = "a call on another connection is still running in training: try again";
+            return false;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    t.reset();  // the last reference: ~Training stops the practice stations
+    return true;
 }
 
 std::string training_dir(const Core& core) {
@@ -2605,22 +2630,23 @@ std::string ApiServer::handle(Core& core, const std::string& line) {
                 for (auto& c : *x) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
             if (!on.empty() && on != "Y" && on != "N") return error_reply("on is Y or N");
             std::string err;
-            if (on == "N") {
-                if (t) t->stop();
-                std::lock_guard<std::mutex> g(g_training_mu);
-                g_training.erase(&core);
-                t = nullptr;
-            } else if (on == "Y" || reload == "Y") {
-                if (!t) {
+            if (on == "N" || on == "Y" || reload == "Y") {
+                std::lock_guard<std::mutex> toggle(g_training_toggle_mu);
+                t = training_for(core);  // as it is now that this connection has the toggle
+                // Off, or a reload: the practice station in use is retired first.
+                if (t && (on == "N" || reload == "Y")) {
+                    {
+                        std::lock_guard<std::mutex> g(g_training_mu);
+                        g_training.erase(&core);
+                    }
+                    if (!retire_training(core, t, 30000, &err)) return error_reply(err);
+                }
+                if (on != "N" && !t) {
                     t = std::make_shared<Training>(training_dir(core), core.station());
-                    if (!t->start(&err)) return error_reply("training didn't start: " + err);
+                    bool good = reload == "Y" ? t->reload(&err) : t->start(&err);
+                    if (!good) return error_reply(std::string("training didn't ") + (reload == "Y" ? "reload: " : "start: ") + err);
                     std::lock_guard<std::mutex> g(g_training_mu);
                     g_training[&core] = t;
-                }
-                if (reload == "Y" && !t->reload(&err)) {
-                    std::lock_guard<std::mutex> g(g_training_mu);
-                    g_training.erase(&core);
-                    return error_reply("training didn't reload: " + err);
                 }
             }
         }
