@@ -5,7 +5,7 @@
 // What it does, all of it off until the operator turns it on:
 //
 //  - Machine mode. Another station sends an ACP 201 command line addressed
-//    to this station's call with -CM ("AAM402-CM DE AAR9AA // QRU // 1737Z K")
+//    to this station's call with -CM ("AAM499-CM DE AAR9AA // QRU // 1737Z K")
 //    and the station answers by itself: VER (are you there, which version),
 //    QRU [pattern,...] (list the traffic held here for a call or RI), ZEE n,...
 //    (send me lines n of that list), ZDK n (send page n of the last ZEE answer
@@ -162,6 +162,9 @@ public:
 
     // Automatic sends in the last hour, and what the gate says now.
     int auto_sent_last_hour();
+    // When the oldest of those went (unix seconds), 0 when none: the cap
+    // has room again an hour after it.
+    int64_t auto_oldest_last_hour();
     // Empty when an automatic send may be queued now; otherwise why not.
     // routed: also needs routing on.
     std::string gate(bool routed);

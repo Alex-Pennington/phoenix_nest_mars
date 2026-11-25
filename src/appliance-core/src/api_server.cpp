@@ -1,5 +1,6 @@
 #include "api_server.h"
 #include "api_bbs.h"
+#include "bbs.h"
 #include "api_forms.h"
 #include "api_guide.h"
 #include "forms.h"
@@ -2530,21 +2531,63 @@ std::string ApiServer::handle(Core& core, const std::string& line) {
             .field("emcon", s.emcon)
             .field("acks_waiting", s.acks_waiting)
             .field("frames_dropped", static_cast<long long>(s.frames_dropped));
-        // The per-hour transmit cap, for the status strip. The one the core
-        // enforces is the resend cap (parts_resend_per_hour): a rolling hour,
-        // so resets_at is when the oldest counted send ages out and room
-        // opens again (0 when nothing counts against it). per_hour 0: no cap.
+        // The per-hour airtime cap, for the status strip: every source of
+        // transmissions the operator didn't press for one by one, in one
+        // number. Each source keeps its own rolling hour:
+        //   parts_resend  the resend queue (parts_resend_per_hour; 0: no cap)
+        //   bbs_auto      machine mode's automatic sends (auto_per_hour);
+        //                 counted in the total only while machine mode is on
+        // resets_at: when the oldest counted send ages out and room opens
+        // again (0 when nothing counts). per_hour 0 with room -1: no cap.
         {
+            struct Src {
+                std::string name;
+                bool active;
+                int cap;  // -1: no cap
+                int used;
+                int64_t oldest;
+            };
+            std::vector<Src> srcs;
             int64_t oldest = 0;
-            const int cap = core.parts_resend_per_hour();
-            const int used = resends_near(core.part_asks(), now_utc(), &oldest);
+            const int pc = core.parts_resend_per_hour();
+            const int pu = resends_near(core.part_asks(), now_utc(), &oldest);
+            srcs.push_back({"parts_resend", true, pc > 0 ? pc : -1, pu, oldest});
+            bbs::Engine& be = bbs::engine(core);
+            const bbs::Settings bs = be.settings();
+            srcs.push_back({"bbs_auto", bs.machine_mode, std::max(0, bs.auto_per_hour), be.auto_sent_last_hour(),
+                            be.auto_oldest_last_hour()});
+            int per = 0, used = 0, room = 0;
+            bool uncapped = false;
+            int64_t resets = 0;
+            for (auto& x : srcs) {
+                if (!x.active) continue;
+                used += x.used;
+                if (x.cap < 0) uncapped = true;
+                else {
+                    per += x.cap;
+                    room += std::max(0, x.cap - x.used);
+                }
+            }
+            for (auto& x : srcs)
+                if (x.used > 0 && x.oldest > 0) resets = resets ? std::min(resets, x.oldest + 3600) : x.oldest + 3600;
             w.begin_object("cap")
-                .field("per_hour", cap)
+                .field("per_hour", uncapped ? 0 : per)
                 .field("used", used)
-                .field("room", cap > 0 ? std::max(0, cap - used) : -1)
-                .field("resets_at", static_cast<long long>(used > 0 ? oldest + 3600 : 0))
-                .field("covers", std::string("parts_resend"))
-                .end_object();
+                .field("room", uncapped ? -1 : room)
+                .field("resets_at", static_cast<long long>(resets));
+            w.begin_array("covers");
+            for (auto& x : srcs) w.field("", x.name);
+            w.end_array().begin_array("sources");
+            for (auto& x : srcs)
+                w.begin_object()
+                    .field("source", x.name)
+                    .field("active", x.active)
+                    .field("per_hour", x.cap < 0 ? 0 : x.cap)
+                    .field("used", x.used)
+                    .field("room", x.cap < 0 ? -1 : std::max(0, x.cap - x.used))
+                    .field("resets_at", static_cast<long long>(x.used > 0 && x.oldest > 0 ? x.oldest + 3600 : 0))
+                    .end_object();
+            w.end_array().end_object();
         }
         auto adv = compose::advisor();
         w.field("advisor", adv ? adv->name() : std::string());

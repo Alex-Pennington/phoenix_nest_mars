@@ -640,6 +640,13 @@ int Engine::auto_sent_last_hour() {
     return s.step() ? static_cast<int>(s.i64(0)) : 0;
 }
 
+int64_t Engine::auto_oldest_last_hour() {
+    std::lock_guard<std::recursive_mutex> g(mu_);
+    Stmt s(db_, "SELECT MIN(at) FROM bbs_auto WHERE at > ?");
+    s.bind(1, clock_() - 3600);
+    return s.step() ? s.i64(0) : 0;
+}
+
 std::string Engine::gate(bool routed) {
     std::lock_guard<std::recursive_mutex> g(mu_);
     Settings s = load();
@@ -1125,7 +1132,7 @@ void Engine::process(const std::string& id) {
                     if (t.empty()) continue;
                     // The compose form won't take "//" in text, so a command
                     // written there uses single slashes:
-                    // "AAM402-CM DE AAR9AA / QRU / 1737Z K".
+                    // "AAM499-CM DE AAR9AA / QRU / 1737Z K".
                     if (upper(first_word_of(t)) == me + kSuffix && t.find("//") == std::string::npos) {
                         std::string n;
                         for (size_t k = 0; k < t.size(); ++k) {

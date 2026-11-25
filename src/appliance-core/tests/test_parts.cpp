@@ -763,8 +763,12 @@ static void pacing(const fs::path& dir) {
     r = call(*C.core, {{"cmd", "status"}});
     CHECK(!yes(r, "emcon"));
     CHECK(num(sub(r, "cap"), "per_hour") == 2 && num(sub(r, "cap"), "used") == 0 &&
-          num(sub(r, "cap"), "room") == 2 && num(sub(r, "cap"), "resets_at") == 0 &&
-          str(sub(r, "cap"), "covers") == "parts_resend");
+          num(sub(r, "cap"), "room") == 2 && num(sub(r, "cap"), "resets_at") == 0);
+    // Both sources are named; machine mode is off, so its cap isn't in the total.
+    CHECK(arr(sub(r, "cap"), "covers").size() == 2 && arr(sub(r, "cap"), "sources").size() == 2);
+    CHECK(str(arr(sub(r, "cap"), "sources")[0], "source") == "parts_resend" &&
+          str(arr(sub(r, "cap"), "sources")[1], "source") == "bbs_auto" &&
+          !yes(arr(sub(r, "cap"), "sources")[1], "active"));
     // Now: two go, the third waits for the cap.
     r = form(*C.core, "PARTS_QUEUE", {{"queue", "ALL"}, {"when", "NOW"}});
     CHECK(ok(r) && num(sub(r, "result"), "sends") == 2 && num(sub(r, "result"), "left_for_cap") == 1);
@@ -779,6 +783,13 @@ static void pacing(const fs::path& dir) {
         const double at = num(sub(st, "cap"), "resets_at");
         CHECK(num(sub(st, "cap"), "used") == 2 && num(sub(st, "cap"), "room") == 0);
         CHECK(at > t + 3500 && at <= t + 3601);
+        // Machine mode on: its own cap joins the one number.
+        CHECK(ok(call(*C.core, {{"cmd", "bbs_set"}, {"machine_mode", "true"}, {"auto_per_hour", "5"}})));
+        JsonValue st2 = call(*C.core, {{"cmd", "status"}});
+        CHECK(num(sub(st2, "cap"), "per_hour") == 7 && num(sub(st2, "cap"), "used") == 2 &&
+              num(sub(st2, "cap"), "room") == 5 && num(sub(st2, "cap"), "resets_at") == at);
+        CHECK(yes(arr(sub(st2, "cap"), "sources")[1], "active") && num(arr(sub(st2, "cap"), "sources")[1], "per_hour") == 5);
+        CHECK(ok(call(*C.core, {{"cmd", "bbs_set"}, {"machine_mode", "false"}})));
         CHECK(ok(call(*C.core, {{"cmd", "emcon"}, {"on", "Y"}})) && yes(call(*C.core, {{"cmd", "status"}}), "emcon"));
         CHECK(ok(call(*C.core, {{"cmd", "emcon"}, {"on", "N"}})) && !yes(call(*C.core, {{"cmd", "status"}}), "emcon"));
     }

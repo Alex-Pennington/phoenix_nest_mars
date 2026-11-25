@@ -108,21 +108,33 @@ and its reply has `"training":true`. See docs/guide.md, Training mode.
 `{"ok":true,"station":"AAR4XX","modem":"...","modem_ready":true,"modem_busy":false,"sending":"",
 "queued":0,"sent":0,"acked":0,"failed":0,"received":0,"unacked":0,"held":0,"cancelled":0,
 "overheard":0,"garbled":0,"acks_waiting":0,"frames_dropped":0,"emcon":false,
-"cap":{"per_hour":12,"used":0,"room":12,"resets_at":0,"covers":"parts_resend"},"advisor":""}`
+"cap":{"per_hour":12,"used":0,"room":12,"resets_at":0,"covers":["parts_resend","bbs_auto"],
+"sources":[{"source":"parts_resend","active":true,"per_hour":12,"used":0,"room":12,"resets_at":0},
+{"source":"bbs_auto","active":false,"per_hour":12,"used":0,"room":12,"resets_at":0}]},"advisor":""}`
 
 `unacked`, `held`, `cancelled`, `overheard`, `garbled` and `emcon` are
 explained under "Working with MSC stations" below.
 
-`cap` is the per-hour transmit cap, for a status strip. The only per-hour
-cap the core enforces is the resend cap on asked-for parts
-(`--parts-resend-per-hour`, default 12; see parts_queue), so `covers` is
-`parts_resend`. The hour is rolling, not a clock hour:
-- `per_hour`: the cap; 0 means no cap (`room` is then -1).
-- `used`: resends counted in the last hour (each send once, however many
-  stations asked). `room`: how many more may go now.
-- `resets_at`: Unix time the oldest counted send ages out of the hour and
+`cap` is the airtime cap, for a status strip: one number for every source
+of transmissions the operator doesn't press for one by one. Each source has
+its own cap over a rolling hour (not a clock hour):
+
+- `parts_resend`: the resend queue of asked-for parts
+  (`--parts-resend-per-hour`, default 12; see parts_queue). Each send counts
+  once, however many stations asked. Always active.
+- `bbs_auto`: machine mode's automatic sends, answers and routed traffic
+  (`auto_per_hour` in bbs_set, default 12; see BBS). Active only while
+  machine mode is on.
+
+The top-level numbers add up the active sources:
+- `per_hour`: the total cap. 0 when a source has no cap
+  (`--parts-resend-per-hour 0`); `room` is then -1.
+- `used`: sends counted in the last hour. `room`: how many more may go now.
+- `resets_at`: Unix time the oldest counted send ages out of its hour and
   room opens again; 0 when nothing counts against the cap.
-Ordinary traffic, ACKs and orderwire have no per-hour cap.
+
+`sources` gives the same for each source, with `active`. Ordinary traffic
+the operator sends, ACKs and orderwire have no per-hour cap.
 
 `advisor` names the helper plugged in with `--advisor`, or is empty.
 
@@ -810,9 +822,9 @@ answered later.
 ### Machine commands
 
 Another station sends an ACP 201 line to this call with `-CM`:
-`AAM402-CM DE AAR9AA // QRU // 1737Z K`. Enciphered, it is a codress message
+`AAM499-CM DE AAR9AA // QRU // 1737Z K`. Enciphered, it is a codress message
 whose text starts with that line; the compose form takes no `//`, so single
-slashes (`AAM402-CM DE AAR9AA / QRU / 1737Z K`) are read the same. The answer
+slashes (`AAM499-CM DE AAR9AA / QRU / 1737Z K`) are read the same. The answer
 goes to the sender as one block: `HHMMZ`, `DE <call>-CM`, the lines, `AR`.
 
 - `VER`: `VER PNA MESSAGE CORE BBS 1`.

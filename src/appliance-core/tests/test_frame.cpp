@@ -85,7 +85,7 @@ int main() {
     CHECK(prec_rank('O') < prec_rank('P'));
     CHECK(prec_rank('P') < prec_rank('R'));
     CHECK(!valid_prec('X'));
-    CHECK(valid_station("AAM402"));
+    CHECK(valid_station("AAM499"));
     CHECK(!valid_station("aam402"));
     CHECK(!valid_station(""));
     CHECK(!valid_station("A B"));

@@ -27,7 +27,7 @@
 namespace pna {
 
 struct CoreConfig {
-    std::string station;      // our station name, e.g. "AAM402"
+    std::string station;      // our station name, e.g. "AAM499"
     std::string db_path;      // SQLite file
     int max_attempts = 3;     // modem failures before a message is marked failed
     int retry_delay_s = 10;   // first retry delay; doubles each time

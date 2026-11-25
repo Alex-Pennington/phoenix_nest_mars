@@ -140,7 +140,7 @@ int main() {
     {
         auto r = bbs::recipients(traffic("UHWTST AAR9AA", "AAR7ZZ", 1, "TEST"));
         CHECK(r.size() == 2 && r[0] == "UHWTST" && r[1] == "AAR9AA");
-        CHECK(bbs::recipients("AAM402-CM DE AAR9AA // VER // 1200Z K").empty());
+        CHECK(bbs::recipients("AAM499-CM DE AAR9AA // VER // 1200Z K").empty());
         std::string b = traffic("UHWTST UHWHHCF", "AAR7ZZ", 2, "UHWHHCF IN TEXT STAYS");
         std::string s = bbs::strip_ri(b, "UHWHHCF");
         CHECK(s.find("RR UHWTST DE AAR7ZZ") != std::string::npos);
@@ -161,7 +161,7 @@ int main() {
     auto mb = std::make_unique<LoopbackModem>(0);
     auto mc = std::make_unique<LoopbackModem>(0);
     LoopbackModem::share({ma.get(), mb.get(), mc.get()});
-    Core a(CoreConfig{"AAM402", (dir / "a.db").string(), 3, 1, true}, std::move(ma));
+    Core a(CoreConfig{"AAM499", (dir / "a.db").string(), 3, 1, true}, std::move(ma));
     Core b(CoreConfig{"AAR9AA", (dir / "b.db").string(), 3, 1, true}, std::move(mb));
     Core c(CoreConfig{"AAR7ZZ", (dir / "c.db").string(), 3, 1, true}, std::move(mc));
     // A practice key tape (made here, thrown away) for A and B: our own cipher.
@@ -180,7 +180,7 @@ int main() {
     c.start();
     CHECK(ok(call(a, {{"cmd", "key_import"}, {"text", keys::format_tape(tape)}})));
     CHECK(ok(call(b, {{"cmd", "key_import"}, {"text", keys::format_tape(tape)}})));
-    CHECK(c.set_link_format("AAM402", "plain", &e));  // C is an MSC station: bare ACP 127
+    CHECK(c.set_link_format("AAM499", "plain", &e));  // C is an MSC station: bare ACP 127
     bbs::Engine& bbs_a = bbs::engine(a);
     auto pump_until = [&](const std::function<bool()>& cond) {
         return wait_for([&] {
@@ -199,7 +199,7 @@ int main() {
     // ---- defaults: everything off ----
     JsonValue r = call(a, {{"cmd", "bbs_get"}});
     CHECK(ok(r) && !flag(r, "machine_mode") && !flag(r, "routing"));
-    CHECK(str(r, "suffix") == "-CM" && str(r, "machine_call") == "AAM402-CM");
+    CHECK(str(r, "suffix") == "-CM" && str(r, "machine_call") == "AAM499-CM");
     CHECK(str(r, "accept") == "calls" && str(r, "ack") == "auto" && num(r, "ack_delay_ms") == 2000);
     CHECK(flag(r, "commands_ct_only") && num(r, "max_errors") == 3 && !flag(r, "accept_malformed"));
     CHECK(num(r, "zee_limit") == 8192 && num(r, "purge_days") == 30 && !flag(r, "remote_sync"));
@@ -217,7 +217,7 @@ int main() {
     CHECK(!ok(r));
 
     // ---- principle 5: a command heard while machine mode is off is never answered ----
-    CHECK(!b.submit("AAM402", 'R', chat("AAM402-CM", "AAR9AA", "VER"), &e).empty());
+    CHECK(!b.submit("AAM499", 'R', chat("AAM499-CM", "AAR9AA", "VER"), &e).empty());
     CHECK(wait_for([&] { return got(a, "AAR9AA").size() == 1; }));
     settle();
     CHECK(a_answers() == 0);
@@ -228,7 +228,7 @@ int main() {
     CHECK(a_answers() == 0);
 
     // ---- plain-text command with commands_ct_only on (the default): an error answer ----
-    CHECK(!b.submit("AAM402", 'R', chat("AAM402-CM", "AAR9AA", "VER "), &e).empty());
+    CHECK(!b.submit("AAM499", 'R', chat("AAM499-CM", "AAR9AA", "VER "), &e).empty());
     CHECK(pump_until([&] { return a_answers() == 1; }));
     CHECK(nth(a, "AAR9AA", 0).find("ENCRYPTED CIRCUIT") != std::string::npos);
 
@@ -236,28 +236,28 @@ int main() {
     CHECK(ok(r));
 
     // ---- VER ----
-    CHECK(!b.submit("AAM402", 'R', chat("AAM402-CM", "AAR9AA", "VER  "), &e).empty());
+    CHECK(!b.submit("AAM499", 'R', chat("AAM499-CM", "AAR9AA", "VER  "), &e).empty());
     CHECK(pump_until([&] { return a_answers() == 2; }));
     CHECK(nth(a, "AAR9AA", 1).find(std::string("VER ") + bbs::kVersion) != std::string::npos);
-    CHECK(nth(a, "AAR9AA", 1).find("DE AAM402-CM") != std::string::npos);
-    CHECK(wait_for([&] { return any_has(got(b, "AAM402"), bbs::kVersion); }));
+    CHECK(nth(a, "AAR9AA", 1).find("DE AAM499-CM") != std::string::npos);
+    CHECK(wait_for([&] { return any_has(got(b, "AAM499"), bbs::kVersion); }));
 
     // A command for another station's machine is left alone.
-    CHECK(!b.submit("AAM402", 'R', chat("AAR1QQ-CM", "AAR9AA", "VER"), &e).empty());
+    CHECK(!b.submit("AAM499", 'R', chat("AAR1QQ-CM", "AAR9AA", "VER"), &e).empty());
     settle();
     CHECK(a_answers() == 2);
 
     // ---- traffic from C: one for B (via A's call), one overheard for UHWTST ----
-    CHECK(!c.submit("AAM402", 'R', traffic("AAR9AA AAM402", "AAR7ZZ", 11, "FOR BRAVO"), &e).empty());
+    CHECK(!c.submit("AAM499", 'R', traffic("AAR9AA AAM499", "AAR7ZZ", 11, "FOR BRAVO"), &e).empty());
     CHECK(wait_for([&] { return got(a, "AAR7ZZ").size() == 1; }));
     // Auto QSL (plain traffic gets no ack on the air): MSC's receipt, to the
     // originator, never ALL, with the station's call and guard RIs.
     CHECK(pump_until([&] { return out_to(a, "AAR7ZZ").size() == 1; }));
     {
         std::string q = nth(a, "AAR7ZZ", 0);
-        CHECK(q.find("AAR7ZZ-CM DE AAM402-CM//QSL _R_AAR7ZZ #0011 3291200/AAM402") == 0);
+        CHECK(q.find("AAR7ZZ-CM DE AAM499-CM//QSL _R_AAR7ZZ #0011 3291200/AAM499") == 0);
     }
-    CHECK(!c.submit("AAM402", 'R', traffic("UHWTST", "AAR7ZZ", 12, "FOR THE WEST GATEWAY"), &e).empty());
+    CHECK(!c.submit("AAM499", 'R', traffic("UHWTST", "AAR7ZZ", 12, "FOR THE WEST GATEWAY"), &e).empty());
     CHECK(wait_for([&] {
         for (auto& m : a.list(100))
             if (m.state == "overheard") return true;
@@ -267,67 +267,67 @@ int main() {
     CHECK(out_to(a, "AAR7ZZ").size() == 1);  // overheard traffic isn't QSL'd
 
     // ---- QRU / ZEE / QSL / ZDK ----
-    CHECK(!b.submit("AAM402", 'R', chat("AAM402-CM", "AAR9AA", "QRU U,A"), &e).empty());
+    CHECK(!b.submit("AAM499", 'R', chat("AAM499-CM", "AAR9AA", "QRU U,A"), &e).empty());
     CHECK(pump_until([&] { return a_answers() == 3; }));
     {
         std::string q = nth(a, "AAR9AA", 2);
         CHECK(q.find("QTC 1\n1 - ") != std::string::npos);
-        CHECK(q.find("AAR7ZZ #0011 3291200 ---> AAR9AA AAM402") != std::string::npos);
+        CHECK(q.find("AAR7ZZ #0011 3291200 ---> AAR9AA AAM499") != std::string::npos);
         CHECK(q.find("UHWTST") == std::string::npos);  // accept=calls: overheard traffic isn't held
     }
     // QRU UHW: nothing until the guard list and accept say so.
-    CHECK(!b.submit("AAM402", 'R', chat("AAM402-CM", "AAR9AA", "QRU UHW"), &e).empty());
+    CHECK(!b.submit("AAM499", 'R', chat("AAM499-CM", "AAR9AA", "QRU UHW"), &e).empty());
     CHECK(pump_until([&] { return a_answers() == 4; }));
     CHECK(nth(a, "AAR9AA", 3).find("\nQRU\nAR") != std::string::npos);
-    r = call(a, {{"cmd", "guard_set"}, {"items", "AAM402-CM"}});
+    r = call(a, {{"cmd", "guard_set"}, {"items", "AAM499-CM"}});
     CHECK(!ok(r));
     r = call(a, {{"cmd", "guard_set"}, {"items", "uhw, UHE;UHW"}});
     CHECK(ok(r) && len(r, "items") == 2);
     CHECK(ok(call(a, {{"cmd", "bbs_set"}, {"accept", "calls_ris"}})));
-    CHECK(!b.submit("AAM402", 'R', chat("AAM402-CM", "AAR9AA", "QRU UHW"), &e).empty());
+    CHECK(!b.submit("AAM499", 'R', chat("AAM499-CM", "AAR9AA", "QRU UHW"), &e).empty());
     CHECK(pump_until([&] { return a_answers() == 5; }));
     CHECK(nth(a, "AAR9AA", 4).find("QTC 1 UHW\n1 - ") != std::string::npos);
     CHECK(nth(a, "AAR9AA", 4).find("---> UHWTST") != std::string::npos);
 
     // ZEE 1 sends line 1 of B's last list (the UHW one).
-    CHECK(!b.submit("AAM402", 'R', chat("AAM402-CM", "AAR9AA", "ZEE 1"), &e).empty());
+    CHECK(!b.submit("AAM499", 'R', chat("AAM499-CM", "AAR9AA", "ZEE 1"), &e).empty());
     CHECK(pump_until([&] { return a_answers() == 6; }));
     CHECK(nth(a, "AAR9AA", 5).find("FOR THE WEST GATEWAY") != std::string::npos);
-    CHECK(wait_for([&] { return any_has(got(b, "AAM402"), "FOR THE WEST GATEWAY"); }));
+    CHECK(wait_for([&] { return any_has(got(b, "AAM499"), "FOR THE WEST GATEWAY"); }));
     // ZEE of a line not on the list: an error, not a guess.
-    CHECK(!b.submit("AAM402", 'R', chat("AAM402-CM", "AAR9AA", "ZEE 7"), &e).empty());
+    CHECK(!b.submit("AAM499", 'R', chat("AAM499-CM", "AAR9AA", "ZEE 7"), &e).empty());
     CHECK(pump_until([&] { return a_answers() == 7; }));
     CHECK(nth(a, "AAR9AA", 6).find("ERROR ZEE 7 NOT ON YOUR LIST") != std::string::npos);
     // QSL 1: marked, not answered, and not listed to B again.
-    CHECK(!b.submit("AAM402", 'R', chat("AAM402-CM", "AAR9AA", "QSL 1"), &e).empty());
+    CHECK(!b.submit("AAM499", 'R', chat("AAM499-CM", "AAR9AA", "QSL 1"), &e).empty());
     std::string west_id;
     for (auto& m : a.list(100))
         if (m.state == "overheard" && m.body.find("WEST GATEWAY") != std::string::npos) west_id = m.id;
     CHECK(pump_until([&] { return len(call(a, {{"cmd", "bbs_qsl"}, {"id", west_id}}), "by") == 1; }));
     settle();
     CHECK(a_answers() == 7);
-    CHECK(!b.submit("AAM402", 'R', chat("AAM402-CM", "AAR9AA", "QRU UHW,UHE"), &e).empty());
+    CHECK(!b.submit("AAM499", 'R', chat("AAM499-CM", "AAR9AA", "QRU UHW,UHE"), &e).empty());
     CHECK(pump_until([&] { return a_answers() == 8; }));
     CHECK(nth(a, "AAR9AA", 7).find("\nQRU\nAR") != std::string::npos);
     // ZDK 1: page 1 of the last ZEE answer again.
-    CHECK(!b.submit("AAM402", 'R', chat("AAM402-CM", "AAR9AA", "ZDK 1"), &e).empty());
+    CHECK(!b.submit("AAM499", 'R', chat("AAM499-CM", "AAR9AA", "ZDK 1"), &e).empty());
     CHECK(pump_until([&] { return a_answers() == 9; }));
     CHECK(nth(a, "AAR9AA", 8).find("FOR THE WEST GATEWAY") != std::string::npos);
 
     // Multi-message ZEE off (the default): the first only, and it says so.
     // The ZEE answer is paged to the size limit.
-    CHECK(!c.submit("AAM402", 'R', traffic("AAR9AA AAM402", "AAR7ZZ", 13, std::string(700, 'X')), &e).empty());
+    CHECK(!c.submit("AAM499", 'R', traffic("AAR9AA AAM499", "AAR7ZZ", 13, std::string(700, 'X')), &e).empty());
     CHECK(wait_for([&] { return got(a, "AAR7ZZ").size() == 3; }));
     CHECK(ok(call(a, {{"cmd", "bbs_set"}, {"zee_max_bytes", "300"}, {"ack", "off"}})));
-    CHECK(!b.submit("AAM402", 'R', chat("AAM402-CM", "AAR9AA", "QRU"), &e).empty());
+    CHECK(!b.submit("AAM499", 'R', chat("AAM499-CM", "AAR9AA", "QRU"), &e).empty());
     CHECK(pump_until([&] { return a_answers() == 10; }));
     CHECK(nth(a, "AAR9AA", 9).find("QTC 2\n") != std::string::npos);
-    CHECK(!b.submit("AAM402", 'R', chat("AAM402-CM", "AAR9AA", "ZEE 1,2"), &e).empty());
+    CHECK(!b.submit("AAM499", 'R', chat("AAM499-CM", "AAR9AA", "ZEE 1,2"), &e).empty());
     CHECK(pump_until([&] { return a_answers() == 11; }));
     CHECK(nth(a, "AAR9AA", 10).find("MULTI MESSAGE ZEE IS OFF") != std::string::npos);
     CHECK(nth(a, "AAR9AA", 10).find("XXXX") == std::string::npos);
     CHECK(ok(call(a, {{"cmd", "bbs_set"}, {"zee_multi", "true"}})));
-    CHECK(!b.submit("AAM402", 'R', chat("AAM402-CM", "AAR9AA", "ZEE 2 [COMP]"), &e).empty());
+    CHECK(!b.submit("AAM499", 'R', chat("AAM499-CM", "AAR9AA", "ZEE 2 [COMP]"), &e).empty());
     // 700 X's on one line can't be cut: one page holds it, the rest page.
     CHECK(pump_until([&] { return a_answers() >= 12; }));
     settle();
@@ -340,10 +340,10 @@ int main() {
 
     // Unknown command, and remote sync (not allowed by default).
     size_t n0 = a_answers();
-    CHECK(!b.submit("AAM402", 'R', chat("AAM402-CM", "AAR9AA", "SYNC"), &e).empty());
+    CHECK(!b.submit("AAM499", 'R', chat("AAM499-CM", "AAR9AA", "SYNC"), &e).empty());
     CHECK(pump_until([&] { return a_answers() == n0 + 1; }));
     CHECK(nth(a, "AAR9AA", -1).find("REMOTE SYNC NOT ALLOWED") != std::string::npos);
-    CHECK(!b.submit("AAM402", 'R', chat("AAM402-CM", "AAR9AA", "DIR"), &e).empty());
+    CHECK(!b.submit("AAM499", 'R', chat("AAM499-CM", "AAR9AA", "DIR"), &e).empty());
     CHECK(pump_until([&] { return a_answers() == n0 + 2; }));
     CHECK(nth(a, "AAR9AA", -1).find("UNKNOWN COMMAND DIR") != std::string::npos);
 
@@ -351,7 +351,7 @@ int main() {
     a.set_emcon(true);
     r = call(a, {{"cmd", "bbs_get"}});
     CHECK(!flag(r, "auto_send") && str(r, "auto_send_why_not") == "EMCON is on");
-    CHECK(!b.submit("AAM402", 'R', chat("AAM402-CM", "AAR9AA", "VER"), &e).empty());
+    CHECK(!b.submit("AAM499", 'R', chat("AAM499-CM", "AAR9AA", "VER"), &e).empty());
     CHECK(wait_for([&] {
         int n = 0;
         for (auto& m : a.list(1000))
@@ -365,10 +365,16 @@ int main() {
     CHECK(a_answers() == n0 + 2);
     int used = static_cast<int>(num(call(a, {{"cmd", "bbs_get"}}), "auto_sent_last_hour"));
     CHECK(used >= 14);
+    // The status strip's one airtime number counts them, with the resend cap.
+    {
+        JsonValue st = call(a, {{"cmd", "status"}});
+        const JsonValue* cap = st.get("cap");
+        CHECK(cap && num(*cap, "used") == used && num(*cap, "per_hour") == 120 + 12 && num(*cap, "resets_at") > 0);
+    }
     CHECK(ok(call(a, {{"cmd", "bbs_set"}, {"auto_per_hour", std::to_string(used)}})));
     r = call(a, {{"cmd", "bbs_get"}});
     CHECK(!flag(r, "auto_send") && str(r, "auto_send_why_not").find("hourly cap") != std::string::npos);
-    CHECK(!b.submit("AAM402", 'R', chat("AAM402-CM", "AAR9AA", "VER"), &e).empty());
+    CHECK(!b.submit("AAM499", 'R', chat("AAM499-CM", "AAR9AA", "VER"), &e).empty());
     settle();
     std::this_thread::sleep_for(std::chrono::milliseconds(300));
     settle();
@@ -439,7 +445,7 @@ int main() {
 
     // New traffic routes as it comes, broadcast RI struck off.
     CHECK(ok(call(a, {{"cmd", "bbs_set"}, {"broadcast_ri", "uhwhhcf"}})));
-    CHECK(!c.submit("AAM402", 'R', traffic("UHWHHCF UHEAAA", "AAR7ZZ", 14, "BROADCAST FOR EAST"), &e).empty());
+    CHECK(!c.submit("AAM499", 'R', traffic("UHWHHCF UHEAAA", "AAR7ZZ", 14, "BROADCAST FOR EAST"), &e).empty());
     CHECK(pump_until([&] { return out_to(a, "EAB").size() == 1; }));
     {
         std::string body = nth(a, "EAB", 0);
@@ -451,7 +457,7 @@ int main() {
     int64_t fake = static_cast<int64_t>(std::time(nullptr));
     fake = fake - fake % 86400 + 3600;  // 0100Z today: 0000Z is tomorrow
     bbs_a.set_clock([&] { return fake; });
-    CHECK(!c.submit("AAM402", 'R', traffic("UHEBBB", "AAR7ZZ", 15, "LATER FOR EAST"), &e).empty());
+    CHECK(!c.submit("AAM499", 'R', traffic("UHEBBB", "AAR7ZZ", 15, "LATER FOR EAST"), &e).empty());
     CHECK(wait_for([&] { return got(a, "AAR7ZZ").size() == 5; }));
     settle();
     CHECK(out_to(a, "EAB").size() == 1);
@@ -465,7 +471,7 @@ int main() {
     // EMCON holds routed traffic back until it is off.
     a.set_emcon(true);
     CHECK(ok(call(a, {{"cmd", "route_set"}, {"id", std::to_string(east)}, {"sched", ""}})));
-    CHECK(!c.submit("AAM402", 'R', traffic("UHECCC", "AAR7ZZ", 16, "EAST UNDER EMCON"), &e).empty());
+    CHECK(!c.submit("AAM499", 'R', traffic("UHECCC", "AAR7ZZ", 16, "EAST UNDER EMCON"), &e).empty());
     CHECK(wait_for([&] { return got(a, "AAR7ZZ").size() == 6; }));
     settle();
     CHECK(out_to(a, "EAB").size() == 2);
@@ -489,20 +495,20 @@ int main() {
                  {"routing", "UHAAAA"},
                  {"originator", "AAR9AA"},
                  {"from", "MARS STATION AAR9AA"},
-                 {"to", "UHAAAA/AAM402"},
-                 {"to_station", "AAM402"},
-                 {"text", "AAM402-CM DE AAR9AA / VER / 1200Z K"}});  // the form takes no "//"
+                 {"to", "UHAAAA/AAM499"},
+                 {"to_station", "AAM499"},
+                 {"text", "AAM499-CM DE AAR9AA / VER / 1200Z K"}});  // the form takes no "//"
     CHECK(ok(r));
     CHECK(pump_until([&] { return a_answers() == n1 + 1; }));
     CHECK(nth(a, "AAR9AA", -1).find(std::string("VER ") + bbs::kVersion) != std::string::npos);
-    CHECK(!b.submit("AAM402", 'R', chat("AAM402-CM", "AAR9AA", "VER"), &e).empty());
+    CHECK(!b.submit("AAM499", 'R', chat("AAM499-CM", "AAR9AA", "VER"), &e).empty());
     CHECK(pump_until([&] { return a_answers() == n1 + 2; }));
     CHECK(nth(a, "AAR9AA", -1).find("ENCRYPTED CIRCUIT") != std::string::npos);
 
     // A rule with a key sends on in our own cipher.
     CHECK(!ok(call(a, {{"cmd", "route_set"}, {"id", std::to_string(east)}, {"key", "NOSUCHKEY"}})));
     CHECK(ok(call(a, {{"cmd", "route_set"}, {"id", std::to_string(east)}, {"key", today}})));
-    CHECK(!c.submit("AAM402", 'R', "VZCZC\r\nRR UHEDDD DE AAR7ZZ #0017 3291200\r\nR 251200Z NOV 2026\r\nFM AAR7ZZ\r\nTO UHEDDD\r\nBT\r\nUNCLAS\r\nEAST IN OUR CIPHER\r\nBT\r\nNNNN\r\n", &e).empty());
+    CHECK(!c.submit("AAM499", 'R', "VZCZC\r\nRR UHEDDD DE AAR7ZZ #0017 3291200\r\nR 251200Z NOV 2026\r\nFM AAR7ZZ\r\nTO UHEDDD\r\nBT\r\nUNCLAS\r\nEAST IN OUR CIPHER\r\nBT\r\nNNNN\r\n", &e).empty());
     CHECK(pump_until([&] { return out_to(a, "EAB").size() == 4; }));
     CHECK(codress::is_codress(nth(a, "EAB", 3)) && nth(a, "EAB", 3).find("EAST IN OUR CIPHER") == std::string::npos);
     {
