@@ -26,6 +26,7 @@
 #include "json.h"
 #include "net.h"
 #include "training.h"
+#include "station_view.h"
 
 #include <sys/socket.h>
 
@@ -2720,6 +2721,9 @@ std::string ApiServer::handle_call(Core& core, const std::string& line) {
         };
         if (auto r = handle_tuner(core.tuner(), cmd, req, lookup, core.emcon())) return *r;
     }
+    // The radio side for gale-web (station_view.h): scanner status and orders,
+    // the word feed, station health, captures and heard stations.
+    if (auto r = sv::handle(core, cmd, req)) return *r;
 
     if (cmd == "status") {
         CoreStatus s = core.status();
@@ -2831,6 +2835,9 @@ std::string ApiServer::handle_call(Core& core, const std::string& line) {
                     .field("net", n.net)
                     .end_object();
             }
+        } else {
+            // No station book: the fields gale-web reads are still there.
+            w.field("on_duty", std::string()).field("net", std::string()).field_null("next_net");
         }
         w.end_object();
         return w.str();
@@ -3156,7 +3163,7 @@ std::string ApiServer::handle_call(Core& core, const std::string& line) {
     if (auto r = handle_ops(core, cmd, req)) return *r;
 
     return error_reply(
-        "unknown cmd; use status, tuner_status, tuner_channel, send, list, get, queue, log, emcon, cancel, hold, release, requeue, link_format, orderwire, rx_raw, overdue, send_file, get_file, send_acp127, send_acp126, send_chat, parse_acp127, "
+        "unknown cmd; use status, scanner_status, scanner_hold, scanner_release, scanner_record, scanner_plan, word_feed, station_health, captures_list, heard_stations, tuner_status, tuner_channel, send, list, get, queue, log, emcon, cancel, hold, release, requeue, link_format, orderwire, rx_raw, overdue, send_file, get_file, send_acp127, send_acp126, send_chat, parse_acp127, "
         "parse_traffic, compose_templates, compose_form, compose_check, compose_send, compose_advise, key_import, keys_list, key_zeroize, key_open, cipher_status, cipher_install, cipher_remove, station_card, station_backup, station_restore, card_import, cards_list, card_check, card_send, net_tape, tape_seal, or the book's calls (docs/api.md): book_*, net_*, sched_*, duty_*, log_add, station_log, report_monthly");
 }
 

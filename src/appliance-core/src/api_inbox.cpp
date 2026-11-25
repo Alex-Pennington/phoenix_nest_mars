@@ -1631,10 +1631,48 @@ void write_inbox_extras(JsonWriter& w, Core& core, const Message& m, bool read) 
     }
 }
 
+// report_export: the same report as `report`, written to the station's export
+// folder as KIND-FROM-TO.txt (gale-term's name), the way export writes a message.
+std::string report_export(Core& core, Db& db, std::map<std::string, std::string>& req) {
+    std::string rep = report(core, db, req);
+    JsonValue v;
+    if (!parse_json(rep, v) || !v.is_object()) return err_reply("the report couldn't be read back");
+    const JsonValue* ok = v.get("ok");
+    if (!ok || ok->type != JsonValue::Type::Bool || !ok->b) return rep;  // report's own error
+    auto str = [&](const char* k) {
+        const JsonValue* x = v.get(k);
+        return x && x->type == JsonValue::Type::String ? x->s : std::string();
+    };
+    std::string text = str("text");
+    fs::path dir = fs::path(core.db_path()).parent_path() / "export";
+    std::error_code ec;
+    fs::create_directories(dir, ec);
+    if (ec) return err_reply("can't make the export folder");
+    std::string name;
+    for (char c : str("kind") + "-" + str("from") + "-" + str("to") + ".txt")
+        name += (std::isalnum(static_cast<unsigned char>(c)) || c == '-' || c == '_' || c == '.') ? c : '_';
+    std::ofstream out(dir / name, std::ios::binary | std::ios::trunc);
+    out << text;
+    if (!text.empty() && text.back() != '\n') out << "\n";
+    out.close();
+    if (!out) return err_reply("the report file couldn't be written");
+    JsonWriter w;
+    w.begin_object()
+        .field("ok", true)
+        .field("kind", str("kind"))
+        .field("from", str("from"))
+        .field("to", str("to"))
+        .field("folder", dir.string())
+        .field("file", name)
+        .field("bytes", static_cast<long long>(text.size() + (text.empty() || text.back() == '\n' ? 0 : 1)))
+        .end_object();
+    return w.str();
+}
+
 std::optional<std::string> handle_inbox(Core& core, const std::string& cmd, std::map<std::string, std::string>& req) {
     static const std::set<std::string> calls = {"pending", "mark",   "mark_all", "qsl",    "export", "retransmit",
                                                 "tag",     "correct", "search",  "report", "activity_counters", "purge",
-                                                "reply_draft"};
+                                                "reply_draft", "report_export"};
     const bool list_in = cmd == "list" && req.count("dir");
     const bool log_stream_call = cmd == "log" && req.count("stream");
     if (!calls.count(cmd) && !list_in && !log_stream_call) return std::nullopt;
@@ -1654,6 +1692,7 @@ std::optional<std::string> handle_inbox(Core& core, const std::string& cmd, std:
         if (cmd == "activity_counters") return activity_counters(core, db);
         if (cmd == "purge") return purge(core, db, req);
         if (cmd == "reply_draft") return reply_draft(core, db, req);
+        if (cmd == "report_export") return report_export(core, db, req);
         return report(core, db, req);
     } catch (const std::exception& e) {
         return err_reply(e.what());

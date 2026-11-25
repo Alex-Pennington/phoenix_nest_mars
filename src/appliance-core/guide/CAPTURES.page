@@ -1,0 +1,18 @@
+PAGE CAPTURES
+TITLE Recordings
+KIND screen
+SCREENS CAPTURES
+HELP ? guide
+SEE RADIO CALLS
+BEGIN_TEXT
+The recordings the radio has made, newest first: when, how long, why it
+recorded (a call, a data burst, a scheduled net, or your order), on which
+channel, and whether a modem decoded anything in it.
+
+A recording still being written shows as open. Decoded messages from
+these recordings go to the In Box, marked UNVERIFIED: the modem's quality
+check passed, but nothing has compared them with what was sent.
+
+Recordings are kept on the box's data store. Playing them back is not on
+this screen yet.
+END

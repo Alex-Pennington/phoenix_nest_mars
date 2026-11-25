@@ -48,6 +48,10 @@ struct LinkState {
     // Per-station links, when the source reports them.
     bool links_reported = false;
     std::vector<StationLink> links;
+    // The last good status reply, whole, as the scanner sent it (it holds
+    // frequencies: station_view.cpp names channels before passing it on).
+    // Kept from the last good poll while the scanner isn't answering.
+    std::string raw;
 };
 
 // Reads one status reply into *s (keeps socket and times). False, with

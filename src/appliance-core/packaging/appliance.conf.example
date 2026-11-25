@@ -97,3 +97,14 @@ advisor =
 # To try everything with no radio, comment out station above and set this
 # instead: two stations wired back to back, on api-port and the port after.
 # loopback-pair = NCS-A,STA-B
+
+# The radio side, for gale-web (docs/api.md "The radio side"). Each defaults
+# to GALE-DIR/<usual name>; GALE-DIR defaults to the core's working folder.
+# On Gangleri they point into the data store:
+# gale-dir = /var/lib/gale/local
+# words = /srv/greybeard-store/greybeard-ale/gangleri/words/words
+# scan-log = /srv/greybeard-store/greybeard-ale/gangleri/scan-log/ale-scan.log
+# wwv-dir = /srv/greybeard-store/greybeard-ale/gangleri/wwv
+# store-root = /srv/greybeard-store
+# lqa-db, favourites, own-address, scan-plan, radio-file, gps-status,
+# health-file and engine-status take a file path the same way.

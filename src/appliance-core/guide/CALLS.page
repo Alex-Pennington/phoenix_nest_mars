@@ -1,0 +1,23 @@
+PAGE CALLS
+TITLE Calls heard
+KIND screen
+SCREENS CALLS
+HELP Enter details  s stations  ? guide
+KEY s Stations heard, and your favourites.
+SEE RADIO HEARD
+BEGIN_TEXT
+Every ALE transmission the radio has decoded, newest first: when, on
+which channel, who called (the caller), who was called, what kind it was,
+and how clean it was (SINAD, in dB: higher is cleaner).
+
+A sounding is a station saying "I am here" to no one in particular. A call
+names the station it wants. A call-end closes a link. Short messages sent
+inside a call (AMD) are shown with it.
+
+A call to your own address heard in the last minute shows at the top as
+INCOMING. Your own address comes with the box (own_address.txt); it isn't
+typed here.
+
+Words marked with lost samples were decoded across a gap in what the radio
+heard: their calls may be incomplete.
+END

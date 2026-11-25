@@ -127,6 +127,7 @@ public:
     CoreStatus status();
     // greybeard-ale's link state (see link_monitor.h). Set before start().
     void set_link_monitor(std::shared_ptr<LinkMonitor> m) { link_ = std::move(m); }
+    LinkMonitor* link_monitor() const { return link_.get(); }
     // The LDG tuner and the keying sequence around it (tuner.h). Set before
     // start(); none: the tuner calls answer that no tuner is set up.
     void set_tuner(std::shared_ptr<TunerKeying> t) { tuner_ = std::move(t); }

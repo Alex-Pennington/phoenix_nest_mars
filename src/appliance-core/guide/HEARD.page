@@ -1,0 +1,20 @@
+PAGE HEARD
+TITLE Stations heard
+KIND screen
+SCREENS HEARD
+HELP Enter calls from this station  ? guide
+SEE CALLS RADIO
+BEGIN_TEXT
+Every station the radio has heard calling or sounding, the most recent
+first: when it was last heard, on which channel, how often in the last
+day and in all, on how many channels, and its best SINAD (in dB: higher
+is cleaner). A good recent SINAD on a channel means that channel is
+likely to work for a call to that station now.
+
+Favourites are starred, with the name the box knows them by. A favourite
+not heard yet is listed at the end. The favourites list comes with the
+box (favourites.txt); it isn't typed here.
+
+The figures come from the link quality database when the box keeps one,
+and from the recent calls otherwise: the screen says which.
+END

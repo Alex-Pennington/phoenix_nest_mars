@@ -177,6 +177,7 @@ void LinkMonitor::poll_once() {
     next.polled_at = now_s();
     bool ok = unix_request(path_, "status", 2000, &reply, &err) && parse_link_status(reply, &next);
     if (ok) {
+        next.raw = reply;
         next.reachable = true;
         next.last_ok_at = next.polled_at;
     } else {

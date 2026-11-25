@@ -1,0 +1,29 @@
+PAGE RADIO
+TITLE The scanner
+KIND screen
+SCREENS RADIO
+HELP h hold  r release  c record  p plan  ? guide
+KEY h Hold: stay on one window of the plan, at most 15 minutes.
+KEY r Release: scan again.
+KEY c Record a channel for a while (at most 15 minutes).
+KEY p Switch to another scan plan, without a restart.
+SEE CALLS HEALTH CAPTURES
+BEGIN_TEXT
+The radio listens by scanning: it visits each window of the scan plan in
+turn and decodes every ALE call it hears. This screen shows what it is
+doing now: scanning, holding on one window, recording, or taking a WWV
+clock reading. INCOMING means a call to your own address was heard in the
+last minute: the Calls screen says who and on which channel.
+
+Channels are shown by name. A channel in your channel plan shows its
+designator; one the scan plan labels shows that label; any other shows
+its place in the scan plan, W2C1 for window 2, channel 1.
+
+Hold, release, record and plan are orders to the scanner. It takes them
+at its own pace, between visits: the screen shows "order pending" until
+it has. Every hold and every recording ends by itself, after 15 minutes at
+most. None of them transmits: the scanner only listens.
+
+When the scanner isn't answering, the screen keeps what it last said, in
+grey, and orders can't be given.
+END

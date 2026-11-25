@@ -396,6 +396,17 @@ int main() {
     CHECK(!ok(call(a, {{"cmd", "report"}, {"kind", "station_log"}, {"from", "2026-11-10"}, {"to", "2026-11-01"}})));
     JsonValue old = call(a, {{"cmd", "report"}, {"kind", "station_log"}, {"from", "2020-01-01"}, {"to", "2020-01-02"}});
     CHECK(ok(old) && str(old, "text").find("NOTHING LOGGED") != std::string::npos);
+    // report_export writes the same text to the export folder, as KIND-FROM-TO.txt.
+    {
+        JsonValue rx = call(a, {{"cmd", "report_export"}, {"kind", "comtrafsum"}, {"from", "2026-11-01"}, {"to", "2026-11-02"}});
+        CHECK(ok(rx) && str(rx, "file") == "comtrafsum-2026-11-01-2026-11-02.txt");
+        JsonValue same = call(a, {{"cmd", "report"}, {"kind", "comtrafsum"}, {"from", "2026-11-01"}, {"to", "2026-11-02"}});
+        std::string want = str(same, "text");
+        if (!want.empty() && want.back() != '\n') want += "\n";
+        CHECK(read_file(fs::path(str(rx, "folder")) / str(rx, "file")) == want);
+        CHECK(num(rx, "bytes") == static_cast<double>(want.size()));
+        CHECK(!ok(call(a, {{"cmd", "report_export"}, {"kind", "weather"}})));
+    }
 
     // ---- purge: old processed/discarded and finished outgoing; dry run first ----
     CHECK(ok(call(a, {{"cmd", "mark"}, {"id", s21}, {"state", "processed"}})));  // QSL'd above

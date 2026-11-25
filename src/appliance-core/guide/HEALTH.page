@@ -1,0 +1,26 @@
+PAGE HEALTH
+TITLE Station health
+KIND screen
+SCREENS HEALTH
+HELP ? guide
+SEE RADIO START
+BEGIN_TEXT
+How the radio side of the box is doing, in one place.
+
+Clock: what set the time. WWV is best: the box listens to WWV and sets
+its clock from it; a reading older than 8 hours is shown as stale. GPS is
+next, when a GPS receiver is fitted. "Not set" means times come from the
+computer's own clock and may be off.
+
+Health check: the box checks itself every few minutes and lists any
+problem it finds. The engine is the decoder: it should be connected to
+the radio. The scanner log shows whether the scanner is running, whether
+it decodes on the engine or here, and how often the radio was overloaded
+(a strong signal nearby) or had to restart.
+
+Radio: when the box finds no radio, it says why here.
+
+The data store: everything the box hears is kept on its own data drive
+first. If that drive isn't mounted, every screen says so, and what they
+show is not what the box has stored.
+END

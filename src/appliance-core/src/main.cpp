@@ -16,6 +16,7 @@
 #include "greybeard_modem.h"
 #include "link_monitor.h"
 #include "tuner.h"
+#include "station_view.h"
 #include "ops.h"
 #include "loopback_modem.h"
 #include "s5066.h"
@@ -127,7 +128,21 @@ void usage() {
         "                        its station (needs --link-socket)\n"
         "  --tuner-socket PATH   greybeard-ale's LDG tuner daemon (ldg-tuner/1); the\n"
         "                        tuner_* calls go there, and each channel's antenna\n"
-        "                        ports with them (default: no tuner)\n";
+        "                        ports with them (default: no tuner)\n\n"
+        "The radio side, read for gale-web (station_view.h; channels go by name, never\n"
+        "by frequency). Each defaults to GALE-DIR/its usual name; a file that isn't\n"
+        "there (the store not mounted) is reported, never an error:\n"
+        "  --gale-dir DIR        greybeard-ale's local folder (default .)\n"
+        "  --words PREFIX        word log: PREFIX itself, the newest PREFIX-YYYYMMDD.jsonl\n"
+        "                        or PREFIX.jsonl (default GALE-DIR/words)\n"
+        "  --scan-log FILE       ale-scan.log         --wwv-dir DIR   wwv/\n"
+        "  --gps-status FILE     gps/status.json      --health-file FILE  health.json\n"
+        "  --engine-status FILE  engine_status.json   --lqa-db FILE   lqa.sqlite (read only)\n"
+        "  --favourites FILE     favourites.txt       --own-address FILE  own_address.txt\n"
+        "  --scan-plan FILE      plans/scan.plan (channel labels)\n"
+        "  --radio-file FILE     radio.json           (captures: --captures, else GALE-DIR/captures)\n"
+        "  --store-root DIR      the data store's mount point: replies say whether it is\n"
+        "                        mounted (default: not checked)\n";
 }
 
 struct Station {
@@ -138,6 +153,7 @@ struct Station {
 
 std::shared_ptr<LinkMonitor> g_link;
 std::string g_tuner_socket;
+sv::Paths g_view;  // the radio side's files (station_view.h)
 bool g_link_gate = false;
 int g_ack_timeout = 120, g_ack_retries = 2, g_tx_gap = 6;
 bool g_tx_gap_set = false;
@@ -361,6 +377,19 @@ int main(int argc, char** argv) {
             else if (a == "--advisor-arg") advisor_args.push_back(next());
             else if (a == "--link-socket") link_socket = next();
             else if (a == "--tuner-socket") g_tuner_socket = next();
+            else if (a == "--gale-dir") g_view.gale_dir = next();
+            else if (a == "--words") g_view.words = next();
+            else if (a == "--scan-log") g_view.scan_log = next();
+            else if (a == "--wwv-dir") g_view.wwv_dir = next();
+            else if (a == "--gps-status") g_view.gps = next();
+            else if (a == "--health-file") g_view.health = next();
+            else if (a == "--engine-status") g_view.engine_status = next();
+            else if (a == "--lqa-db") g_view.lqa_db = next();
+            else if (a == "--favourites") g_view.favourites = next();
+            else if (a == "--own-address") g_view.own = next();
+            else if (a == "--scan-plan") g_view.scan_plan = next();
+            else if (a == "--radio-file") g_view.radio = next();
+            else if (a == "--store-root") g_view.store_root = next();
             else if (a == "--link-poll-ms") link_poll_ms = std::stoi(next());
             else if (a == "--link-gate") link_gate = true;
             else if (a == "--link") link_kind = next();
@@ -409,6 +438,11 @@ int main(int argc, char** argv) {
     if (link_gate && link_socket.empty()) {
         std::cerr << "--link-gate needs --link-socket\n";
         return 2;
+    }
+    {
+        sv::Paths vp = g_view;
+        if (vp.captures.empty()) vp.captures = captures;
+        sv::set_paths(vp);
     }
     if (!link_socket.empty()) {
         g_link = std::make_shared<LinkMonitor>(link_socket, link_poll_ms < 200 ? 200 : link_poll_ms);
@@ -509,6 +543,18 @@ int main(int argc, char** argv) {
                 notes.push_back("the link socket isn't there yet: start greybeard-ale's ale-scan with --control");
         } else {
             std::cout << "  link state     not read (no link-socket)\n";
+        }
+        {
+            sv::Paths vp = g_view;
+            if (vp.captures.empty()) vp.captures = captures;
+            vp = vp.resolved();
+            std::cout << "  radio side     " << vp.gale_dir << " (words " << vp.words << ", scan log " << vp.scan_log
+                      << ", captures " << vp.captures << ")\n";
+            if (!vp.store_root.empty()) {
+                bool there = fs::is_directory(vp.store_root, ec);
+                std::cout << "  data store     " << vp.store_root << (there ? "" : " (not there)") << "\n";
+                if (!there) notes.push_back("store-root " + vp.store_root + " isn't there: the radio side reads report it");
+            }
         }
         if (!g_tuner_socket.empty()) {
             std::cout << "  tuner          " << g_tuner_socket << " (transmit pinned: tunes refused)\n";

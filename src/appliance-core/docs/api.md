@@ -584,6 +584,135 @@ exactly as without one. Keying is by CAT or a hardware PTT line only: a
 keyer that keys any other way, VOX above all, is refused. The core keys
 nothing today; this sequence is ready for when transmit is unpinned.
 
+## The radio side: scanner, calls heard, health, recordings (gale-web)
+
+greybeard-ale's scanner, decoder and clock write files and answer on the
+scanner's control socket; the core reads them and passes them on, so gale-web
+needs only port 4100 (issue 3). The core does no ALE or modem work here.
+
+**Channels go by name, never by frequency.** A frequency read from a file or
+the scanner becomes a name before it leaves the core: the channel's
+designator in the channel plan, else its label in the scan plan
+(`record`/`voice HZ:LABEL`), else its place in the scan plan, `W<window>C<channel>`
+(1-based), else `unlisted`. No reply carries a key with `khz`, `hz` or `freq`
+in it.
+
+**Where the files are.** Settings (config keys, or the same as `--options`),
+each defaulting to `GALE-DIR/<usual name>`: `gale-dir` (default `.`; the
+terminal image runs the core in `/var/lib/gale/local`), `words` (a prefix: the
+file itself, else the newest `PREFIX-YYYYMMDD.jsonl`, else `PREFIX.jsonl`),
+`scan-log`, `wwv-dir`, `gps-status` (`gps/status.json`), `health-file`,
+`engine-status`, `lqa-db` (read only), `favourites`, `own-address`,
+`scan-plan` (`plans/scan.plan`), `radio-file`; recordings come from
+`captures` (else `GALE-DIR/captures`). On Gangleri they point under
+`/srv/greybeard-store/greybeard-ale/gangleri/`.
+
+**A store that isn't there.** A missing file or folder never fails a call: the
+part that needed it says `"available": false` with `why`. With `store-root`
+set, every reply below carries `"store": {"root", "mounted", "why"?}`;
+`mounted` false means the drive isn't mounted on it, so what the reply shows
+is not the store.
+
+### scanner_status
+
+`{"cmd":"scanner_status"}` returns `{ok, source, reachable, polled_at,
+last_ok_at, error?, view, scanner, scanner_stale?, incoming?, store?}`.
+
+- `view`: `incoming` (a call to our own address heard in the last 60 s; then
+  `incoming {caller, channel, end}`), `scanning`, `hold`, `recording`, `wwv`,
+  `starting`, `stopping`, or `no scanner` (no `link-socket`, or it isn't
+  answering).
+- `scanner`: the scanner's whole status reply (greybeard-ale
+  `src/control_socket.h`), polled every `link-poll-ms`, with its channels
+  named: `state`, `plan`, `windows`, `window`, `channels` (names, for
+  `channels_khz`), `visit`, `visit_s`, `visits`, `stream_unix`, `hold`
+  (`{window, left_s, record_label}` or null), `order_pending`,
+  `plan_pending`, `engine`, `visit_remote`, `clock` (`wwv`|`host`),
+  `clock_counter`, `wwv_blocks`, `last_wwv_unix`, `plan_switches`, `note`.
+  Fields the scanner adds later pass through, named the same way. Null
+  before the first good reply; when the scanner stops answering, the last
+  one stays with `scanner_stale: true`.
+
+### scanner_hold, scanner_release, scanner_record, scanner_plan
+
+Orders to the scanner, forwarded to its control socket as the tuner calls are
+to the tuner daemon. (`hold` and `release` are the message calls; these have
+their own names.) Each returns the scanner's own reply, named the same way:
+`{ok:true, order, window?, seconds?}` or `{ok:false, error}`. The scanner
+takes an order between visits: `scanner_status` shows `order_pending` until
+it has. None of them transmits.
+
+- `scanner_hold {window, seconds?}`: stay on plan window `window` (1-based),
+  for `seconds` (above 0, at most 900; default 600).
+- `scanner_release {}`: scan again.
+- `scanner_record {channel, seconds}`: hold that channel's window and record
+  it (seconds above 0, at most 900). `channel` is a name as above: a
+  designator or `W<w>C<c>` is looked up and sent to the local socket only;
+  any other name goes as the scanner's own label.
+- `scanner_plan {name}`: switch to plan file `name` in the scanner's plan
+  folder (`[A-Za-z0-9._+-]`, no path).
+
+Refused by the core, before anything is sent: a bad window or seconds, an
+empty or malformed channel or plan name, no `link-socket`.
+
+### word_feed
+
+`{"cmd":"word_feed","limit":50,"since":UNIX,"incoming_s":60}` returns the
+ALE transmissions in the newest word log, newest first, put back together as
+greybeard-ale's `lqa_db.py` does (per channel; a gap over 1.2 s starts a new
+one):
+
+- `transmissions[]`: `{start, end, channel, caller, called[], kind, words,
+  sinad, gaps, open, amd[]}`. `kind` is `sounding`, `call`, `call-partial`,
+  `call-end` or `unknown`; `gaps` counts words decoded across lost samples;
+  `open` is true while the channel may still be adding words (5 s); `amd` holds
+  the short text messages sent in it.
+- `incoming`: the newest call to one of our own addresses (`own-address`
+  file) in the last `incoming_s` seconds, `{caller, called[], channel, end}`,
+  or null.
+- `last_word {unix, channel, window, sinad, engine}`, `last_hour {words, gaps,
+  local, partial}` (`partial`: the log read didn't reach an hour back),
+  `source` (the word log's file name), `own_address_file`.
+
+### heard_stations
+
+`{"cmd":"heard_stations","limit":200}` returns `stations[]`: `{address, name,
+favourite, last_heard, last_channel, heard_24h, heard, channels, best_sinad}`,
+the most recently heard first, then favourites not heard yet (`last_heard`
+null). `source` is `lqa` (the LQA database, read only; stamps before the replay
+cut-off left out) or `word log` (no database: from the recent calls).
+Favourites come from the favourites file (`ADDRESS [name]` per line); the box
+doesn't edit it.
+
+### station_health
+
+`{"cmd":"station_health"}` returns:
+
+- `clock {set_by: wwv|gps|none, wwv {fix, fixed_at, age_s, stale (over 8 h),
+  offset_ms, sigma_ms?, tcxo_ppm?, why?, sync_running, sync_min?, last_fix
+  {t, block?, count_err_ms?, count_hours?}|null}, gps {available, fresh (10 s),
+  age_s, fix, sats, source, host_minus_utc_ms?, uncertainty_ms?, pps_age_s?,
+  device_connected?}}`. The WWV band is not passed on.
+- `health {available, state, age_s, stale (15 min), problems[]}`.
+- `engine {available, age_s, stale (60 s), connected, last_frame_age_s?,
+  overloads_total?, gap_visits?, local_visits?}`.
+- `scanner_log {available, state: running|stopped|stale (2 min), age_s, since,
+  stopped, link: up|down|null, last_visit: engine|local|null, overloads,
+  restarts}`: counts since the last start, read as gale-term read them.
+- `radio {available, radio, why, t?}`: the launcher's own word, e.g. "no
+  radio" and why.
+- `words_last_hour {words, gaps, local, partial}`.
+- `scanner {reachable, state, engine, clock, why?}` or null.
+- `sources`: the files read.
+
+### captures_list
+
+`{"cmd":"captures_list","limit":20}` returns `total` and `captures[]`, newest
+first: `{name, size, open, start?, seconds?, trigger?, channel?, window?,
+clock?, lost_s?, modems, payloads}`. `open`: no sidecar yet (being written, or
+cut off). `modems`: a modem verdict file is beside it; `payloads`: decoded
+payload files. Playback isn't ruled on and isn't offered.
+
 ## Keys, cards and signatures
 
 docs/crypto.md explains each of these. Key and passphrase text is wiped from
@@ -1171,3 +1300,10 @@ UTC days, both included; default today. Lines are 69 characters or fewer.
   acknowledged, not delivered, overheard, errors, processed and discarded.
   `draft` (`template` FREE_FORM, `prec`, `subject`, `text`) opens in
   MSG-COMPOSE; nothing is sent from here.
+
+`{"cmd":"report_export","kind":...,"from":...,"to":...}` (the same fields as
+`report`) writes that report's `text` to the station's export folder, beside the
+database, as `KIND-FROM-TO.txt` (gale-term's name; an earlier file of the same
+name is replaced), and returns `{"ok":true,"kind","from","to","folder","file","bytes"}`.
+It is MSG-REPORTS `e`. A bad kind or day gets `report`'s own error and writes
+nothing. In training it writes to the practice station's folder, as `export` does.
