@@ -1,7 +1,7 @@
 # gale-term: core calls by screen
 
 Every core call gale-term needs for the screens in
-docs/gale-term-mm-bbs-screens.md, one screen per section. The full text of
+docs/gale-term-mm-bbs-screens.md (v1.2), one screen per section. The full text of
 each call is in docs/api.md; this file is the checklist to build against.
 
 ## How to call
@@ -189,15 +189,25 @@ on yet. Nothing is purged unless the operator runs it.
 | `+` / `-` | `route_move` | `id`, `dir` "up" / "down" (or `to`, a position) | `ok` |
 | `R` re-run | `route_rerun` | `dry_run` "true" first (show `count`), then `dry_run` "false" after `y` | `count`, `items[]`, `auto_send_why_not` |
 
-## PARTS (the resend queue for long tapes and bundles)
-
-The screens spec has no screen id for it yet; the main screen shows the
-`summary` line when `sends` is above 0.
+## RESENDS (`e`)
 
 | Key | Call | Request | Reply |
 |---|---|---|---|
-| Sets and requests | `parts_list` | `all` Y/N | `hold_s`, `sets[]` (`kind`, `tag`, `from`, `parts`, `have`, `state`, `missing`, `id`, `drops_in_s`), `requests[]` (`id`, `from`, `kind`, `tag`, `missing`, `states`) |
+| Open, redraw after every send | `parts_queue` | `limit` | `summary` (line 3), `sends`, `stations`, `per_hour`, `sent_last_hour`, `room` (-1: no cap), `emcon`, `rows[]` (`request`, `message`, `kind`, `tag`, `title`, `station`, `parts`, `asked`, `age_s`, `state`), `flagged[]`, `held[]`, `unchecked`, `not_ours` |
+| Enter | → MSG-VIEW with `get` `id` = the row's `message` | | |
+| `s` send the row (confirm, default No, keyboard `y` only; Now or Next net) | `parts_queue_send` | `request`, `when` "NOW" or "NET", `net` | `request`, `sent[]` (`id`, `tag`, `part`, `to`, `stations`), `sends`, `stations`, `held`, `left_for_cap`, `room_at`, `failed[]`, `left` |
+| `d` drop the row (confirm, default No) | `parts_queue_drop` | `request` | `request`, `station`, `dropped` |
+| `A` send all (keyboard `y` only; show `sends` and `room` from `parts_queue` first) | `parts_queue_send` | `when`, `net` (no `request`) | same as `s` |
+
+Row `state`: `WAIT`, `HELD-EMCON`, `HELD-CAP`, `FLAGGED`, `HELD-NET`, `SENT`,
+`DROPPED`. `sends` 0 with `left_for_cap` above 0 means the cap held it:
+show `room_at`. During EMCON a NOW send is refused (`ok` false); a NET send
+is held for the slot. One send answers every row that asked for that part.
+
+Other parts calls, for the MSG-VIEW of a tape or bundle that came in:
+
+| Need | Call | Request | Reply |
+|---|---|---|---|
+| Sets waiting for parts | `parts_list` | `all` Y/N | `hold_s`, `sets[]` (`kind`, `tag`, `from`, `parts`, `have`, `state`, `missing`, `id`, `drops_in_s`), `requests[]` |
 | Ask for missing parts | `parts_request` | `id` (a part of the set) | `to`, `tag`, `id`, `asked` |
-| The queue | `parts_queue` | — | `summary`, `sends`, `stations`, `items[]` (`kind`, `tag`, `part`, `to`, `asked_by`), `flagged[]`, `held[]`, `per_hour`, `sent_last_hour`, `room`, `emcon` |
-| Send it (confirm, default No: keys the radio) | `parts_queue_send` | `when` "NOW" or "NET", `net` | `sent[]`, `sends`, `stations`, `held`, `left_for_cap`, `room_at`, `failed`, `left` |
-| Resend by hand (confirm) | `parts_resend` | `id`, or `to`, `tag`, `parts` ("2 4") | `resent[]`, `not_found`, `failed` |
+| Resend by hand, outside the queue (confirm) | `parts_resend` | `id`, or `to`, `tag`, `parts` ("2 4") | `to`, `tag`, `resent[]`, `not_found`, `failed` |

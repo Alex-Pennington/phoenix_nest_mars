@@ -1,18 +1,27 @@
 PAGE RESENDS
-TITLE Missing parts and the resend queue
-KIND topic
+TITLE Resends: missing parts other stations asked for
+KIND screen
 SCREENS RESENDS
-SEE FORM-PARTS_ASK FORM-PARTS_QUEUE FORM-PARTS_REPEAT EMCON
+HELP Enter open  s send  d drop  A send all  ? guide
+SEE FORM-PARTS_ASK FORM-PARTS_QUEUE FORM-PARTS_REPEAT EMCON MSG-VIEW
+KEY Enter Opens the tape or bundle the row is about.
+KEY s Sends the parts this row asked for, now or at the next net slot (asks first, No by default).
+KEY d Drops the row: those parts won't be resent (asks first).
+KEY A Sends everything that can go, after showing how many sends and how much room is left this hour (press y).
 BEGIN_TEXT
 Long key tapes and bundles go in numbered parts. A member missing some
-asks for them by number (PARTS_ASK).
+asks for them by number (PARTS_ASK). Each ask is a row here.
 
-At net control the asks pool into one queue. A part several members
-missed goes once to the whole net; a part one member missed goes to that
-member. The queue shows as one line, such as "7 sends for 20 stations",
-and goes with one press, now or at the next net slot (PARTS_QUEUE).
+Asks pool. A part several members missed goes once, to the whole net; a
+part one member missed goes to that member. So one send can answer many
+rows: after it goes, every row that asked for those parts shows SENT.
 
-At most 12 resends go in an hour. A member who asks again for a part
-already sent twice is flagged: look into their antenna or path, then send
-it by hand if you choose (PARTS_REPEAT).
+WAIT can go now. HELD-EMCON waits for EMCON to lift. HELD-CAP waits for
+room: at most 12 resends go in an hour. HELD-NET is sent, held for the net
+slot. FLAGGED: the member asked again for a part already sent twice. Look
+into their antenna or path, then send it with s if you choose, or drop it.
+END
+BEGIN_EXAMPLE
+Twenty members ask for parts of last night's tape and bundle. The rows
+pool into 7 sends. Press A: "7 sends, room 12 this hour. Send? y".
 END

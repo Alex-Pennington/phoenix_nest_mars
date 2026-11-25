@@ -13,6 +13,7 @@ KEY r Reports: station log, traffic status and summary.
 KEY b Machine mode (BBS) settings.
 KEY g Guard list and collective aliases.
 KEY u Routing rules.
+KEY e Resends: missing parts other stations asked for.
 KEY ? This guide, for the screen you are on.
 SEE START TRAINING EMCON
 BEGIN_TEXT

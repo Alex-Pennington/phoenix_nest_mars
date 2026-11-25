@@ -686,6 +686,31 @@ static void rally(const fs::path& dir) {
     r = call(*A.core, {{"cmd", "parts_queue"}});
     CHECK(num(r, "sends") == 0 && arr(r, "flagged").size() == 1 && str(arr(r, "flagged")[0], "station") == "STA-21");
     CHECK(!ok(call(*A.core, {{"cmd", "parts_queue_send"}})));  // nothing to send
+    // RESENDS: the flagged ask is a row of its own. A fourth ask is dropped.
+    {
+        std::string flagged_rq = str(arr(r, "flagged")[0], "request");
+        bool row = false;
+        for (auto& x : arr(r, "rows"))
+            if (str(x, "request") == flagged_rq) row = str(x, "state") == "FLAGGED" && str(x, "station") == "STA-21";
+        CHECK(row);
+        ask(X, A, "tape");
+        r = call(*A.core, {{"cmd", "parts_queue"}});
+        std::string again;
+        for (auto& f : arr(r, "flagged"))
+            if (str(f, "request") != flagged_rq) again = str(f, "request");
+        CHECK(!again.empty());
+        CHECK(!ok(call(*A.core, {{"cmd", "parts_queue_drop"}, {"request", "NO-SUCH"}})));
+        r = call(*A.core, {{"cmd", "parts_queue_drop"}, {"request", again}});
+        CHECK(ok(r) && num(r, "dropped") == 1 && str(r, "station") == "STA-21");
+        CHECK(!ok(call(*A.core, {{"cmd", "parts_queue_drop"}, {"request", again}})));  // nothing left
+        CHECK(!ok(call(*A.core, {{"cmd", "parts_queue_send"}, {"request", again}})));
+        r = call(*A.core, {{"cmd", "parts_queue"}});
+        CHECK(arr(r, "flagged").size() == 1);
+        bool dropped = false;
+        for (auto& x : arr(r, "rows"))
+            if (str(x, "request") == again) dropped = str(x, "state") == "DROPPED";
+        CHECK(dropped);
+    }
     // The operator looks, and sends it by hand.
     r = show(*A.core, "PARTS_REPEAT");
     std::string flagged_id;
@@ -759,6 +784,15 @@ static void pacing(const fs::path& dir) {
     ask(D, C, "tape");
     r = call(*C.core, {{"cmd", "parts_queue"}});
     CHECK(num(r, "sends") == 3 && num(r, "room") == 2 && num(r, "per_hour") == 2);
+    // RESENDS: one row for D's ask, the three parts, ready to go.
+    CHECK(arr(r, "rows").size() == 1);
+    const std::string rq = str(arr(r, "rows")[0], "request");
+    {
+        const JsonValue& row = arr(r, "rows")[0];
+        CHECK(str(row, "station") == "STA-D" && str(row, "parts") == "2 3 4" && str(row, "state") == "WAIT");
+        CHECK(str(row, "kind") == "tape" && !str(row, "message").empty() && num(row, "age_s") >= 0);
+        CHECK(C.core->get(str(row, "message")) && C.core->get(str(row, "message"))->dst == "STA-D");
+    }
     // The status strip's cap: nothing counted yet.
     r = call(*C.core, {{"cmd", "status"}});
     CHECK(!yes(r, "emcon"));
@@ -776,6 +810,14 @@ static void pacing(const fs::path& dir) {
     CHECK(wait_for([&] { return num(waiting(*D.core), "have") == of - 1; }));
     r = call(*C.core, {{"cmd", "parts_queue"}});
     CHECK(num(r, "sends") == 1 && num(r, "room") == 0);
+    CHECK(str(arr(r, "rows")[0], "state") == "HELD-CAP");
+    // Sending the row now obeys the cap: nothing goes.
+    r = call(*C.core, {{"cmd", "parts_queue_send"}, {"request", rq}});
+    CHECK(ok(r) && num(r, "sends") == 0 && num(r, "left_for_cap") == 1 && str(r, "request") == rq);
+    CHECK(ok(call(*C.core, {{"cmd", "emcon"}, {"on", "Y"}})));
+    CHECK(str(arr(call(*C.core, {{"cmd", "parts_queue"}}), "rows")[0], "state") == "HELD-EMCON");
+    CHECK(!ok(call(*C.core, {{"cmd", "parts_queue_send"}, {"request", rq}})));
+    CHECK(ok(call(*C.core, {{"cmd", "emcon"}, {"on", "N"}})));
     // Status shows the cap spent, and when the rolling hour opens room again.
     {
         const double t = static_cast<double>(std::time(nullptr));
@@ -800,9 +842,11 @@ static void pacing(const fs::path& dir) {
     char hhmm[8];
     std::snprintf(hhmm, sizeof hhmm, "%02d%02d", tm.tm_hour, tm.tm_min);
     CHECK(ok(form(*C.core, "SCHEDULE", {{"name", "evening net"}, {"days", "DAILY"}, {"time", hhmm}})));
-    r = form(*C.core, "PARTS_QUEUE", {{"queue", "ALL"}, {"when", "NET"}, {"net", "EVENING NET"}});
-    CHECK(ok(r) && yes(sub(r, "result"), "held") && num(sub(r, "result"), "sends") == 1);
-    std::string held_id = str(arr(sub(r, "result"), "sent")[0], "id");
+    // The row, sent for the net slot (RESENDS s, then N).
+    r = call(*C.core, {{"cmd", "parts_queue_send"}, {"request", rq}, {"when", "NET"}, {"net", "EVENING NET"}});
+    CHECK(ok(r) && yes(r, "held") && num(r, "sends") == 1);
+    std::string held_id = str(arr(r, "sent")[0], "id");
+    CHECK(str(arr(call(*C.core, {{"cmd", "parts_queue"}}), "rows")[0], "state") == "HELD-NET");
     CHECK(C.core->get(held_id) && C.core->get(held_id)->state == "held");
     std::this_thread::sleep_for(std::chrono::milliseconds(800));
     CHECK(num(waiting(*D.core), "have") == of - 1);  // not on the air yet

@@ -1,4 +1,4 @@
-# gale-term: Message Machine screens (inbox, BBS, routing) — build spec v1.1 (v1.1: mouse added, section 1a)
+# gale-term: Message Machine screens (inbox, BBS, routing) — build spec v1.2 (v1.1: mouse added, section 1a; v1.2: RESENDS screen, key e)
 
 Owner of this spec: MARS core coordinator (pilot). Builder: Ymir (gale-term, greybeard-ale).
 Reference: Message Machine user manual (GRSS, 2020) and MultitermBasic guide, as uploaded by Alex.
@@ -53,6 +53,7 @@ Tests: the screen-walk test also drives each screen by synthetic mouse events (c
 | b | BBS-SETUP | Machine mode (BBS) settings |
 | g | BBS-GUARD | Guard list + RI alias map |
 | u | BBS-ROUTES | Routing rules |
+| e | RESENDS | Resend queue: parts other stations asked for (added v1.2) |
 
 ## 3. Screens
 
@@ -128,6 +129,25 @@ circuit key name (our cipher keys only), schedule (none / HHMMZ), compress yes/n
 Keys: `a` add, Enter edit, `Del` remove, `+`/`-` reorder (first match wins), `R` re-run rules over unprocessed (confirm, default No; shows count first).
 Core: `route_list`, `route_set`, `route_del`, `route_move`, `route_rerun` `{"dry_run":true}` then `{"dry_run":false}`.
 ALE calling is greybeard-ale's: the core hands the ordered address list to the link controller; gale-term only edits it.
+
+### RESENDS (added v1.2)
+The pooled resend queue for long key tapes and bundles sent in numbered parts.
+Line 3: the queue's summary line (`Resend queue: 7 sends for 20 stations (...)`) and `Room this hour: N of M`.
+List columns: `MESSAGE  STATION  PARTS  AGE  STATE`, one row per resend a station asked for.
+MESSAGE is the title (`tape 4HNPQ2XR`); STATE is WAIT, HELD-EMCON, HELD-CAP, FLAGGED, HELD-NET, SENT or DROPPED
+(FLAGGED: the station asked again after two resends, the operator decides; HELD-NET: in the outbox, held for a net slot).
+Open rows first, oldest ask first, then SENT and DROPPED, latest first.
+Keys: Up/Down move, Enter opens the message (`message`) in MSG-VIEW.
+`s` sends the selected row (confirm, default No, keyboard `y` only; the panel offers Now or Next net slot).
+`d` drops the selected row (confirm, default No).
+`A` sends all eligible (protected: keyboard `y` only, never a click; the panel shows the send count and this hour's
+room first).
+The status strip shows the combined cap (`status.cap`) as on every screen.
+Every send goes through `parts_queue_send`: it obeys EMCON and the per-hour cap and stays on the pinned transmit
+route; in training mode it goes only to the practice store. A send answers every station that asked for the same part
+(pooling), so one `s` can clear other rows too: redraw from `parts_queue` after each send.
+Core: `parts_queue` `{"limit":N}` (rows), `parts_queue_send` `{"request":id,"when":"NOW"|"NET","net":name}` (one row)
+or without `request` (all), `parts_queue_drop` `{"request":id}`.
 
 ## 4. Guide pages
 One page per screen id above, plain language, what each key does, one worked example. Training mode uses the same screens

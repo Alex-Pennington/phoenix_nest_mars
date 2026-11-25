@@ -661,14 +661,27 @@ A tape or bundle over 6000 bytes goes as numbered, signed parts
   a station or `ALL` when several asked, and `asked_by`), `flagged` (each
   `station`, `tag`, `part`, `request`), `held` (each `id`, `tag`, `part`,
   `goes_at`), `unchecked`, `not_ours`, `per_hour`, `sent_last_hour`, `room`
-  (-1 with no cap) and `emcon`.
-- `parts_queue_send {when, net}`: sends the queue. `when=NOW` (the default;
+  (-1 with no cap), `emcon`, and `rows` for the RESENDS screen: one per
+  request a station sent (signed, for parts this station sent it), at most
+  `limit` (default 100), open ones first. Each has `request`, `message` (the
+  first part this station sent of that block, to open in MSG-VIEW), `kind`,
+  `tag`, `title`, `station`, `parts` ("2 4"), `asked`, `age_s` and `state`:
+  `WAIT` (can go now), `HELD-EMCON`, `HELD-CAP` (past this hour's room),
+  `FLAGGED` (asked again after two resends), `HELD-NET` (held in the outbox
+  for a net slot), `SENT` or `DROPPED`.
+- `parts_queue_send {when, net, request}`: sends the queue, or with `request`
+  only the parts that request asked for (its flagged parts too: the
+  operator chose to), each still pooled with every station asking for the
+  same part. Returns `request` when given. `when=NOW` (the default;
   refused during EMCON) or `when=NET` with `net` naming a net on the schedule
   (default: the next to sit); parts for a slot still to come are held and go
   out when it starts. Up to the hourly cap. Returns `when`, `net`, `goes_at`,
   `sent` (each `id`, `tag`, `part`, `to`, `stations`), `sends`, `stations`,
   `held`, `left_for_cap` and `room_at` when the cap held some back, `failed`
   and `left` (what stays in the queue).
+- `parts_queue_drop {request, part}`: drops a request's parts still waiting
+  or flagged (one of them with `part`): they won't be resent. Returns
+  `request`, `station`, `dropped`. Refused when nothing is left to drop.
 
 ### Keymaster
 
