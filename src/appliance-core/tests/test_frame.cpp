@@ -1,7 +1,6 @@
 #include "../src/frame.h"
 #include "../src/json.h"
 #include "check.h"
-#include "services_fixture.h"
 
 #include <map>
 
@@ -94,7 +93,7 @@ int main() {
     // JSON request parsing.
     {
         std::map<std::string, std::string> r;
-        CHECK(parse_flat_object(R"({"cmd":"send","service":"mars","to":"B","body":"LINE 1\nSAID \"HI\" é","limit":5,"x":true})", r));
+        CHECK(parse_flat_object(R"({"cmd":"send","to":"B","body":"LINE 1\nSAID \"HI\" é","limit":5,"x":true})", r));
         CHECK(r["cmd"] == "send");
         CHECK(r["body"] == "LINE 1\nSAID \"HI\" \xc3\xa9");
         CHECK(r["limit"] == "5");

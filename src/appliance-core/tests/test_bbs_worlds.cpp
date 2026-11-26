@@ -12,6 +12,7 @@
 #include "../src/ops.h"
 #include "../src/station_view.h"
 #include "check.h"
+#include "services_fixture.h"
 
 #include <sqlite3.h>
 
@@ -142,12 +143,18 @@ int main() {
     CoreConfig ca{"AAM499", (dir / "a.db").string(), 3, 1, true};
     ca.ack_timeout_s = 1;
     ca.ack_retries = 0;
+    ca.rx_service = "mars";  // a loopback link: the network it belongs to
     Core a(ca, std::move(ma));
+    a.set_services(test_services());
     Core b(CoreConfig{"AAR9AA", (dir / "b.db").string(), 3, 1, true}, std::move(mb));
+    b.set_services(test_services());
     Core c(CoreConfig{"AAR7ZZ", (dir / "c.db").string(), 3, 1, true}, std::move(mc));
+    c.set_services(test_services());
     // K7AMA: a station the book marks amateur. AAR3HM: not on the air yet.
     Core k(CoreConfig{"K7AMA", (dir / "k.db").string(), 3, 1, true}, std::move(mk));
+    k.set_services(test_services());
     Core d(CoreConfig{"AAR3HM", (dir / "d.db").string(), 3, 1, true}, std::move(md));
+    d.set_services(test_services());
     auto ops = std::make_shared<Ops>("AAM499", (dir / "a-ops.db").string());
     a.set_ops(ops);
     a.start();
@@ -171,7 +178,7 @@ int main() {
     };
     CHECK(ok(call(a, {{"cmd", "bbs_set"}, {"machine_mode", "true"}, {"routing", "true"}, {"accept", "all"},
                       {"ack", "auto"}, {"ack_delay_ms", "0"}, {"auto_per_hour", "120"}, {"commands_ct_only", "false"}})));
-    CHECK(ok(call(a, {{"cmd", "route_set"}, {"match", "UHW"}, {"route", "ALE WEST"}, {"ale", "AAR9AA"}})));
+    CHECK(ok(call(a, {{"cmd", "route_set"}, {"service", "mars"}, {"match", "UHW"}, {"route", "ALE WEST"}, {"ale", "AAR9AA"}})));
 
     // ---- set-up: a QSL can't be pointed at the amateur world ----------------
     {
@@ -182,7 +189,7 @@ int main() {
     }
 
     // ---- traffic from an amateur station: no QSL, no route, never held ------
-    CHECK(!k.submit("AAM499", 'R', traffic("UHWTST", "K7AMA", 1, "FROM THE AMATEUR SIDE"), &e).empty());
+    CHECK(!k.submit("AAM499", 'R', traffic("UHWTST", "K7AMA", 1, "FROM THE AMATEUR SIDE"), &e, SendOpts::in("mars")).empty());
     CHECK(wait_for([&] { return got(a, "FROM THE AMATEUR SIDE"); }));
     const std::string ham_id = in_id(a, "FROM THE AMATEUR SIDE");
     CHECK(pump_until([&] { return logged(a, "BBS: " + ham_id + " not answered or routed"); }));
@@ -196,7 +203,7 @@ int main() {
     }
 
     // ---- a machine command from an amateur station: no answer ---------------
-    CHECK(!k.submit("AAM499", 'R', chat("AAM499-CM", "K7AMA", "VER"), &e).empty());
+    CHECK(!k.submit("AAM499", 'R', chat("AAM499-CM", "K7AMA", "VER"), &e, SendOpts::in("mars")).empty());
     CHECK(pump_until([&] {
         int n = 0;
         for (auto& ev : a.events(0, 5000))
@@ -206,7 +213,7 @@ int main() {
     CHECK(out_to(a, "K7AMA").empty());
 
     // ---- an item whose world isn't mars: not answered or routed -------------
-    CHECK(!c.submit("AAM499", 'R', traffic("UHWAAA", "AAR7ZZ", 2, "WORLD CHANGED UNDERFOOT"), &e).empty());
+    CHECK(!c.submit("AAM499", 'R', traffic("UHWAAA", "AAR7ZZ", 2, "WORLD CHANGED UNDERFOOT"), &e, SendOpts::in("mars")).empty());
     CHECK(wait_for([&] { return got(a, "WORLD CHANGED UNDERFOOT"); }));
     const std::string flip_id = in_id(a, "WORLD CHANGED UNDERFOOT");
     {
@@ -221,8 +228,8 @@ int main() {
     CHECK(out_to(a, "AAR9AA").empty() && out_to(a, "AAR7ZZ").empty());
 
     // ---- a route that comes due after its sender turned out amateur ---------
-    CHECK(ok(call(a, {{"cmd", "route_set"}, {"match", "UHS"}, {"route", "ALE SOUTH"}, {"ale", "AAR9AA"}, {"sched", "2359Z"}})));
-    CHECK(!c.submit("AAM499", 'R', traffic("UHSBBB", "AAR7ZZ", 3, "FOR THE SOUTH LATER"), &e).empty());
+    CHECK(ok(call(a, {{"cmd", "route_set"}, {"service", "mars"}, {"match", "UHS"}, {"route", "ALE SOUTH"}, {"ale", "AAR9AA"}, {"sched", "2359Z"}})));
+    CHECK(!c.submit("AAM499", 'R', traffic("UHSBBB", "AAR7ZZ", 3, "FOR THE SOUTH LATER"), &e, SendOpts::in("mars")).empty());
     CHECK(wait_for([&] { return got(a, "FOR THE SOUTH LATER"); }));
     const std::string later_id = in_id(a, "FOR THE SOUTH LATER");
     CHECK(pump_until([&] { return str(routed_row(a, later_id), "state") == "due"; }));
@@ -234,7 +241,7 @@ int main() {
     CHECK(out_to(a, "AAR9AA").empty());
 
     // ---- unacked traffic, its station later known amateur: never sent again --
-    const std::string un = a.submit("AAR3HM", 'R', "WAITING FOR YOU", &e);
+    const std::string un = a.submit("AAR3HM", 'R', "WAITING FOR YOU", &e, SendOpts::in("mars"));
     CHECK(!un.empty());
     CHECK(wait_for([&] {
         auto m = a.get(un);
@@ -242,7 +249,7 @@ int main() {
     }));
     CHECK(ok(call(a, {{"cmd", "book_put"}, {"name", "THREE HM"}, {"call", "AAR3HM"}, {"world", "amateur"}})));
     d.start();
-    CHECK(!d.submit("AAM499", 'R', "HEARD NOW", &e).empty());
+    CHECK(!d.submit("AAM499", 'R', "HEARD NOW", &e, SendOpts::in("mars")).empty());
     CHECK(wait_for([&] {
         auto m = a.get(un);
         return m && m->state == "failed";
@@ -255,7 +262,19 @@ int main() {
 
     // ---- MARS traffic still routes ------------------------------------------
     CHECK(ok(call(a, {{"cmd", "book_put"}, {"name", "SEVEN ZZ"}, {"call", "AAR7ZZ"}, {"world", "mars"}})));
-    CHECK(!c.submit("AAM499", 'R', traffic("UHWCCC", "AAR7ZZ", 4, "STILL GOES WEST"), &e).empty());
+
+    // ---- a rule of another service is stored, and routing stays MARS only ---
+    // until stage 5 (greybeard-ale #18): it never carries traffic yet.
+    CHECK(ok(call(a, {{"cmd", "route_set"}, {"service", "amateur"}, {"match", "UHA"}, {"route", "HAM GATEWAY"},
+                      {"ale", "TEST-HAMGW"}})));
+    CHECK(!c.submit("AAM499", 'R', traffic("UHAQQQ", "AAR7ZZ", 5, "NOT TO THE HAM RULE"), &e, SendOpts::in("mars")).empty());
+    CHECK(wait_for([&] { return got(a, "NOT TO THE HAM RULE"); }));
+    const std::string ham_rule_id = in_id(a, "NOT TO THE HAM RULE");
+    CHECK(pump_until([&] { return str(routed_row(a, ham_rule_id), "state") == "refused"; }));
+    CHECK(str(routed_row(a, ham_rule_id), "why").find("until stage 5") != std::string::npos);
+    CHECK(out_to(a, "TEST-HAMGW").empty());
+
+    CHECK(!c.submit("AAM499", 'R', traffic("UHWCCC", "AAR7ZZ", 4, "STILL GOES WEST"), &e, SendOpts::in("mars")).empty());
     CHECK(pump_until([&] { return got(b, "STILL GOES WEST"); }));
 
     a.stop();
