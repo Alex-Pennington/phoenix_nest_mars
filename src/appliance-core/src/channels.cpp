@@ -44,6 +44,17 @@ bool valid_designator(const std::string& s) {
     return letter && !compose::looks_like_frequency(s);
 }
 
+bool valid_channel_label(const std::string& s) {
+    if (s.empty() || s.size() > 16) return false;
+    bool letter = false;
+    for (char c : s) {
+        if (std::isalpha(static_cast<unsigned char>(c))) letter = true;
+        else if (!std::isdigit(static_cast<unsigned char>(c)) && c != '-' && c != '/' && c != '.' && c != '_')
+            return false;
+    }
+    return letter && !compose::looks_like_frequency(s);
+}
+
 int64_t parse_frequency(const std::string& raw, const std::string& unit_hint) {
     std::string s = up(raw), num, unit;
     for (char c : s) {
@@ -90,6 +101,9 @@ bool ChannelPlan::load(std::string* error) {
         // Antenna ports came later: a record without them is 1 and 1.
         c.ant_rx = p.size() > 5 && p[5] == "2" ? 2 : 1;
         c.ant_tx = p.size() > 6 && p[6] == "2" ? 2 : 1;
+        // The world and HFLink label came later still: mars and none.
+        c.world = p.size() > 7 && p[7] == "amateur" ? "amateur" : "mars";
+        c.label = p.size() > 8 && valid_channel_label(p[8]) ? p[8] : "";
         if (valid_designator(c.name) && c.hz > 0) ch_.push_back(c);
     }
     return true;
@@ -105,7 +119,8 @@ bool ChannelPlan::save_locked(std::string* error) {
     std::string out = std::string(kHead) + "\n";
     for (auto& c : ch_)
         out += c.name + "|" + std::to_string(c.hz) + "|" + c.mode + "|" + c.use + "|" + c.source + "|" +
-               std::to_string(c.ant_rx == 2 ? 2 : 1) + "|" + std::to_string(c.ant_tx == 2 ? 2 : 1) + "\n";
+               std::to_string(c.ant_rx == 2 ? 2 : 1) + "|" + std::to_string(c.ant_tx == 2 ? 2 : 1) + "|" +
+               (c.world == "amateur" ? "amateur" : "mars") + "|" + c.label + "\n";
     bool ok = ::write(fd, out.data(), out.size()) == static_cast<ssize_t>(out.size()) && ::fsync(fd) == 0;
     ::fchmod(fd, 0600);
     ::close(fd);
@@ -137,13 +152,28 @@ static bool check(Channel& c, std::string* error) {
         if (error) *error = "channel " + c.name + ": the tuner antenna is 1 or 2";
         return false;
     }
+    for (auto& ch : c.world) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+    if (!c.world.empty() && c.world != "mars" && c.world != "amateur") {
+        if (error) *error = "channel " + c.name + ": world is mars or amateur";
+        return false;
+    }
+    c.label = clean(c.label);
+    if (!c.label.empty() && !valid_channel_label(c.label)) {
+        if (error) *error = "channel " + c.name + ": the HFLink label is 1 to 16 letters, digits or - / . _, never a frequency";
+        return false;
+    }
     return true;
 }
 
 // An antenna port not given (0) keeps what the plan held, or 1.
+// So are a world not given ("": what the plan held, or mars) and a label
+// not given.
 static void keep_antennas(Channel& c, const Channel* old) {
     if (c.ant_rx == 0) c.ant_rx = old ? old->ant_rx : 1;
     if (c.ant_tx == 0) c.ant_tx = old ? old->ant_tx : 1;
+    if (c.world.empty()) c.world = old ? old->world : "mars";
+    if (!c.label_given) c.label = old ? old->label : "";
+    c.label_given = false;
 }
 
 bool ChannelPlan::put(const Channel& in, std::string* error) {
@@ -205,8 +235,19 @@ std::optional<Channel> ChannelPlan::get(const std::string& name) {
 std::string ChannelPlan::designator_for(int64_t hz) {
     std::lock_guard<std::mutex> g(mu_);
     for (auto& c : ch_)
-        if (std::llabs(c.hz - hz) <= 50) return c.name;
+        if (c.world != "amateur" && std::llabs(c.hz - hz) <= 50) return c.name;
     return "";
+}
+
+std::string ChannelPlan::display_name_for(int64_t hz) {
+    std::lock_guard<std::mutex> g(mu_);
+    std::string amateur;
+    for (auto& c : ch_) {
+        if (std::llabs(c.hz - hz) > 50) continue;
+        if (c.world != "amateur") return c.name;
+        if (amateur.empty()) amateur = c.label.empty() ? c.name : c.label;
+    }
+    return amateur;
 }
 
 size_t ChannelPlan::size() {

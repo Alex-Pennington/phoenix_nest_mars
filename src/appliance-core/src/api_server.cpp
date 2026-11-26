@@ -28,6 +28,7 @@
 #include "net.h"
 #include "training.h"
 #include "station_view.h"
+#include "records.h"
 #include "settings.h"
 
 #include <sys/socket.h>
@@ -2715,10 +2716,27 @@ std::string ApiServer::handle_call(Core& core, const std::string& line) {
         static const std::set<std::string> reads = {
             "word_feed",      "heard_stations", "scanner_status", "settings_list", "settings_set", "settings_reset",
             "keying_settings", "identity_get",  "identity_set",   "book_put",      "book_get",     "book_list",
-            "station_health", "captures_list",  "status"};
+            "station_health", "captures_list",  "status",
+            // A channel's world is set up on CHANNELS (station design v1.9).
+            "channel_put", "channels_list", "channels_get_full",
+            // A form's action comes back through here and is checked itself.
+            "form_get", "form_check", "form_submit"};
         if (!wv.empty() && wv != "mars" && !reads.count(cmd))
             return error_reply("refused: world " + wv +
                                ": the MARS message center never sends, copies or forwards into the amateur world");
+    }
+
+    // Ask 26: a call that changes a kind of record the host locked is
+    // refused here, before any handler (form_submit's action included).
+    {
+        std::string kind, why = records::refusal(cmd, &kind);
+        if (!why.empty()) {
+            core.note("refused " + cmd + ": " + kind + " is locked in appliance.conf");
+            JsonWriter w;
+            w.begin_object().field("ok", false).field("error", why).field("refused", "locked").field("record", kind)
+                .end_object();
+            return w.str();
+        }
     }
 
     // Training: turned on and off here, on the real station.

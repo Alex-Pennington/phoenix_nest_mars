@@ -7,8 +7,10 @@ HELP ? guide
 SEE GW-SCHEDULE RADIO TUNER
 BEGIN_TEXT
 The channels this station uses, each by its plan label (a designator).
-Every screen names a channel by its label; frequencies are never shown
-here and never leave the box.
+This is the one screen that shows a channel's frequency, and where it is
+changed; every other screen names a channel by its label, and frequencies
+never leave the box. Each channel is of the MARS world or the amateur
+world. Nets, schedules and sends use MARS channels only.
 
 A channel's label is what a net, a schedule and the tuner go by. When the
 radio is set to a channel through the tuner, nets that name that channel

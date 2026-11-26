@@ -1,6 +1,8 @@
 // The station's settings: see settings.h.
 #include "settings.h"
 
+#include "records.h"
+
 #include "config.h"
 #include "first_start.h"
 #include "frame.h"
@@ -147,10 +149,19 @@ std::vector<Row> make_table() {
                     "Parts sent again from the resend queue, at most this many an hour; 0 no cap."));
     t.push_back(pick("raw-rx-log", "Traffic", "Keep every burst heard", {"on", "off"}, "on",
                      "Keep each burst as heard, one file a day."));
+    // ---- Book (ask 30) ----
+    {
+        Row r = op("book-auto-add-heard", "Book", "Add calls heard to the book", "bool", "no",
+                   "A MARS station the core hears and the book doesn't know is added to it, as a station of the "
+                   "MARS world. Off unless you turn it on.");
+        r.applies = "now";
+        t.push_back(r);
+    }
     // ---- Host plumbing: locked ----
     for (auto k : {"db-dir", "outbox", "captures", "captures-fallback", "gale-dir", "words", "scan-log", "wwv-dir",
                    "gps-status", "health-file", "engine-status", "lqa-db", "favourites", "own-address", "scan-plan",
-                   "radio-file", "store-root", "amateur-own-address", "amateur-words", "keying-file", "web-root"})
+                   "radio-file", "store-root", "amateur-own-address", "amateur-words", "keying-file", "web-root",
+                   "rx-schedule-dir"})
         t.push_back(locked(k, "Paths", k));
     for (auto k : {"api-port", "web-port", "s5066-port", "appa-port"}) t.push_back(locked(k, "Ports", k, "int"));
     for (auto k : {"link", "link-socket", "link-poll-ms", "tuner-socket", "gale-key-socket", "gale-key-timeout-ms",
@@ -158,6 +169,8 @@ std::vector<Row> make_table() {
                    "s5066-confirm", "s5066-broadcast", "loopback-pair", "loopback-bps"})
         t.push_back(locked(k, "Link", k));
     for (auto k : {"tx-cmd", "tx-arg", "advisor", "advisor-arg"}) t.push_back(locked(k, "Programs", k));
+    // Ask 26: the kinds of record the host locked (records.h).
+    t.push_back(locked("lock", "Records", "Locked records", "list"));
     return t;
 }
 
@@ -320,7 +333,9 @@ std::string settings_list(std::map<std::string, std::string>& req) {
         if (!group.empty() && lower(r.group) != lower(group)) continue;
         write_row(w, r);
     }
-    w.end_array().field("file", "operator-settings").end_object();
+    w.end_array().field("file", "operator-settings");
+    records::write(w);  // ask 26: each kind of record and its class
+    w.end_object();
     return w.str();
 }
 
@@ -512,7 +527,7 @@ bool check(const Row& r, const std::string& value, std::string* norm, std::strin
 }
 
 std::map<std::string, std::string> args_map(const std::vector<std::string>& args) {
-    static const std::set<std::string> flags = {"no-acks", "link-gate"}, lists = {"tx-arg", "advisor-arg"};
+    static const std::set<std::string> flags = {"no-acks", "link-gate"}, lists = {"tx-arg", "advisor-arg", "lock"};
     const auto& keys = config_keys();
     std::map<std::string, std::string> out;
     for (size_t i = 0; i < args.size(); ++i) {

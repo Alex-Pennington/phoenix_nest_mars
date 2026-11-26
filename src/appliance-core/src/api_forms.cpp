@@ -184,11 +184,15 @@ std::map<std::string, std::string> prefill(Core& core, const forms::Library& lib
                     v[f] = a && a->type == JsonValue::Type::Number && a->n == 2 ? "2" : "1";
                 }
                 v["frequency?"] = "held";  // held here; never shown
+                v["world"] = s_of(c, "world") == "amateur" ? "AMATEUR" : "MARS";
+                v["label"] = s_of(c, "label");
             }
     } else if (kind == "schedule") {
         for (auto& sc : arr(held(core, flat({{"cmd", "sched_list"}})), "schedules"))
             if (s_of(sc, "name") == k || s_of(sc, "name") == key) {
-                for (auto f : {"name", "days", "time", "ncs", "note", "channel"}) v[f] = s_of(sc, f);
+                for (auto f : {"name", "days", "time", "ncs", "note", "channel", "plan", "mode"}) v[f] = s_of(sc, f);
+                const JsonValue* ix = sc.get("index");
+                if (ix && ix->type == JsonValue::Type::Number) v["index"] = std::to_string(static_cast<long long>(ix->n));
                 const JsonValue* m = sc.get("minutes");
                 if (m && m->type == JsonValue::Type::Number) v["minutes"] = std::to_string(static_cast<long long>(m->n));
                 v["roster"] = joined(sc, "roster");

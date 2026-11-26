@@ -1295,7 +1295,8 @@ std::string ChannelNames::name(double khz) const { return name_hz(std::llround(k
 
 std::string ChannelNames::name_hz(int64_t hz) const {
     if (Ops* ops = core_.ops()) {
-        std::string d = ops->channels().designator_for(hz);
+        // A MARS channel by its designator, an amateur one by its HFLink label.
+        std::string d = ops->channels().display_name_for(hz);
         if (!d.empty()) return d;
     }
     for (auto& [h, l] : labels_)

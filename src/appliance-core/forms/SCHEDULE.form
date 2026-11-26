@@ -14,6 +14,9 @@ FIELD channel Channel(@channels)
 FIELD ncs Net control(X) upper max=16 check=station
 FIELD roster Roster(X) upper
 FIELD note Note(X) max=60
+FIELD plan gale-rx plan(X) max=32
+FIELD index Plan channel(###) check=number
+FIELD mode Receive mode(USB,LSB,CW,AM)
 NEXT SCHEDULE BUNDLE_SEND
 BEGIN_HELP
 Days:
@@ -26,4 +29,16 @@ END
 
 Roster:
 The stations or collectives expected, separated by commas.
+END
+
+gale-rx plan:
+The receiver's scan plan for the net, by its label in gale-rx's net_plans folder (net03). With a plan, the net goes in gale-rx's schedule file. Blank keeps the plan the schedule has.
+END
+
+Plan channel:
+Which of the plan's channels gale-rx holds, counted from 0. Blank keeps the one set; with none, gale-rx takes the plan channel named by Channel, else the plan's first.
+END
+
+Receive mode:
+USB, LSB, CW or AM, set with a plan channel. Blank is USB.
 END

@@ -114,7 +114,10 @@ void write_sched(JsonWriter& w, const NetSchedule& s, const std::optional<NetSit
         .field("minutes", s.minutes);
     strings(w, "roster", s.roster);
     w.field("exercise", s.exercise).field("ncs", s.ncs).field("note", s.note).field("auto_open", s.auto_open);
-    w.field("channel", s.channel);
+    w.field("channel", s.channel).field("plan", s.plan);
+    if (s.rx_index >= 0) w.field("index", s.rx_index);
+    else w.field_null("index");
+    w.field("mode", s.rx_mode);
     if (st)
         w.field("state", st->state)
             .field("start", static_cast<long long>(st->start))
@@ -152,7 +155,7 @@ std::optional<std::string> handle_ops(Core& core, const std::string& cmd, std::m
                                   "net_list", "duty_on", "duty_off", "duty_status", "log_add", "station_log",
                                   "report_monthly", "sched_put", "sched_remove", "sched_list", "sched_next",
                                   "sched_open", "net_callup", "mars_import", "channels_list", "channel_remove",
-                                  "channel_put"};
+                                  "channel_put", "channels_get_full"};
     bool ours = false;
     for (auto c : kCmds)
         if (cmd == c) ours = true;
@@ -242,20 +245,32 @@ std::optional<std::string> handle_ops(Core& core, const std::string& cmd, std::m
                   std::to_string(total) + " entries");
         return w.str();
     }
-    if (cmd == "channels_list") {
-        // Designators only. Frequencies stay in the plan's file.
+    if (cmd == "channels_list" || cmd == "channels_get_full") {
+        // channels_list: designators only; frequencies stay in the plan's
+        // file. channels_get_full is the one reply that carries a frequency
+        // (Alex's ruling 4 of 2026-11-26, asks 27 and 29): it is for the
+        // CHANNELS screen only, and every read of it is logged, never with a
+        // frequency.
+        const bool full = cmd == "channels_get_full";
+        auto list = ops->channels().list();
         JsonWriter w;
         w.begin_object().field("ok", true).begin_array("channels");
-        for (auto& c : ops->channels().list())
+        for (auto& c : list) {
             w.begin_object()
                 .field("name", c.name)
-                .field("mode", c.mode)
+                .field("world", c.world == "amateur" ? "amateur" : "mars")
+                .field("label", c.label);
+            if (full) w.field("frequency_hz", static_cast<long long>(c.hz));
+            w.field("mode", c.mode)
                 .field("use", c.use)
                 .field("source", c.source)
                 .field("ant_rx", c.ant_rx)
                 .field("ant_tx", c.ant_tx)
                 .end_object();
+        }
         w.end_array().end_object();
+        if (full) core.note("channels_get_full: the channel plan read with its frequencies (" +
+                            std::to_string(list.size()) + " channels)");
         return w.str();
     }
     if (cmd == "channel_put") {
@@ -270,9 +285,31 @@ std::optional<std::string> handle_ops(Core& core, const std::string& cmd, std::m
         for (auto& ch : unit) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
         if (!unit.empty() && unit != "khz" && unit != "mhz" && unit != "hz")
             return err_reply("unit: khz, mhz or hz (or leave it out: 7345.5 reads as kHz)");
-        if (req["frequency"].empty()) return err_reply("give the channel's frequency (frequency=7345.5, in kHz)");
-        c.hz = parse_frequency(req["frequency"], unit);
-        if (c.hz <= 0) return err_reply("the frequency can't be read: give it in kHz (7345.5), MHz or Hz");
+        auto old = ops->channels().get(c.name);
+        // Left out, a channel keeps its frequency, so a change to its port,
+        // mode, world or label needs no retyping. Sent empty it is refused.
+        if (!req.count("frequency") && old) {
+            c.hz = old->hz;
+        } else {
+            if (req["frequency"].empty()) return err_reply("give the channel's frequency (frequency=7345.5, in kHz)");
+            c.hz = parse_frequency(req["frequency"], unit);
+            if (c.hz <= 0) return err_reply("the frequency can't be read: give it in kHz (7345.5), MHz or Hz");
+        }
+        // Station design v1.9: the channel's world and HFLink label. Left
+        // out, each keeps what the channel had (mars and none for a new one);
+        // an empty label clears it.
+        if (req.count("world")) {
+            c.world = req["world"];
+            for (auto& ch : c.world) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+            if (c.world != "mars" && c.world != "amateur") return err_reply("world: mars or amateur");
+        }
+        if (req.count("label")) {
+            c.label = req["label"];
+            for (auto& ch : c.label) ch = static_cast<char>(std::toupper(static_cast<unsigned char>(ch)));
+            if (!c.label.empty() && !valid_channel_label(c.label))
+                return err_reply("label: the HFLink label, 1 to 16 letters, digits or - / . _, never a frequency");
+            c.label_given = true;
+        }
         c.mode = req["mode"];
         for (auto& ch : c.mode) ch = static_cast<char>(std::toupper(static_cast<unsigned char>(ch)));
         c.use = req["use"];
@@ -288,15 +325,17 @@ std::optional<std::string> handle_ops(Core& core, const std::string& cmd, std::m
             else if (v == "2") *port = 2;
             else return err_reply(std::string(key) + ": the tuner port, 1 or 2");
         }
-        auto old = ops->channels().get(c.name);
         if (old) {
             if (c.mode.empty()) c.mode = old->mode;
             if (!has_use) c.use = old->use;
         }
         if (c.ant_rx == 0) c.ant_rx = old ? old->ant_rx : 1;
         if (c.ant_tx == 0) c.ant_tx = old ? old->ant_tx : 1;
+        if (c.world.empty()) c.world = old ? old->world : "mars";
+        if (!c.label_given) c.label = old ? old->label : "";
+        c.label_given = true;
         bool same = old && old->hz == c.hz && old->mode == c.mode && old->use == c.use && old->ant_rx == c.ant_rx &&
-                    old->ant_tx == c.ant_tx;
+                    old->ant_tx == c.ant_tx && old->world == c.world && old->label == c.label;
         if (!same && !ops->channels().put(c, &err)) {
             c.hz = 0;
             return err_reply(err);
@@ -315,6 +354,8 @@ std::optional<std::string> handle_ops(Core& core, const std::string& cmd, std::m
             .field("use", now ? now->use : c.use)
             .field("ant_rx", now ? now->ant_rx : c.ant_rx)
             .field("ant_tx", now ? now->ant_tx : c.ant_tx)
+            .field("world", now ? now->world : c.world)
+            .field("label", now ? now->label : c.label)
             .end_object();
         return w.str();
     }
@@ -339,7 +380,10 @@ std::optional<std::string> handle_ops(Core& core, const std::string& cmd, std::m
 
     if (cmd == "net_open") {
         const std::string ch = book_key(req["channel"]);
-        if (!ch.empty() && !ops->channels().get(ch)) return err_reply("no channel " + ch + " in the channel plan");
+        auto plan_ch = ch.empty() ? std::nullopt : ops->channels().get(ch);
+        if (!ch.empty() && !plan_ch) return err_reply("no channel " + ch + " in the channel plan");
+        if (plan_ch && plan_ch->world == "amateur")
+            return err_reply("channel: " + ch + " is an amateur channel; a MARS net meets on a MARS channel (ask 40)");
         std::string id = ops->net_open(req["name"], list_of(req["roster"], ','), truthy(req["exercise"]), req["ncs"],
                                        req["note"], &err, ch);
         if (id.empty()) return err_reply(err);
@@ -486,16 +530,31 @@ std::optional<std::string> handle_ops(Core& core, const std::string& cmd, std::m
         sc.ncs = req["ncs"];
         sc.note = req["note"];
         sc.auto_open = truthy(req["auto_open"]);
+        // gale-rx's fields (ask 28). Each left out keeps what the schedule
+        // had; sent empty, it is cleared.
+        auto had = ops->sched_get(sc.name);
+        sc.plan = req.count("plan") ? req["plan"] : had ? had->plan : "";
+        sc.rx_mode = req.count("mode") ? req["mode"] : had ? had->rx_mode : "";
+        sc.rx_index = had ? had->rx_index : -1;
+        if (req.count("index")) {
+            long long ix = -1;
+            if (!req["index"].empty() && !to_int(req["index"], &ix)) return err_reply("index: a number, the plan's channel from 0");
+            sc.rx_index = static_cast<int>(ix < -1 || ix > 999 ? -2 : ix);
+        }
         if (!ops->sched_put(sc, &err)) return err_reply(err);
         auto saved = ops->sched_get(sc.name);
         JsonWriter w;
         w.begin_object().field("ok", true).begin_array("schedules");
         if (saved) write_sched(w, *saved, ops->sched_sitting(saved->name));
-        w.end_array().end_object();
+        w.end_array().field("rx_file", ops->write_rx_schedule(true)).end_object();
         return w.str();
     }
-    if (cmd == "sched_remove")
-        return ops->sched_remove(req["name"]) ? ok_reply() : err_reply("no schedule by that name");
+    if (cmd == "sched_remove") {
+        if (!ops->sched_remove(req["name"])) return err_reply("no schedule by that name");
+        JsonWriter w;
+        w.begin_object().field("ok", true).field("rx_file", ops->write_rx_schedule(true)).end_object();
+        return w.str();
+    }
     if (cmd == "sched_list") {
         JsonWriter w;
         w.begin_object().field("ok", true).begin_array("schedules");
@@ -546,6 +605,8 @@ std::optional<std::string> handle_ops(Core& core, const std::string& cmd, std::m
         m.station = core.station();
         m.prec = prec[0];
         m.channel = book_key(req["channel"]);
+        if (auto pc = m.channel.empty() ? std::nullopt : ops->channels().get(m.channel); pc && pc->world == "amateur")
+            return err_reply("channel: " + m.channel + " is an amateur channel; a MARS call-up goes on a MARS channel (ask 40)");
         m.unclas_line = truthy(req["unclas"]);
         // Call the stations by name when they fit on the call line, else the NET.
         std::string line;

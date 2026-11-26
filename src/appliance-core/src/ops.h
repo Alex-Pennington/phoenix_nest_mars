@@ -117,7 +117,28 @@ struct NetSchedule {
     int64_t last_start = 0; // the occurrence last opened
     std::string last_net;   // the net it opened as
     std::string channel;    // the channel's designator, never a frequency
+    // What gale-rx needs (ask 28; docs/formats.md, "The gale-rx schedule
+    // file"). plan: the label of a scan plan in gale-rx's net_plans folder
+    // (net03 for net_plans/net03.plan), "" for none: a schedule with no plan
+    // isn't in gale-rx's file. rx_index: the plan's channel to hold, counted
+    // from 0 in file order, -1 for gale-rx's own rule (the plan channel named
+    // by `channel`, else its first). rx_mode: USB, LSB, CW or AM with an
+    // index, "" for USB.
+    std::string plan;
+    int rx_index = -1;
+    std::string rx_mode;
 };
+
+// The two files gale-rx reads, from the schedules, for the week from `now`
+// (UTC): net_schedule.txt in tools/checkerboard.py's "DAY HHMM PLAN MODE  #
+// ... + NETS" form, and slot-channels.txt with each slot's channel index and
+// mode, and "park" where a sitting ends. A schedule with no plan, or one
+// starting at the same minute as another, is left out with why in *skipped.
+struct RxSchedule {
+    std::string net_schedule, slot_channels;
+    std::vector<std::string> skipped;
+};
+RxSchedule rx_schedule(const std::vector<NetSchedule>& scheds, int64_t now);
 
 // One sitting of a scheduled net.
 struct NetSitting {
@@ -215,6 +236,13 @@ public:
     // themselves, and returns what to tell the operator (each once): a net
     // that starts in 15 minutes, one that is due and not opened.
     std::vector<std::string> sched_tick();
+    // Where the core writes gale-rx's schedule files (rx_schedule above);
+    // "" (the default) writes none. Set once, before use.
+    void set_rx_schedule_dir(const std::string& dir);
+    // Writes them when they differ from what was last written (always with
+    // force). "written", "unchanged", "off" (no folder set) or
+    // "not written: WHY".
+    std::string write_rx_schedule(bool force = false);
 
     // Operator duty and turnover.
     bool duty_on(const std::string& op, const std::string& note, std::string* error);
@@ -235,6 +263,7 @@ private:
     std::optional<Net> load_net(const std::string& id);
     std::optional<NetSitting> sitting_of(const NetSchedule& s, int64_t now);
     std::map<std::string, int64_t> told_;  // schedule name + what was said -> sitting start
+    std::string rx_dir_, rx_last_, rx_failed_;
     std::string canonical(const std::string& station);
     std::string station_;
     std::function<int64_t()> clock_;

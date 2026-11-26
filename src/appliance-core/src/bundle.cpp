@@ -189,6 +189,8 @@ Bundle collect(Ops& ops, const std::vector<std::pair<std::string, std::string>>&
         b.book.push_back(o);
     }
     for (auto& c : ops.channels().list()) {
+        // A bundle is MARS traffic: an amateur channel never goes in it (asks 37, 40).
+        if (c.world == "amateur") continue;
         if (!name_ok("channel", c.name)) continue;
         Channel o;
         o.name = c.name;
@@ -481,7 +483,8 @@ FreqApplied apply_freqs(const Bundle& b, const std::vector<std::pair<std::string
                 ++a.same;
                 continue;
             }
-            if (!may_change) {
+            // A MARS bundle never changes a channel this station keeps for the amateur world.
+            if (!may_change || have->world == "amateur") {
                 ++a.kept;
                 continue;
             }
@@ -552,6 +555,7 @@ Applied apply(const Bundle& b, Ops& ops, const std::string& source) {
             a.need_frequency.push_back(c.name);
             continue;
         }
+        if (have->world == "amateur") continue;  // kept for the amateur world: a MARS bundle leaves it
         Channel n = *have;
         if (!c.mode.empty()) n.mode = c.mode;
         if (!c.use.empty()) n.use = c.use;

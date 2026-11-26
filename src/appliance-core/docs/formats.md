@@ -111,7 +111,8 @@ One row per channel. It fills the station's channel plan.
 **Frequencies are controlled.** They go into one file beside the database
 (`NAME.channels`, readable only by the engine), and nowhere else. The import's
 reply, `channels_list`, the log, the book, schedules and every message name
-channels by designator only. Problems with a row are reported by row number
+channels by designator only. The one exception is `channels_get_full`, the
+read behind gale-web's CHANNELS screen (Alex's ruling 4 of 2026-11-26). Problems with a row are reported by row number
 and designator, never by frequency. The plan is there so the radio side can
 tune by designator; how greybeard-ale reads it is still to be agreed with
 them.
@@ -170,6 +171,12 @@ or more), anywhere in the first 20 rows.
   daily schedule named for the column, with the note `CHANNEL PLAN`.
 - A slot runs to the next slot's start, an hour by default.
 
+The plan's file is `PNA CHANNEL PLAN 1` and then one line a channel:
+`DESIGNATOR|HZ|MODE|USE|SOURCE|ANT_RX|ANT_TX|WORLD|LABEL`. `WORLD` is `mars`
+or `amateur` and `LABEL` the HFLink label (station design v1.9). A line
+written before the later fields reads as ports 1 and 1, `mars`, no label. A
+card imported again keeps each channel's ports, world and label.
+
 ## What comes back
 
 `mars_import` answers with one entry per sheet: `kind`, `header_row`, `rows`,
@@ -178,9 +185,51 @@ or more), anywhere in the first 20 rows.
 `frequencies_withheld`. `ok` is true when anything was imported. Every import
 is noted in the log by count only.
 
+## The gale-rx schedule file (written, ask 28)
+
+The core's net schedules are the station's one schedule. With
+`rx-schedule-dir DIR` set (appliance.conf), the core writes two files there,
+whole (a temp file renamed over each), mode 600, on every change: the files
+gale-rx reads (greybeard-ale docs/rx-scheduler.md). With none set, nothing is
+written.
+
+`DIR/net_schedule.txt`, in the form greybeard-ale's tools/checkerboard.py
+writes, a line a slot, in week order from Monday 0000Z:
+
+    # DAY HHMM(Zulu) PLAN MODE -- written by appliance-core from its net schedules (sched_put); a slot runs until the next
+    TUE 1900 net_plans/net03.plan net  # TUESDAY-NET + P1
+    TUE 2000 net_plans/net03.plan scan  # end of TUESDAY-NET
+
+`DIR/slot-channels.txt`, a line for each slot with a plan channel and for each
+sitting's end:
+
+    # DAY HHMM INDEX [MODE] or DAY HHMM park -- written by appliance-core from its net schedules (sched_put)
+    TUE 1900 1 LSB
+    TUE 2000 park
+
+- Only a schedule with a `plan` is written. Each of its days in the week from
+  today gives a `net` slot at its start: `DAY` is `MON` to `SUN`, `HHMM` UTC,
+  `PLAN` is `net_plans/PLAN.plan`. The comment carries the schedule's name
+  (letters and digits, anything else as `-`) and, after `+`, its channel's
+  designator when it names one: gale-rx's rule 2 then holds that plan
+  channel.
+- A schedule's `index` gives `DAY HHMM INDEX MODE` in slot-channels.txt
+  (`MODE` USB when not set): gale-rx's rule 1.
+- Each sitting ends `minutes` after its start in a `scan` slot of the same
+  plan, with `park` in slot-channels.txt, so gale-rx parks between nets. No
+  end is written where another sitting starts or is under way. A sitting may
+  run past midnight and round the week.
+- A week-of-month day (`1SAT`, `LSUN`) is in the file only in the week it
+  falls; the core writes the files again when the week moves on.
+- Two sittings starting at the same minute: the first by schedule name is
+  written, the other left out (gale-rx refuses two slots at one time).
+- No frequency is in either file: plans are named by label and channels by
+  index or designator.
+
 ## Tests
 
 `test_import` covers all four, and made-up copies of the MSC shapes above,
 with made-up stations. The frequencies in it
 are public time-signal frequencies, standing in for a channel plan. No MARS
-channel, member or key appears in this repository.
+channel, member or key appears in this repository. `test_records` covers the
+gale-rx schedule file and the plan file's world and label.
