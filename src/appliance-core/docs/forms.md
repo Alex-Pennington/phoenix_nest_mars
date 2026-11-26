@@ -141,7 +141,9 @@ one choice, with how many of its parts are in.
 not sent and the call keeps what is held), `default=value` (may hold spaces), `again=key` (must match another field, as a
 passphrase typed twice), `as=name` (sent under another name), `max=n`,
 `check=` one of station, stations, designator, frequency, hhmm, date,
-fingerprint, passphrase, number, path.
+fingerprint, passphrase, number, path. `form_get` shows `nosend`, `fill` and
+`as` on each field, and `form_check` lists the defaults it will fill in
+(`filled`), so a screen can show them before `form_submit`.
 
 ### Calls a form may run
 

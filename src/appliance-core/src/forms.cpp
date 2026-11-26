@@ -345,7 +345,10 @@ void write_field(JsonWriter& w, const Field& f, const std::map<std::string, std:
         .field("required", f.required)
         .field("upper", f.upper)
         .field("secret", f.secret)
-        .field("multi", f.multi);
+        .field("multi", f.multi)
+        .field("nosend", !f.send)
+        .field("fill", f.fill);
+    if (!f.as.empty()) w.field("as", f.as);
     if (!f.check.empty()) w.field("check", f.check);
     if (f.max) w.field("max", f.max);
     if (!f.again.empty()) w.field("again", f.again);
@@ -617,9 +620,11 @@ std::vector<Choice> choices_of(const Field& f, const Context& ctx) {
 }
 
 // Tidies the values the member gave and lists what's wrong. Problems never
-// repeat a value.
+// repeat a value. *filled, when given, gets the keys whose answer the core
+// filled with the default (left out, or left blank on a `fill` field).
 std::vector<std::pair<std::string, std::string>> check_values(const Template& t, const Context& ctx,
-                                                              std::map<std::string, std::string>& vals) {
+                                                              std::map<std::string, std::string>& vals,
+                                                              std::vector<std::string>* filled = nullptr) {
     std::vector<std::pair<std::string, std::string>> problems;
     for (auto& f : t.fields) {
         std::string v = vals.count(f.key) ? vals[f.key] : "";
@@ -629,7 +634,10 @@ std::vector<std::pair<std::string, std::string>> check_values(const Template& t,
             if (v == "YES") v = "Y";
             if (v == "NO") v = "N";
         }
-        if (v.empty() && !f.def.empty() && (!vals.count(f.key) || f.fill)) v = f.def;
+        if (v.empty() && !f.def.empty() && (!vals.count(f.key) || f.fill)) {
+            v = f.def;
+            if (filled) filled->push_back(f.key);
+        }
         vals[f.key] = v;
     }
     for (auto& f : t.fields) {
@@ -811,12 +819,18 @@ std::optional<std::string> handle(Library& lib_in, const Context& ctx, const std
     std::map<std::string, std::string> vals;
     for (auto& f : t.fields)
         if (req.count(f.key)) vals[f.key] = req[f.key];
-    auto problems = check_values(t, ctx, vals);
+    std::vector<std::string> filled;
+    auto problems = check_values(t, ctx, vals, &filled);
 
     if (cmd == "form_check") {
         JsonWriter w;
         w.begin_object().field("ok", true).field("form", t.id).field("ready", problems.empty());
         write_problems(w, problems);
+        // The defaults the core will put in for these answers, so a screen
+        // can show them before form_submit. (A secret field has no default.)
+        w.begin_array("filled");
+        for (auto& k : filled) w.begin_object().field("field", k).field("value", vals[k]).end_object();
+        w.end_array();
         w.end_object();
         return w.str();
     }

@@ -100,14 +100,26 @@ the top level of the request, beside `cmd` and `form`.
 - `form_get {form, <prefill key>}`: the form to draw. `title`, `summary`,
   `origin`, `prefilled` and `fields`, each with `key`, `label`, `kind`
   (`text`, `textblock`, `choice`, `yesno`, `time`, `pattern`), `mask`,
-  `suffix`, `required`, `upper`, `secret`, `multi`, `check`, `max`, `again`,
-  `source`, `default`, `choices` (each `value`, `label`), `help` and `value`.
+  `suffix`, `required`, `upper`, `secret`, `multi`, `nosend`, `fill`, `as`,
+  `check`, `max`, `again`, `source`, `default`, `choices` (each `value`,
+  `label`), `help` and `value`.
   A secret field never has a value; `has_value` says one is held. Also
   `fixed` (values the template sets, each `key`, `value`, to show the
-  member), `actions` and `next_forms`. With the prefill key given (`name=P1`
-  for CHANNEL), the fields are filled from what the station holds.
-- `form_check {form, fields...}`: `ready`, and `problems`, each `field` and
-  `problem` in plain words. Changes nothing. Call it as the member types.
+  member), `actions` (each `cmd`, and `when`, `key=VALUE`, when the call
+  depends on an answer) and `next_forms`. With the prefill key given
+  (`name=P1` for CHANNEL), the fields are filled from what the station holds.
+  How each answer reaches the call (docs/forms.md, the field words):
+  - `nosend`: true when the field is checked but never sent to the call.
+    A field with `again` (a passphrase typed twice) and the field an
+    `actions` entry's `when` names aren't sent either.
+  - `fill`: true when a blank answer takes the `default`. When false, a
+    field left out takes the `default`, but one sent blank isn't sent
+    and the call keeps what it holds.
+  - `as`: only when the template sets it: the call's parameter the answer is
+    sent under, instead of `key`.
+- `form_check {form, fields...}`: `ready`, `problems`, each `field` and
+  `problem` in plain words, and `filled`, each `field` whose answer the core
+  will fill with its default for these answers, and that `value`. Changes nothing. Call it as the member types.
 - `form_submit {form, fields...}`: checks, then runs the form's call. Returns
   `ok`, `form`, `action` (the call run), `error`, `problems` (nothing was
   run), `not_done` (stations a send missed), `next`, `next_forms` and

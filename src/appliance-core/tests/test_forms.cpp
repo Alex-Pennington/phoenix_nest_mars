@@ -296,6 +296,91 @@ static void language() {
 
 // ---------------------------------------------------------------- the drill
 
+// How each answer reaches the call, shown before form_submit runs it: the
+// field words nosend, fill and as= on form_get, and the defaults form_check
+// says it will fill in. form_submit then sends exactly that.
+static void fill_rules(const fs::path& dir) {
+    fs::create_directories(dir);
+    forms::Library lib(dir.string());
+    std::string result, got, err;
+    CHECK(lib.put("FORM FILLS\nTITLE Fill rules\nSUMMARY The field words a screen shows.\n"
+                  "ACTION book_put\n"
+                  "FIELD name Name(X) required upper\n"
+                  "FIELD kind Kind(STATION,COLLECTIVE) default=STATION\n"
+                  "FIELD port Port(1,2) default=1 fill\n"
+                  "FIELD sure Sure(Y,N) nosend\n"
+                  "FIELD label Label(X) upper as=note\n"
+                  "FIELD word Word(X) secret\n",
+                  "edited here", &result, &got, &err));
+    std::vector<std::string> sent;
+    forms::Context ctx;
+    ctx.run = [&](const std::string& line) {
+        sent.push_back(line);
+        return std::string(R"({"ok":true})");
+    };
+    auto run = [&](std::map<std::string, std::string> req) {
+        std::string cmd = req["cmd"];
+        req.erase("cmd");
+        return parsed(*forms::handle(lib, ctx, cmd, req));
+    };
+
+    // form_get: every field says whether it's sent, whether a blank takes the
+    // default, and the name it goes under when that isn't its key.
+    JsonValue r = run({{"cmd", "form_get"}, {"form", "FILLS"}});
+    CHECK(ok(r) && arr(r, "fields").size() == 6);
+    const JsonValue* name = field_of(r, "name");
+    const JsonValue* kind = field_of(r, "kind");
+    const JsonValue* port = field_of(r, "port");
+    const JsonValue* sure = field_of(r, "sure");
+    const JsonValue* label = field_of(r, "label");
+    const JsonValue* word = field_of(r, "word");
+    CHECK(name && kind && port && sure && label && word);
+    if (!(name && kind && port && sure && label && word)) return;
+    for (auto* f : {name, kind, port, sure, label, word}) {
+        CHECK(f->get("nosend") && f->get("nosend")->type == JsonValue::Type::Bool);
+        CHECK(f->get("fill") && f->get("fill")->type == JsonValue::Type::Bool);
+    }
+    CHECK(!yes(*name, "nosend") && !yes(*name, "fill") && !name->get("as"));
+    CHECK(!yes(*kind, "fill") && str(*kind, "default") == "STATION");
+    CHECK(yes(*port, "fill") && str(*port, "default") == "1");
+    CHECK(yes(*sure, "nosend") && !yes(*sure, "fill"));
+    CHECK(str(*label, "as") == "note" && !yes(*label, "nosend"));
+    CHECK(!yes(*word, "fill") && !word->get("default") && !word->get("value"));
+    // The keys that were there before are all still there.
+    for (auto* k : {"key", "label", "kind", "mask", "suffix", "required", "upper", "secret", "multi", "value", "help"})
+        CHECK(name->get(k));
+    CHECK(arr(r, "actions").size() == 1 && str(arr(r, "actions")[0], "cmd") == "book_put");
+
+    // form_check: kind left out and port sent blank both take their default;
+    // label sent blank has no default, so it stays blank.
+    r = run({{"cmd", "form_check"}, {"form", "FILLS"}, {"name", "sta-b"}, {"port", ""}, {"sure", "y"},
+             {"label", ""}});
+    CHECK(ok(r) && yes(r, "ready") && arr(r, "problems").empty());
+    std::map<std::string, std::string> filled;
+    for (auto& f : arr(r, "filled")) filled[str(f, "field")] = str(f, "value");
+    CHECK(filled.size() == 2 && filled["kind"] == "STATION" && filled["port"] == "1");
+    CHECK(sent.empty());  // form_check runs nothing
+
+    // A blank on a field without `fill` is left as is, not filled.
+    r = run({{"cmd", "form_check"}, {"form", "FILLS"}, {"name", "sta-b"}, {"kind", ""}, {"port", "2"}});
+    filled.clear();
+    for (auto& f : arr(r, "filled")) filled[str(f, "field")] = str(f, "value");
+    CHECK(filled.empty());
+
+    // form_submit sends what form_check said: the defaults filled in, sure
+    // kept back, label under its other name.
+    r = run({{"cmd", "form_submit"}, {"form", "FILLS"}, {"name", "sta-b"}, {"port", ""}, {"sure", "y"},
+             {"label", "practice"}, {"word", "lima"}});
+    CHECK(ok(r) && str(r, "action") == "book_put" && sent.size() == 1);
+    if (sent.size() == 1) {
+        JsonValue q;
+        CHECK(parse_json(sent[0], q));
+        CHECK(str(q, "cmd") == "book_put" && str(q, "name") == "STA-B" && str(q, "kind") == "STATION" &&
+              str(q, "port") == "1" && !q.get("sure") && !q.get("label") && str(q, "note") == "PRACTICE" &&
+              str(q, "word") == "lima");
+    }
+}
+
 static void drill(const fs::path& dir) {
     g_now = static_cast<int64_t>(std::time(nullptr));
     fs::path stick = dir / "stick";
@@ -541,6 +626,7 @@ int main() {
     fs::remove_all(dir);
     builtins();
     language();
+    fill_rules(dir / "fills");
     drill(dir);
     fs::remove_all(dir);
     return check::report("test_forms");
