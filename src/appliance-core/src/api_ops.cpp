@@ -329,6 +329,7 @@ std::optional<std::string> handle_ops(Core& core, const std::string& cmd, std::m
             if (c.mode.empty()) c.mode = old->mode;
             if (!has_use) c.use = old->use;
         }
+        if (c.mode.empty()) c.mode = "USB";  // a new channel with none given
         if (c.ant_rx == 0) c.ant_rx = old ? old->ant_rx : 1;
         if (c.ant_tx == 0) c.ant_tx = old ? old->ant_tx : 1;
         if (c.world.empty()) c.world = old ? old->world : "mars";
