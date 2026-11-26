@@ -735,7 +735,9 @@ available to copy.
   already in the plan keeps its frequency**, so a change to its ports, mode,
   use, world or label needs no retyping; a new channel needs one, and
   `frequency` sent empty is refused. A mode, use or antenna left out keeps
-  the old one. `world` is `mars` or `amateur`; left out, it keeps the
+  the old one; a mode left out or blank is `USB` on a new channel. The
+  CHANNEL form leaves out a mode left blank, so it never resets a held
+  sideband. `world` is `mars` or `amateur`; left out, it keeps the
   channel's (`mars` for a new one). `label` is the channel's HFLink label: 1
   to 16 letters, digits or `- / . _`, with a letter, never a frequency, kept
   in capitals; left out it is kept, sent empty it is cleared. `ant_rx` and `ant_tx` are the tuner

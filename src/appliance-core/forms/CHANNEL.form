@@ -9,7 +9,7 @@ PREFILL channel name
 FIELD name Designator(X) required upper max=12 check=designator
 FIELD frequency Frequency(X) secret check=frequency
 FIELD unit Unit(KHZ,MHZ,HZ) default=KHZ
-FIELD mode Mode(USB,LSB,ALE,DATA,AM,FM,CW) default=USB
+FIELD mode Mode(USB,LSB,ALE,DATA,AM,FM,CW)
 FIELD use What it is for(X) upper max=40
 FIELD ant_rx RX antenna, tuner port(1,2)
 FIELD ant_tx TX antenna, tuner port(1,2)
@@ -23,6 +23,10 @@ END
 
 Frequency:
 As on the card. It is kept on this box and goes out only sealed to a checked member's card. A new channel needs one; leave it blank to keep the one a channel already has.
+END
+
+Mode:
+The sideband or mode the channel is worked in, as on the card. The radio is keyed in this mode. Blank keeps the mode the channel has (USB for a new one).
 END
 
 What it is for:

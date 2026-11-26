@@ -288,10 +288,17 @@ void locks(const fs::path& dir) {
     r = api(c, {{"cmd", "form_submit"}, {"form", "CHANNEL"}, {"name", "P1"}, {"use", "PRIMARY"}});
     CHECK(ok(r) && A.ops->channels().get("P1")->use == "PRIMARY");
     CHECK(A.ops->channels().get("P1")->ant_tx == 2 && A.ops->channels().get("P1")->ant_rx == 2);
+    // The mode too (gale-key keys by the declared sideband): left out or
+    // blank on the form, a held LSB stays LSB.
+    CHECK(ok(api(c, {{"cmd", "channel_put"}, {"name", "P1"}, {"mode", "LSB"}})));
+    CHECK(ok(api(c, {{"cmd", "form_submit"}, {"form", "CHANNEL"}, {"name", "P1"}, {"use", "SECONDARY"}})));
+    CHECK(A.ops->channels().get("P1")->mode == "LSB" && A.ops->channels().get("P1")->use == "SECONDARY");
+    CHECK(ok(api(c, {{"cmd", "form_submit"}, {"form", "CHANNEL"}, {"name", "P1"}, {"mode", ""}})));
+    CHECK(A.ops->channels().get("P1")->mode == "LSB");
     // A new channel with none given takes port 1.
     CHECK(ok(api(c, {{"cmd", "form_submit"}, {"form", "CHANNEL"}, {"name", "P7"}, {"frequency", "7000"}})));
     CHECK(A.ops->channels().get("P7") && A.ops->channels().get("P7")->ant_tx == 1 &&
-          A.ops->channels().get("P7")->ant_rx == 1);
+          A.ops->channels().get("P7")->ant_rx == 1 && A.ops->channels().get("P7")->mode == "USB");
     A.core->stop();
 }
 
