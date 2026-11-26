@@ -2534,7 +2534,8 @@ std::string mark_training(const std::string& reply) {
 // What training doesn't do: write files out of the box, read files in (its
 // material is built in), or change the real station's backup or cipher.
 std::string training_refuses(const std::string& cmd, std::map<std::string, std::string>& req) {
-    static const std::set<std::string> never = {"station_backup", "station_restore", "cipher_install", "cipher_remove"};
+    static const std::set<std::string> never = {"station_backup", "station_restore", "cipher_install", "cipher_remove",
+                                                "identity_set", "settings_set"};
     if (never.count(cmd)) return cmd + " isn't done in training: turn training off first";
     if (!req["out"].empty()) return "training doesn't write files: turn training off first";
     if (!req["file"].empty()) return "training doesn't read files in: its traffic is built in";
@@ -3178,7 +3179,7 @@ std::string ApiServer::handle_call(Core& core, const std::string& line) {
     if (auto r = handle_ops(core, cmd, req)) return *r;
 
     return error_reply(
-        "unknown cmd; use status, scanner_status, scanner_hold, scanner_release, scanner_record, scanner_plan, word_feed, station_health, captures_list, heard_stations, tuner_status, tuner_channel, send, list, get, queue, log, emcon, cancel, hold, release, requeue, link_format, orderwire, rx_raw, overdue, send_file, get_file, send_acp127, send_acp126, send_chat, parse_acp127, "
+        "unknown cmd; use status, scanner_status, scanner_hold, scanner_release, scanner_record, scanner_plan, word_feed, identity_get, identity_set, station_health, captures_list, heard_stations, tuner_status, tuner_channel, send, list, get, queue, log, emcon, cancel, hold, release, requeue, link_format, orderwire, rx_raw, overdue, send_file, get_file, send_acp127, send_acp126, send_chat, parse_acp127, "
         "parse_traffic, compose_templates, compose_form, compose_check, compose_send, compose_advise, key_import, keys_list, key_zeroize, key_open, cipher_status, cipher_install, cipher_remove, station_card, station_backup, station_restore, card_import, cards_list, card_check, card_send, net_tape, tape_seal, or the book's calls (docs/api.md): book_*, net_*, sched_*, duty_*, log_add, station_log, report_monthly");
 }
 

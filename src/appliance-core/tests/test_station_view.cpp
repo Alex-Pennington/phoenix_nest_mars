@@ -12,6 +12,7 @@
 
 #include <sqlite3.h>
 #include <sys/socket.h>
+#include <sys/stat.h>
 #include <sys/un.h>
 #include <unistd.h>
 
@@ -22,6 +23,7 @@
 #include <filesystem>
 #include <fstream>
 #include <mutex>
+#include <sstream>
 #include <thread>
 #include <vector>
 
@@ -142,6 +144,7 @@ private:
                     else {
                         orders_.push_back(line);
                         if (line.rfind("plan nope", 0) == 0) r = R"({"ok":false,"error":"plan: no plan nope in the plan directory"})";
+                        else if (line == "reload-identity") r = R"({"ok":true,"own":["N0CALL","N0CALL@"],"own_error":null,"listen_only":false})";
                         else if (line.rfind("hold", 0) == 0) r = R"({"ok":true,"order":"hold window 2 for 60 s","window":2,"seconds":60})";
                         else r = R"({"ok":true,"order":")" + line.substr(0, line.find(' ')) + R"("})";
                     }
@@ -588,6 +591,41 @@ int main() {
                                 R"({"cmd":"scanner_plan"})"})
             CHECK(!okv(parsed(api(*core, bad))));
         CHECK(sc.orders().size() == 8);
+
+        // identity_set (ask 33): the amateur file, written whole, then reload-identity.
+        fs::path idf = gale / "amateur/own_address.txt";
+        v = parsed(api(*core, R"({"cmd":"identity_set","addresses":"n0call, N0CALL@ n0call"})"));
+        CHECK(okv(v) && bl(v, "scanner_reloaded") && !bl(v, "listen_only"));
+        CHECK(sub(v, "addresses").arr.size() == 2 && sub(v, "scanner_own").arr.size() == 2);
+        CHECK(sc.orders().size() == 9 && sc.orders().back() == "reload-identity");
+        {
+            std::ifstream f(idf);
+            std::stringstream ss;
+            ss << f.rdbuf();
+            CHECK(contains(ss.str(), "\nN0CALL\nN0CALL@\n") && !fs::exists(idf.string() + ".new"));
+            struct stat st{};
+            CHECK(::stat(idf.c_str(), &st) == 0 && (st.st_mode & 0777) == 0600);
+            CHECK(::stat(idf.parent_path().c_str(), &st) == 0 && (st.st_mode & 0777) == 0700);
+        }
+        v = parsed(api(*core, R"({"cmd":"identity_get"})"));
+        CHECK(okv(v) && bl(v, "file_found") && sub(v, "addresses").arr.size() == 2 && !bl(v, "listen_only"));
+        // Empty: listen only. Bad addresses: refused, the file left as it was.
+        CHECK(bl(parsed(api(*core, R"({"cmd":"identity_set","addresses":""})")), "listen_only"));
+        CHECK(bl(parsed(api(*core, R"({"cmd":"identity_get"})")), "listen_only"));
+        for (const char* bad : {R"({"cmd":"identity_set"})", R"({"cmd":"identity_set","addresses":"N0CALL/P"})",
+                                R"({"cmd":"identity_set","addresses":"ABCDEFGHIJKLMNOP"})"})
+            CHECK(!okv(parsed(api(*core, bad))));
+        CHECK(sc.orders().size() == 10);
+        // Never MARS's own-address file.
+        {
+            sv::Paths pm = p;
+            pm.amateur_own = (gale / "own_address.txt").string();
+            sv::set_paths(pm);
+            v = parsed(api(*core, R"({"cmd":"identity_set","addresses":"N0CALL"})"));
+            CHECK(!okv(v) && contains(str(v, "error"), "separate"));
+            sv::set_paths(p);
+        }
+        fs::remove_all(gale / "amateur");
     }
     // The scanner gone: the last status stays, marked stale; orders fail.
     {

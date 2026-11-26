@@ -7,7 +7,9 @@
 #include "ops.h"
 
 #include <sqlite3.h>
+#include <fcntl.h>
 #include <sys/stat.h>
+#include <unistd.h>
 
 #include <algorithm>
 #include <cctype>
@@ -409,7 +411,8 @@ std::string scanner_status(Core& core) {
     {
         bool f = false;
         auto own = load_addresses(p.own, &f);
-        auto aown = load_addresses(p.amateur_own, &f);
+        bool af = false;
+        auto aown = load_addresses(p.amateur_own, &af);
         // Both worlds' logs: a call to us in either is incoming.
         Paths pa = p;
         pa.words = p.amateur_words;
@@ -1369,8 +1372,130 @@ std::string name_channels(const std::string& reply_json, const ChannelNames& nam
     return o;
 }
 
+namespace {
+
+// ---- the amateur world's identity (ask 33) ----------------------------------
+// greybeard-ale docs/amateur-world.md: one address per line, 1-15 of A-Z 0-9 @,
+// written whole (temp file, rename), file 600 and folder 700; then the
+// scanner's control socket is told "reload-identity". No address: the scanner
+// listens only. It is never MARS's own_address.txt.
+
+bool same_file(const std::string& a, const std::string& b) {
+    std::error_code e1, e2;
+    fs::path x = fs::weakly_canonical(a, e1), y = fs::weakly_canonical(b, e2);
+    return !e1 && !e2 && x == y;
+}
+
+std::string identity_get(Core&) {
+    Paths p = paths();
+    bool found = false;
+    auto own = load_addresses(p.amateur_own, &found);
+    JsonWriter w;
+    w.begin_object().field("ok", true).field("world", "amateur").field("file_found", found).begin_array("addresses");
+    for (auto& [a, n] : own) w.field("", a);
+    w.end_array().field("listen_only", own.empty()).end_object();
+    return w.str();
+}
+
+std::string identity_set(Core& core, std::map<std::string, std::string>& req) {
+    if (!req.count("addresses")) return error_reply("addresses: the amateur calls this station answers to, "
+                                                    "separated by spaces or commas (empty: listen only)");
+    std::vector<std::string> got;
+    std::set<std::string> seen;
+    std::string text = req["addresses"], tok;
+    auto take = [&]() -> std::string {
+        if (tok.empty()) return "";
+        std::string a = tok;
+        tok.clear();
+        for (auto& c : a) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+        bool ok = a.size() <= 15;
+        for (char c : a)
+            if (!std::isupper(static_cast<unsigned char>(c)) && !std::isdigit(static_cast<unsigned char>(c)) && c != '@')
+                ok = false;
+        if (!ok) return "\"" + printable(a) + "\" isn't an address: 1 to 15 of A-Z, 0-9 and @";
+        if (seen.insert(a).second) got.push_back(a);
+        return "";
+    };
+    for (char c : text) {
+        if (c == ' ' || c == ',' || c == '\n' || c == '\r' || c == '\t' || c == ';') {
+            std::string e = take();
+            if (!e.empty()) return error_reply(e);
+        } else {
+            tok += c;
+        }
+    }
+    if (std::string e = take(); !e.empty()) return error_reply(e);
+    if (got.size() > 32) return error_reply("at most 32 addresses");
+    Paths p = paths();
+    if (same_file(p.amateur_own, p.own))
+        return error_reply("the amateur address file is set to MARS's own-address file: the worlds keep separate "
+                           "files (amateur-own-address)");
+    fs::path file(p.amateur_own), dir = file.parent_path();
+    std::error_code ec;
+    if (!dir.empty()) {
+        fs::create_directories(dir, ec);
+        if (ec) return error_reply("can't make " + dir.string() + ": " + ec.message());
+        ::chmod(dir.c_str(), 0700);
+    }
+    std::string tmp = file.string() + ".new";
+    {
+        int fd = ::open(tmp.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0600);
+        if (fd < 0) return error_reply("can't write " + tmp);
+        std::string body = "# The amateur world's own addresses, one per line (written by the station's settings).\n";
+        for (auto& a : got) body += a + "\n";
+        bool ok = ::write(fd, body.data(), body.size()) == static_cast<ssize_t>(body.size());
+        ok = ::fsync(fd) == 0 && ok;
+        ::close(fd);
+        ::chmod(tmp.c_str(), 0600);
+        if (!ok) {
+            fs::remove(tmp, ec);
+            return error_reply("can't write " + tmp);
+        }
+    }
+    fs::rename(tmp, file, ec);
+    if (ec) return error_reply("can't write " + file.string() + ": " + ec.message());
+    JsonWriter w;
+    w.begin_object().field("ok", true).field("world", "amateur").begin_array("addresses");
+    for (auto& a : got) w.field("", a);
+    w.end_array().field("listen_only", got.empty());
+    // The scanner reads it again now, or at its next start.
+    LinkMonitor* lm = core.link_monitor();
+    std::string reply, err;
+    JsonValue v;
+    if (lm && unix_request(lm->state().socket, "reload-identity", 3000, &reply, &err) && parse_json(reply, v) &&
+        v.is_object()) {
+        const JsonValue* ok = v.get("ok");
+        bool took = ok && ok->type == JsonValue::Type::Bool && ok->b;
+        w.field("scanner_reloaded", took);
+        if (took) {
+            w.begin_array("scanner_own");
+            if (const JsonValue* o = v.get("own"); o && o->is_array())
+                for (auto& e : o->arr)
+                    if (e.type == JsonValue::Type::String) w.field("", printable(e.s));
+            w.end_array();
+            const JsonValue* oe = v.get("own_error");
+            if (oe && oe->type == JsonValue::Type::String) w.field("scanner_own_error", printable(oe->s));
+            else w.field_null("scanner_own_error");
+        } else {
+            w.field("note", "saved; the scanner refused the reload (" +
+                                printable(str(v, "error")) + "), so it reads the file at its next start");
+        }
+        lm->poll_once();
+    } else {
+        w.field("scanner_reloaded", false)
+            .field("note", lm ? "saved; the scanner didn't answer, so it reads the file at its next start"
+                              : "saved; no scanner socket is set, so the scanner reads the file at its next start");
+    }
+    w.end_object();
+    return w.str();
+}
+
+}  // namespace
+
 std::optional<std::string> handle(Core& core, const std::string& cmd, std::map<std::string, std::string>& req) {
     if (cmd == "scanner_status") return scanner_status(core);
+    if (cmd == "identity_get") return identity_get(core);
+    if (cmd == "identity_set") return identity_set(core, req);
     if (cmd == "scanner_release") return scanner_order(core, "release");
     if (cmd == "scanner_hold") {
         double win = 0;

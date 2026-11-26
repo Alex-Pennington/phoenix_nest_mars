@@ -81,6 +81,11 @@ static void make_station(const fs::path& dir, Station& s) {
 static void toggle_with_others_open(Station& s) {
     Core& core = *s.core;
     CHECK(ok(call(core, {{"cmd", "training"}, {"on", "Y"}})));  // fills the practice store once
+    // Training never writes the station's own files (asks 33, 34).
+    for (const char* c : {"identity_set", "settings_set"}) {
+        JsonValue r = call(core, {{"cmd", c}, {"addresses", "N0CALL"}, {"key", "world"}, {"value", "mars"}});
+        CHECK(!ok(r) && r.get("error") && r.get("error")->s.find("training") != std::string::npos);
+    }
     std::atomic<bool> run{true};
     std::atomic<long> calls{0}, bad{0};
     std::vector<std::thread> others;

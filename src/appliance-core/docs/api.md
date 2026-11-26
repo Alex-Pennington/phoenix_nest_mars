@@ -704,6 +704,28 @@ it has. None of them transmits.
 Refused by the core, before anything is sent: a bad window or seconds, an
 empty or malformed channel or plan name, no `link-socket`.
 
+### identity_get, identity_set (the amateur world's own addresses)
+
+The calls this station answers to in the amateur world, kept apart from
+MARS's `own-address` file (greybeard-ale docs/amateur-world.md). The
+kiosk's startup call prompt saves through `identity_set`.
+
+- `identity_get {}` returns `{ok, world:"amateur", file_found, addresses[],
+  listen_only}`.
+- `identity_set {addresses}`: `addresses` is one string, the calls separated
+  by spaces or commas (`"N0CALL N0CALL@"`); each is 1 to 15 of A-Z, 0-9 and
+  @, case-folded, duplicates dropped, at most 32. An empty string means no
+  call: the scanner listens only. The core writes the `amateur-own-address`
+  file (default GALE-DIR/amateur/own_address.txt) whole: a temp file renamed
+  over it, file mode 600, folder 700. It then sends `reload-identity` to the
+  scanner's control socket. Reply: `{ok, world, addresses[], listen_only,
+  scanner_reloaded, scanner_own[]?, scanner_own_error?, note?}`. When the
+  scanner can't be told, the save still stands and `note` says the scanner
+  reads the file at its next start.
+
+Refused: a bad address (the file is left as it was), the amateur file set to
+MARS's own-address file, and training (it never writes the station's files).
+
 ### word_feed
 
 `{"cmd":"word_feed","world":"mars","limit":50,"since":UNIX,"incoming_s":60}` returns the
