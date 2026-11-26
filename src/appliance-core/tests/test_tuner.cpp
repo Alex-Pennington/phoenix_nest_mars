@@ -5,7 +5,9 @@
 // - the sequence around keying, against a stub daemon and a stub keyer:
 //   pre_tx before the key and post_tx after, a pre_tx refusal that blocks the
 //   key, post_tx retried, a tune refused while transmit is pinned, the 25 W
-//   ceiling, no VOX, and keying as before with no tuner.
+//   ceiling, no VOX, and keying as before with no tuner;
+// - the same sequence around a key the core asks of gale-key (around_key);
+// - tuner_channel recorded with no daemon set up.
 //
 // The frequencies are public time-signal ones. No hardware is touched.
 #include "../src/api_server.h"
@@ -638,6 +640,84 @@ static void status_and_guide(const fs::path& dir) {
     CHECK(see_channel);
 }
 
+// ---------------------------------------------------------------- around gale-key's key
+
+static void around_gale_key() {
+    std::vector<std::string> logged;
+    auto stub = std::make_shared<StubTuner>();
+    TunerKeying tk(stub, fast());
+    tk.set_log([&](const std::string& s) { logged.push_back(s); });
+
+    // pre_tx, then gale-key's key, then (once it has ended) post_tx.
+    clear_events();
+    bool asked = false;
+    int ended_polls = 0;
+    TunerOutcome o = tk.around_key([] { ev("gale-key key"); },
+                                   [&] {
+                                       ev("ended?");
+                                       return ++ended_polls >= 3;  // gale-key still keyed twice
+                                   },
+                                   &asked);
+    CHECK(o.ok && o.tuner && asked);
+    std::vector<std::string> want = {"tuner_pre_tx", "gale-key key", "ended?", "ended?", "ended?", "tuner_post_tx"};
+    CHECK(events() == want);
+
+    // pre_tx refused: gale-key is never asked, and the reason comes back.
+    clear_events();
+    stub->scripted["tuner_pre_tx"] = {err_line("tuner_pre_tx", "refused-no-channel", "send tuner_channel first")};
+    bool called = false;
+    o = tk.around_key([&] { called = true; }, [] { return true; }, &asked);
+    CHECK(!o.ok && !asked && !called && o.code == "refused-no-channel" && contains(o.reason, "tuner_channel first"));
+    CHECK(events() == std::vector<std::string>{"tuner_pre_tx"});
+    stub->scripted.erase("tuner_pre_tx");
+
+    // post_tx refused-keyed: retried with the backoff until it is taken.
+    clear_events();
+    stub->scripted["tuner_post_tx"] = {err_line("tuner_post_tx", "refused-keyed", "gale-key is running: keyed"),
+                                       err_line("tuner_post_tx", "refused-keyed", "gale-key is running: keyed"),
+                                       ok_line("tuner_post_tx", "{}")};
+    o = tk.around_key([] { ev("gale-key key"); }, [] { return true; }, &asked);
+    CHECK(o.ok && asked);
+    want = {"tuner_pre_tx", "gale-key key", "tuner_post_tx", "tuner_post_tx", "tuner_post_tx"};
+    CHECK(events() == want);
+    // Never taken: the key still happened; the outcome says the antenna didn't go back.
+    stub->scripted["tuner_post_tx"] = {err_line("tuner_post_tx", "refused-keyed", "gale-key is running: keyed")};
+    o = tk.around_key([] {}, [] { return true; }, &asked);
+    CHECK(!o.ok && asked && o.code == "refused-keyed" && contains(o.reason, "RX antenna"));
+    stub->scripted.erase("tuner_post_tx");
+
+    // A daemon set up but not answering: gale-key is asked as without a tuner.
+    stub->absent = true;
+    called = false;
+    o = tk.around_key([&] { called = true; }, [] { return true; }, &asked);
+    CHECK(o.ok && asked && called && !o.tuner);
+    stub->absent = false;
+
+    // No daemon set up at all: the key goes as is, nothing else runs.
+    TunerKeying none(nullptr);
+    called = false;
+    int polls = 0;
+    o = none.around_key([&] { called = true; }, [&] { ++polls; return true; }, &asked);
+    CHECK(o.ok && asked && called && polls == 0 && !o.tuner);
+
+    // tuner_channel with no daemon set up: ok, and the channel is recorded.
+    std::map<std::string, Channel> plan = {{"P1", chan("P1", 5000000, 1, 2)}};
+    auto lookup = [&](const std::string& n) -> std::optional<Channel> {
+        auto it = plan.find(n);
+        return it == plan.end() ? std::nullopt : std::optional<Channel>(it->second);
+    };
+    std::map<std::string, std::string> req = {{"channel", "P1"}};
+    std::string reply = *handle_tuner(&none, "tuner_channel", req, lookup, false);
+    JsonValue r = parsed(reply);
+    CHECK(okv(r) && str(r, "channel") == "P1" && none.current_channel() == "P1" && !contains(reply, "5000000"));
+    req = {{"channel", "NOPE"}};
+    CHECK(!okv(parsed(*handle_tuner(&none, "tuner_channel", req, lookup, false))));
+    CHECK(none.current_channel() == "P1");
+    // The other calls still say there is no tuner.
+    req.clear();
+    CHECK(str(parsed(*handle_tuner(&none, "tuner_pre_tx", req, lookup, false)), "code") == "no-tuner");
+}
+
 int main() {
     fs::path dir = fs::temp_directory_path() / ("pna_tuner_" + std::to_string(::getpid()));
     fs::remove_all(dir);
@@ -647,6 +727,7 @@ int main() {
     forwarding();
     sequence();
     tune();
+    around_gale_key();
     socket_framing(dir);
     status_and_guide(dir);
     fs::remove_all(dir);
