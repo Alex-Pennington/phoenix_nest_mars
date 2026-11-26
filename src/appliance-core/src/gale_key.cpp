@@ -636,7 +636,9 @@ void GaleKey::worker() {
             if (poll_ms_ > 0) {
                 poll = !cv_.wait_for(lk, std::chrono::milliseconds(poll_ms_), ready);
             } else {
-                cv_.wait(lk, ready);
+                // A poll interval set while waiting wakes the wait too.
+                cv_.wait(lk, [this] { return stop_ || !jobs_.empty() || poll_ms_ > 0; });
+                if (!stop_ && jobs_.empty()) continue;
             }
             if (stop_) return;
             if (!poll) {
