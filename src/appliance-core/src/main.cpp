@@ -170,6 +170,19 @@ struct Station {
     std::unique_ptr<Core> core;
     std::unique_ptr<ApiServer> api;
     std::unique_ptr<WebServer> web;
+
+    Station() = default;
+    Station(Station&&) = default;
+    Station& operator=(Station&&) = default;
+    // Every way out of main, a failed start included, stops what runs in
+    // order: the screen and the API, then the BBS (its thread reads the
+    // core), then the core.
+    ~Station() {
+        if (web) web->stop();
+        if (api) api->stop();
+        if (core) bbs::stop(*core);
+        if (core) core->stop();
+    }
 };
 
 std::shared_ptr<LinkMonitor> g_link;
@@ -275,6 +288,9 @@ bool start_station(Station& s, CoreConfig cfg, std::unique_ptr<ModemDriver> mode
     }
     s.core->on_log([name](const std::string& t) { log_line(name, t); });
     if (g_gale_key) s.core->set_gale_key(g_gale_key);
+    // The BBS opens (and brings its tables up to date) before the core's
+    // threads start writing to the same file.
+    bbs::engine(*s.core);
     s.core->start();
     bbs::start(*s.core);  // machine mode and routing (bbs.h); off until the operator turns them on
     s.api = std::make_unique<ApiServer>(*s.core, port);

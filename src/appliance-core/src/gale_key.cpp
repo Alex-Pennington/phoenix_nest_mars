@@ -54,10 +54,13 @@ bool read_whole(const std::string& path, std::string& out) {
 }
 
 // Every GaleKey alive, so a closing connection drops its dialogs in each.
+// Never destroyed: a GaleKey held in a global (appliance-core's g_gale_key)
+// is destroyed at exit after a function's static would be, and its
+// destructor still erases itself from here.
 std::mutex g_reg_mu;
 std::set<GaleKey*>& registry() {
-    static std::set<GaleKey*> r;
-    return r;
+    static auto* r = new std::set<GaleKey*>;
+    return *r;
 }
 std::atomic<unsigned long long> g_next_conn{1};
 thread_local unsigned long long t_conn = 0;
