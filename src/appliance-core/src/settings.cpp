@@ -153,7 +153,8 @@ std::vector<Row> make_table() {
                    "radio-file", "store-root", "amateur-own-address", "amateur-words", "keying-file", "web-root"})
         t.push_back(locked(k, "Paths", k));
     for (auto k : {"api-port", "web-port", "s5066-port", "appa-port"}) t.push_back(locked(k, "Ports", k, "int"));
-    for (auto k : {"link", "link-socket", "link-poll-ms", "tuner-socket", "s5066-peers", "s5066-sap", "s5066-ttl",
+    for (auto k : {"link", "link-socket", "link-poll-ms", "tuner-socket", "gale-key-socket", "gale-key-timeout-ms",
+                   "s5066-peers", "s5066-sap", "s5066-ttl",
                    "s5066-confirm", "s5066-broadcast", "loopback-pair", "loopback-bps"})
         t.push_back(locked(k, "Link", k));
     for (auto k : {"tx-cmd", "tx-arg", "advisor", "advisor-arg"}) t.push_back(locked(k, "Programs", k));

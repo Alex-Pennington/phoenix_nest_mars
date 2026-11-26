@@ -96,6 +96,18 @@ Store::Store(const std::string& path) {
             if (t.text(1) == "burst") has = true;
         if (!has) exec("ALTER TABLE messages ADD COLUMN burst TEXT NOT NULL DEFAULT ''");
     }
+    // gale-key's caller (gale_key.h): the channel a burst was written for,
+    // the standing mode of an automatic send, and whether gale-key was asked.
+    for (const char* col : {"key_channel", "key_mode", "key_asked"}) {
+        bool has = false;
+        Stmt t(db_, "PRAGMA table_info(messages)");
+        while (t.step())
+            if (t.text(1) == col) has = true;
+        if (!has)
+            exec((std::string("ALTER TABLE messages ADD COLUMN ") + col +
+                  (std::string(col) == "key_asked" ? " INTEGER NOT NULL DEFAULT 0" : " TEXT NOT NULL DEFAULT ''"))
+                     .c_str());
+    }
     exec("CREATE TABLE IF NOT EXISTS links (station TEXT PRIMARY KEY, format TEXT NOT NULL)");
     exec("CREATE TABLE IF NOT EXISTS keymaster_refused (station TEXT PRIMARY KEY, fingerprint TEXT NOT NULL,"
          " at INTEGER NOT NULL)");
@@ -291,9 +303,66 @@ void Store::mark_sent(const std::string& id, int64_t ack_due) {
     s.step();
 }
 
-void Store::mark_written(const std::string& id, const std::string& burst) {
-    Stmt s(db_, "UPDATE messages SET state = 'written', burst = ?, next_try_at = 0, updated_at = ? WHERE id = ?");
-    s.bind(1, burst).bind(2, now_utc()).bind(3, id);
+void Store::mark_written(const std::string& id, const std::string& burst, const std::string& channel) {
+    Stmt s(db_,
+           "UPDATE messages SET state = 'written', burst = ?, key_channel = ?, key_asked = 0, next_try_at = 0,"
+           " updated_at = ? WHERE id = ?");
+    s.bind(1, burst).bind(2, channel).bind(3, now_utc()).bind(4, id);
+    s.step();
+}
+
+namespace {
+constexpr const char* kKeyCols = "id, dst, world, state, burst, key_channel, key_mode, key_asked";
+Store::KeyRow key_row_of(Stmt& s) {
+    Store::KeyRow r;
+    r.id = s.text(0);
+    r.dst = s.text(1);
+    r.world = s.text(2);
+    r.state = s.text(3);
+    r.burst = s.text(4);
+    r.channel = s.text(5);
+    r.mode = s.text(6);
+    r.asked = s.i64(7) != 0;
+    return r;
+}
+}  // namespace
+
+std::optional<Store::KeyRow> Store::key_row(const std::string& id) {
+    Stmt s(db_, (std::string("SELECT ") + kKeyCols + " FROM messages WHERE direction = 'out' AND id = ?").c_str());
+    s.bind(1, id);
+    if (!s.step()) return std::nullopt;
+    return key_row_of(s);
+}
+
+std::vector<Store::KeyRow> Store::written_automatic(int limit) {
+    Stmt s(db_, (std::string("SELECT ") + kKeyCols +
+                 " FROM messages WHERE direction = 'out' AND state = 'written' AND key_mode <> '' AND key_asked = 0"
+                 " AND burst <> '' ORDER BY updated_at, rowid LIMIT ?")
+                    .c_str());
+    s.bind(1, static_cast<int64_t>(limit));
+    std::vector<KeyRow> out;
+    while (s.step()) out.push_back(key_row_of(s));
+    return out;
+}
+
+void Store::set_key_mode(const std::string& id, const std::string& mode) {
+    Stmt s(db_, "UPDATE messages SET key_mode = ? WHERE id = ? AND direction = 'out'");
+    s.bind(1, mode).bind(2, id);
+    s.step();
+}
+
+bool Store::claim_key(const std::string& id, const std::string& burst) {
+    Stmt s(db_,
+           "UPDATE messages SET key_asked = 1 WHERE id = ? AND burst = ? AND burst <> '' AND state = 'written'"
+           " AND key_asked = 0");
+    s.bind(1, id).bind(2, burst);
+    s.step();
+    return sqlite3_changes(db_) == 1;
+}
+
+void Store::unclaim_key(const std::string& id, const std::string& burst) {
+    Stmt s(db_, "UPDATE messages SET key_asked = 0 WHERE id = ? AND burst = ? AND state = 'written'");
+    s.bind(1, id).bind(2, burst);
     s.step();
 }
 

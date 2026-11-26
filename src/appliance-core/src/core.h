@@ -6,6 +6,7 @@
 
 #include "cipher_slot.h"
 #include "frame.h"
+#include "gale_key.h"
 #include "keys.h"
 #include "station.h"
 #include "link_monitor.h"
@@ -260,6 +261,28 @@ public:
     std::string link_format(const std::string& station);
     std::vector<std::pair<std::string, std::string>> link_formats();
 
+    // gale-key's caller (gale_key.h). Set before start(); none: nothing is
+    // ever asked of gale-key and every burst stays written.
+    void set_gale_key(std::shared_ptr<GaleKey> g);
+    GaleKey* gale_key() const { return gk_.get(); }
+    // The burst an operator's y would key: by message id, or by burst file
+    // name. False with *error when gale-key may not be asked to key it: not a
+    // written burst of ours, already asked, no world or not MARS (ask 40), a
+    // station of the amateur world, no channel, or EMCON on.
+    bool key_item(const std::string& msg_id, const std::string& burst, KeyItem& it, std::string* error);
+    // The same checks again, then the burst is marked asked (once) just
+    // before the key goes: false with *error when it may not go now.
+    bool claim_key(const KeyItem& it, std::string* error);
+    // gale-key never got the key: the burst may be asked again.
+    void unclaim_key(const KeyItem& it);
+    // The BBS marks each automatic send with its standing mode (machine,
+    // routing, auto_qsl): once written, its burst is keyed under that
+    // standing grant, only while the mode is on.
+    void set_key_mode(const std::string& msg_id, const std::string& mode);
+    // A mode turned off (BBS-SETUP, or the operator's standing_off): off here,
+    // and gale-key is told to revoke it.
+    void standing_off(const std::string& mode, const std::string& why);
+
     // For tests: run one scheduler pass now.
     void tick();
 
@@ -324,6 +347,15 @@ private:
     std::set<std::string> overdue_;       // messages logged as past their handling time
     std::set<std::string> no_expire_;     // expired, then requeued by the operator: not expired again
     void age_queue();                     // caller holds mu_
+    // Automatic sends whose burst is written: asked of gale-key under their
+    // standing mode, once each (caller holds mu_).
+    void key_automatic();
+    // The checks key_item and claim_key share (caller holds mu_).
+    bool key_checks(const Store::KeyRow& r, std::string* error);
+    std::shared_ptr<GaleKey> gk_;
+    std::set<std::string> key_queued_;    // automatic keys handed to gale-key's thread, not yet claimed
+    std::map<std::string, std::chrono::steady_clock::time_point> key_retry_;  // gale-key wasn't reached: not before
+    std::set<std::string> key_told_;      // bursts already logged as never to be asked of gale-key
     void raw_rx(const std::string& bytes);
     void note_file(const std::string& id, const std::string& body);
     std::mutex raw_mu_;
