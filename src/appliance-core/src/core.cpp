@@ -915,12 +915,17 @@ void Core::handle_rx(const std::string& bytes) {
 // ---- the operator's hand on the queue, EMCON and link formats ----
 
 void Core::set_emcon(bool on) {
-    std::lock_guard<std::mutex> g(mu_);
-    if (emcon_ == on) return;
-    emcon_ = on;
-    store_.set_flag("emcon", on);
-    log("", on ? "EMCON on: nothing is sent, acks included, until it is turned off"
-               : "EMCON off: the queue goes out again");
+    {
+        std::lock_guard<std::mutex> g(mu_);
+        if (emcon_ == on) return;
+        emcon_ = on;
+        store_.set_flag("emcon", on);
+        log("", on ? "EMCON on: nothing is sent, acks included, until it is turned off"
+                   : "EMCON off: the queue goes out again");
+    }
+    // gale-key revokes every standing grant on EMCON, and a revoked grant
+    // doesn't come back by itself: the core's modes go off with them.
+    if (on && gk_ && !gk_->standing().empty()) gk_->revoke("all", "EMCON on");
 }
 
 bool Core::emcon() {

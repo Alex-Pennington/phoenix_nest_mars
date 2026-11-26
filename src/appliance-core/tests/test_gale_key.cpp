@@ -499,6 +499,41 @@ int main() {
         CHECK(!ok(rep) && s.gk->held() == 0);
         f.tx_world = "mars";
 
+        // A mode on through the y, as the operator does it.
+        auto grant = [&](const std::string& mode) {
+            std::string pr = call(*s.core, {{"cmd", "standing_prepare"}, {"mode", mode}});
+            const std::string id = str(parsed(pr), "prepare_id");
+            s.now = s.now + 2;
+            return ok(call(*s.core, {{"cmd", "key_confirm"}, {"prepare_id", id}, {"confirm", "Y"}}));
+        };
+
+        // EMCON on: every mode off in the core, and gale-key told to revoke all.
+        CHECK(grant("machine") && s.gk->standing_on("machine"));
+        s.core->set_emcon(true);
+        CHECK(s.gk->standing().empty());
+        CHECK(f.last("revoke") && str(*f.last("revoke"), "mode") == "all");
+        CHECK(!ok(call(*s.core, {{"cmd", "standing_prepare"}, {"mode", "machine"}})));  // not under EMCON
+        s.core->set_emcon(false);
+
+        // gale-key drops a grant by itself (its hourly cap): the next automatic
+        // burst is refused by gale-key (failed, as its result says), and the
+        // core turns the mode off, so the one after waits for the y.
+        CHECK(grant("auto_qsl") && s.gk->standing_on("auto_qsl"));
+        {
+            std::lock_guard<std::mutex> g(f.mu);
+            f.grants.clear();
+        }
+        const int keys_before = f.count("key");
+        const std::string q1 = s.written("FARSTN", "QSL ONE");
+        s.core->set_key_mode(q1, "auto_qsl");
+        CHECK(wait_for([&] { return s.state(q1) == "failed"; }, 5000));
+        CHECK(s.core->get(q1) && s.core->get(q1)->last_error.find("no standing grant") != std::string::npos);
+        CHECK(wait_for([&] { return !s.gk->standing_on("auto_qsl"); }, 2000));
+        const std::string q2 = s.written("FARSTN", "QSL TWO");
+        s.core->set_key_mode(q2, "auto_qsl");
+        std::this_thread::sleep_for(std::chrono::milliseconds(400));
+        CHECK(f.count("key") == keys_before + 1 && s.state(q2) == "written");
+
         // ---- gale-key goes away: nothing keys, the burst stays written, status says why
         f.stop();
         const std::string g1 = s.written("FARSTN", "NO GALE-KEY");

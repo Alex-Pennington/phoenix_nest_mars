@@ -167,7 +167,9 @@ public:
     GaleKeyReply status();
 
     // How the last request went, for the core's status: "" (nothing asked
-    // yet), "answering" or "not answering", and why (frequency-free).
+    // yet), "answering", "busy" (it took the request and answered after the
+    // timeout: a key runs until it ends) or "not answering", and why
+    // (frequency-free).
     std::string last_state(std::string* why);
 
 private:

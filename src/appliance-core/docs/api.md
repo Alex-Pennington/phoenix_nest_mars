@@ -243,9 +243,11 @@ asks gale-key" below):
       "why":"gale-key isn't running (no socket at /run/gale-key/key.sock): nothing is keyed, bursts stay written",
       "standing":[],"held":0}
 
-- `gale_key`: `answering` (the last request had its reply), `not answering`
-  (with `why`), `not asked yet`, or `none` (no gale-key set up for this
-  station: the loopback, STANAG 5066 and Appendix A links, and training).
+- `gale_key`: `answering` (the last request had its reply), `busy` (gale-key
+  took the last request and hadn't answered within the timeout, as while it
+  keys; with `why`), `not answering` (with `why`), `not asked yet`, or `none`
+  (no gale-key set up for this station: the loopback, STANAG 5066 and
+  Appendix A links, and training).
 - `standing`: the standing modes on (`machine`, `routing`, `auto_qsl`).
 - `held`: y dialogs holding a token now.
 
@@ -1712,9 +1714,11 @@ reached, it is tried again 30 s later.
 `{"cmd":"standing_off","mode":"routing"}` (or `"all"`) →
 `{"ok":true,"mode":"routing","on":false,"gale_key":{...}}`. The mode is off in
 the core at once, whatever gale-key answers, and gale-key is sent `revoke`.
-gale-key also revokes grants itself (EMCON, the hourly cap, a change of
-transmit world). A burst keyed under a grant gale-key no longer holds comes
-back refused, and the message is `failed`. The core holds its modes in memory
+EMCON turned on turns every mode off the same way. gale-key also revokes
+grants itself (EMCON, the hourly cap, a change of transmit world). A burst
+keyed under a grant gale-key no longer holds comes back refused, and the
+message is `failed`; gale-key's reply ("no standing grant ...") turns that
+mode off in the core, so the next bursts wait for the operator's y. The core holds its modes in memory
 only, as gale-key does: after a restart every mode is off until the operator
 gives the y again.
 

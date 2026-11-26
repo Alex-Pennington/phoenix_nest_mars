@@ -176,7 +176,9 @@ void GaleKey::note(const std::string& msg_id, const std::string& text) {
 GaleKeyReply GaleKey::ask(const std::string& request) {
     GaleKeyReply r = link_ ? link_->call(request) : not_reached("no gale-key socket is set (gale-key-socket)");
     std::lock_guard<std::mutex> g(mu_);
-    last_ = r.answered ? "answering" : "not answering";
+    // A key's reply comes when the key ends: a reply later than the timeout
+    // is gale-key busy, not gale-key gone.
+    last_ = r.answered ? "answering" : r.reached ? "busy" : "not answering";
     last_why_ = r.answered ? std::string() : no_frequency(r.reason);
     return r;
 }
@@ -439,6 +441,16 @@ GaleKeyReply GaleKey::key_standing_now(const KeyItem& it, const std::string& mod
     t.begin_object().field("standing", mode).end_object();
     req += "," + t.str().substr(1);
     GaleKeyReply r = ask(req);
+    // gale-key revokes grants itself (the hourly cap, a change of transmit
+    // world). Told it holds none for this mode, the core turns the mode off
+    // too, so its next bursts wait for the operator's y instead of failing.
+    if (r.answered && !r.ok && r.reason.rfind("no standing grant", 0) == 0) {
+        {
+            std::lock_guard<std::mutex> g(mu_);
+            standing_.erase(mode);
+        }
+        note("", "standing " + mode + " OFF: gale-key holds no grant for it any more; the operator's y turns it on again");
+    }
     note(it.msg_id, "asked gale-key to key " + it.burst + " on " + it.channel + " under standing " + mode + ": " +
                         (r.answered ? (r.ok ? std::string("it answered ok") : "it answered " + no_frequency(r.reason))
                                     : no_frequency(r.reason)) +
