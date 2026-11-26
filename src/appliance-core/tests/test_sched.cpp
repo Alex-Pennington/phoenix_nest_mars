@@ -340,12 +340,67 @@ static void test_api(const fs::path& dir) {
     b.stop();
 }
 
+// Audit C: a heard station goes only into the open net on whose channel it
+// was heard, during that net's sitting.
+static void test_checkin(const fs::path& dir) {
+    std::atomic<int64_t> t{kSat7 + 18 * H + 55 * M};  // Saturday 1855Z
+    Ops o("NCS-A", (dir / "c.db").string());
+    o.set_clock([&] { return t.load(); });
+    std::string err;
+    NetSchedule s;
+    s.name = "WEEKLY NET";
+    s.days = "SAT";
+    s.start = 1140;  // 1900Z, 60 minutes
+    s.roster = {"STA-B", "STA-C"};
+    s.channel = "CH01";
+    CHECK(o.sched_put(s, &err));
+    const std::string w = o.sched_open("WEEKLY NET", &err);
+    CHECK(w == "NET-1");
+    auto n = o.net_get(w);
+    CHECK(n && n->channel == "CH01" && n->sitting_end == kSat7 + 20 * H);
+
+    // One net, on CH01: heard there, it checks in; heard elsewhere or with the
+    // channel unknown, it doesn't.
+    CHECK(o.heard("STA-B", "CH02").empty());
+    CHECK(o.heard("STA-B", "").empty());
+    CHECK((o.heard("STA-B", "ch01") == std::vector<std::string>{"NET-1"}));
+    CHECK(o.heard("STA-B", "CH01").empty());  // once
+
+    // A second net, opened by hand on CH02: each takes only its own channel.
+    const std::string e2 = o.net_open("EAST NET", {"STA-D"}, false, "", "", &err, "CH02");
+    CHECK(e2 == "NET-2");
+    CHECK((o.heard("STA-D", "CH02") == std::vector<std::string>{"NET-2"}));
+    CHECK((o.heard("STA-C", "CH01") == std::vector<std::string>{"NET-1"}));
+    n = o.net_get(w);
+    CHECK(n && n->checkins.size() == 2);
+    n = o.net_get(e2);
+    CHECK(n && n->checkins.size() == 1 && n->checkins[0].station == "STA-D");
+
+    // A third net that names no channel: with others open, nobody is put in it.
+    const std::string x = o.net_open("NO CHANNEL NET", {}, false, "", "", &err);
+    CHECK(x == "NET-3");
+    CHECK(o.heard("STA-E", "").empty() && o.heard("STA-E", "CH03").empty());
+    CHECK(o.net_close(x, &err) && o.net_close(e2, &err));
+
+    // After the sitting: still open, but no more check-ins by radio.
+    t = kSat7 + 20 * H + 5 * M;
+    CHECK(o.heard("STA-F", "CH01").empty());
+    CHECK(o.net_checkin(w, "STA-F", "hand", 0, "", &err));  // the operator still can
+    CHECK(o.net_close(w, &err));
+
+    // A lone net with no channel works as before: whoever is heard.
+    const std::string y = o.net_open("AD HOC", {}, false, "", "", &err);
+    CHECK((o.heard("STA-G", "") == std::vector<std::string>{y}));
+    CHECK(o.net_close(y, &err));
+}
+
 int main() {
     fs::path dir = fs::temp_directory_path() / ("pna_sched_" + std::to_string(::getpid()));
     fs::remove_all(dir);
     fs::create_directories(dir);
     test_days();
     test_schedules(dir);
+    test_checkin(dir);
     test_api(dir);
     fs::remove_all(dir);
     return check::report("test_sched");

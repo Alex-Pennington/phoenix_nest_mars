@@ -876,7 +876,13 @@ void Core::heard(const std::string& who) {
     std::string src = who;
     if (src.size() > 3 && src.compare(src.size() - 3, 3, "-CM") == 0) src.resize(src.size() - 3);
     if (src.empty() || src == cfg_.station || is_broadcast(src)) return;
-    if (ops_) ops_->heard(src);
+    // Audit C: a station of the amateur world is never checked into a MARS
+    // net, and a net takes only stations heard on its own channel (the one
+    // the radio was last set to through the tuner calls).
+    if (ops_ && world_refusal(src).empty()) {
+        const std::string ch = tuner_ ? tuner_->current_channel() : std::string();
+        ops_->heard(src, ch);
+    }
     // Traffic that went unanswered goes again now the station is on frequency.
     auto un = store_.out_to(src, "unacked");
     if (un.empty()) return;

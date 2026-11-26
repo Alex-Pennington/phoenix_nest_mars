@@ -68,7 +68,9 @@ void write_net(JsonWriter& w, const Net& n, bool with_checkins) {
         .field("open", n.closed_at == 0)
         .field("opened_at", static_cast<long long>(n.opened_at))
         .field("closed_at", static_cast<long long>(n.closed_at))
-        .field("checked_in", static_cast<int>(n.checkins.size()));
+        .field("checked_in", static_cast<int>(n.checkins.size()))
+        .field("channel", n.channel)
+        .field("sitting_end", static_cast<long long>(n.sitting_end));
     strings(w, "roster", n.roster);
     strings(w, "missing", n.missing());
     if (with_checkins) {
@@ -336,8 +338,10 @@ std::optional<std::string> handle_ops(Core& core, const std::string& cmd, std::m
     }
 
     if (cmd == "net_open") {
+        const std::string ch = book_key(req["channel"]);
+        if (!ch.empty() && !ops->channels().get(ch)) return err_reply("no channel " + ch + " in the channel plan");
         std::string id = ops->net_open(req["name"], list_of(req["roster"], ','), truthy(req["exercise"]), req["ncs"],
-                                       req["note"], &err);
+                                       req["note"], &err, ch);
         if (id.empty()) return err_reply(err);
         auto n = ops->net_get(id);
         JsonWriter out;

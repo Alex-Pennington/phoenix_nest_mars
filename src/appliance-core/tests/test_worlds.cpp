@@ -251,6 +251,9 @@ int main() {
     // ---- acks and machine answers to an amateur station ---------------------
     CHECK(ok(call(a, {{"cmd", "bbs_set"}, {"machine_mode", "true"}, {"ack_delay_ms", "0"}, {"auto_per_hour", "120"},
                       {"commands_ct_only", "false"}})));
+    // A MARS net is open: an amateur station heard is never checked in (audit C).
+    const std::string net = ops->net_open("MARS NET", {}, false, "", "", &e);
+    CHECK(!net.empty());
     CHECK(!h.submit("STA-A", 'R', chat("STA-A-CM", "K7AMA", "VER"), &e).empty());
     CHECK(wait_for([&] {
         for (auto& m : a.list(100))
@@ -262,6 +265,15 @@ int main() {
         return logged(a, "not sent to K7AMA") && logged(a, "BBS: answer to K7AMA");
     }));
     for (auto& m : a.list(100)) CHECK(!(m.direction == "out" && m.dst == "K7AMA"));
+    {
+        auto n = ops->net_get(net);
+        CHECK(n && n->checkins.empty());
+        CHECK(!b.submit("STA-A", 'R', "STA-B CHECKING IN", &e).empty());  // a MARS station still is
+        CHECK(wait_for([&] {
+            auto m = ops->net_get(net);
+            return m && m->checkins.size() == 1 && m->checkins[0].station == "STA-B";
+        }));
+    }
 
     // ---- a broadcast is still a broadcast -----------------------------------
     CHECK(!a.submit("ALL", 'R', "TO ALL STATIONS", &e).empty());

@@ -477,9 +477,12 @@ and it is marked sent once it is on the air. No station may be called ALL.
 
 ### Nets
 
-- `net_open` `{name, roster, exercise, ncs, note}` returns `id` (NET-n) and the
-  net. `roster` can name collectives; they are expanded when the net opens.
-  `ncs` defaults to this station.
+- `net_open` `{name, roster, exercise, ncs, note, channel}` returns `id`
+  (NET-n) and the net. `roster` can name collectives; they are expanded when
+  the net opens. `ncs` defaults to this station. `channel` (optional) is the
+  net's channel by its designator, one in the channel plan. A net opened
+  from a schedule takes the schedule's channel, and its sitting's end. The
+  net shows `channel` and `sitting_end` (0: none).
 - `net_checkin` `{net, station, traffic, remark}` checks a station in by hand.
   `traffic` is how many messages it holds for the net.
 - `net_checkout {net, station}` checks a station out.
@@ -489,9 +492,20 @@ and it is marked sent once it is on the air. No station may be called ALL.
 - `net_list {limit}` lists nets, newest first.
 
 `net` can be left out while exactly one net is open. When the core hears any
-frame from a station (a message, an ACK or traffic for someone else), every open
-net checks that station in with `via: "radio"`. A station that checked out
-isn't put back in by radio. `status` adds `net`, the open net's id.
+frame from a station (a message, an ACK or traffic for someone else), the net
+it was heard on checks that station in with `via: "radio"` (audit C):
+
+- A net with a channel takes only stations heard on that channel: the one
+  the radio was last set to with `tuner_channel`. With no channel known, no
+  net with a channel takes anyone by radio.
+- A net with no channel takes stations heard only while it is the one net
+  open; with two or more open, it takes nobody by radio.
+- A net opened from a schedule during its sitting takes nobody by radio
+  after the sitting's end, though it stays open.
+- A station of the amateur world (see Worlds) is never checked in.
+
+A station that checked out isn't put back in by radio. The operator can
+still check anyone in by hand. `status` adds `net`, the open net's id.
 
 ### Net schedules
 

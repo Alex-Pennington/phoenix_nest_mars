@@ -61,6 +61,12 @@ struct Net {
     std::vector<std::string> roster;  // station names expected
     std::string note;
     std::vector<CheckIn> checkins;
+    // Audit C: the net's own channel (a designator, "" for none named) and,
+    // for a net opened from a schedule during its sitting, that sitting's
+    // end (0: none). A station is checked in by radio only when heard on
+    // that channel and before that end.
+    std::string channel;
+    int64_t sitting_end = 0;
     std::vector<std::string> missing() const;  // roster stations with no check-in
 };
 
@@ -171,7 +177,8 @@ public:
 
     // Nets.
     std::string net_open(const std::string& name, const std::vector<std::string>& roster, bool exercise,
-                         const std::string& ncs, const std::string& note, std::string* error);
+                         const std::string& ncs, const std::string& note, std::string* error,
+                         const std::string& channel = "");
     bool net_checkin(const std::string& net, const std::string& station, const std::string& via, int traffic,
                      const std::string& remark, std::string* error);
     bool net_checkout(const std::string& net, const std::string& station, std::string* error);
@@ -183,6 +190,12 @@ public:
     // The core heard a station (a message or an ACK from it): every open net
     // records it as checked in by radio, once.
     void heard(const std::string& station);
+    // Audit C: a station heard on `channel` (the designator the radio is on;
+    // "" when not known). It is checked in by radio only to an open net whose
+    // own channel that is (a net that names no channel: only while it is the
+    // one net open), and not after the net's sitting ended. Returns the nets
+    // it was checked into.
+    std::vector<std::string> heard(const std::string& station, const std::string& channel);
 
     // Net schedules.
     bool sched_put(NetSchedule s, std::string* error);

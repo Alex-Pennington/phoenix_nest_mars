@@ -57,7 +57,7 @@ bool chars_ok(const std::string& s, const char* extra) {
 
 bool valid_call(const std::string& s) { return s.size() >= 2 && s.size() <= 12 && chars_ok(s, "-"); }
 
-const char* kNetCols = "id, name, ncs, exercise, opened_at, closed_at, roster, note";
+const char* kNetCols = "id, name, ncs, exercise, opened_at, closed_at, roster, note, channel, sitting_end";
 
 // One CSV record (quotes allowed); false at the end.
 bool csv_row(std::istream& in, std::vector<std::string>* row) {
@@ -210,6 +210,16 @@ Ops::Ops(std::string station, const std::string& db_path) : station_(book_key(st
     exec(
         "CREATE TABLE IF NOT EXISTS nets (id TEXT PRIMARY KEY, name TEXT, ncs TEXT, exercise INTEGER,"
         " opened_at INTEGER, closed_at INTEGER DEFAULT 0, roster TEXT, note TEXT)");
+    {
+        bool ch = false, se = false;
+        Stmt q(db_, "PRAGMA table_info(nets)");
+        while (q.step()) {
+            ch = ch || q.text(1) == "channel";
+            se = se || q.text(1) == "sitting_end";
+        }
+        if (!ch) exec("ALTER TABLE nets ADD COLUMN channel TEXT DEFAULT ''");
+        if (!se) exec("ALTER TABLE nets ADD COLUMN sitting_end INTEGER DEFAULT 0");
+    }
     exec(
         "CREATE TABLE IF NOT EXISTS checkins (net TEXT, station TEXT, at INTEGER, out_at INTEGER DEFAULT 0,"
         " via TEXT, traffic INTEGER DEFAULT 0, remark TEXT, in_roster INTEGER, PRIMARY KEY(net, station))");
@@ -472,6 +482,8 @@ std::optional<Net> Ops::load_net(const std::string& id) {
     n.closed_at = s.i64(5);
     n.roster = split(s.text(6), "\n");
     n.note = s.text(7);
+    n.channel = s.text(8);
+    n.sitting_end = s.i64(9);
     Stmt c(db_,
            "SELECT station, at, out_at, via, traffic, remark, in_roster FROM checkins WHERE net = ? ORDER BY at, "
            "station");
@@ -491,9 +503,11 @@ std::optional<Net> Ops::load_net(const std::string& id) {
 }
 
 std::string Ops::net_open(const std::string& name, const std::vector<std::string>& roster, bool exercise,
-                          const std::string& ncs, const std::string& note, std::string* error) {
+                          const std::string& ncs, const std::string& note, std::string* error,
+                          const std::string& channel) {
     std::lock_guard<std::recursive_mutex> g(mu_);
     std::string nm = book_key(name);
+    const std::string ch = book_key(channel);
     if (nm.empty()) {
         if (error) *error = "name: give the net a name";
         return "";
@@ -508,7 +522,7 @@ std::string Ops::net_open(const std::string& name, const std::vector<std::string
     q.step();
     std::string id = "NET-" + std::to_string(q.i64(0));
     std::string control = ncs.empty() ? station_ : canonical(ncs);
-    Stmt(db_, "INSERT INTO nets(id, name, ncs, exercise, opened_at, roster, note) VALUES(?,?,?,?,?,?,?)")
+    Stmt(db_, "INSERT INTO nets(id, name, ncs, exercise, opened_at, roster, note, channel) VALUES(?,?,?,?,?,?,?,?)")
         .bind(1, id)
         .bind(2, nm)
         .bind(3, control)
@@ -516,9 +530,11 @@ std::string Ops::net_open(const std::string& name, const std::vector<std::string
         .bind(5, now())
         .bind(6, join(calls, '\n'))
         .bind(7, note)
+        .bind(8, ch)
         .step();
     log_add("net",
-            std::string(exercise ? "exercise " : "") + "net " + nm + " opened, net control " + control + ", " +
+            std::string(exercise ? "exercise " : "") + "net " + nm + " opened" + (ch.empty() ? "" : " on " + ch) +
+                ", net control " + control + ", " +
                 std::to_string(calls.size()) + " on the roster",
             id, exercise);
     return id;
@@ -634,21 +650,35 @@ std::string Ops::current_net() {
     return ids.size() == 1 ? ids[0] : "";
 }
 
-void Ops::heard(const std::string& station) {
+void Ops::heard(const std::string& station) { heard(station, ""); }
+
+std::vector<std::string> Ops::heard(const std::string& station, const std::string& channel) {
     std::lock_guard<std::recursive_mutex> g(mu_);
+    std::vector<std::string> in;
     std::string st = canonical(station);
-    if (st == station_ || !valid_call(st)) return;
-    std::vector<std::string> open;
+    if (st == station_ || !valid_call(st)) return in;
+    const std::string ch = book_key(channel);
+    const int64_t t = now();
+    struct O {
+        std::string id, channel;
+        int64_t sitting_end;
+    };
+    std::vector<O> open;
     {
-        Stmt s(db_, "SELECT id FROM nets WHERE closed_at = 0");
-        while (s.step()) open.push_back(s.text(0));
+        Stmt s(db_, "SELECT id, COALESCE(channel, ''), COALESCE(sitting_end, 0) FROM nets WHERE closed_at = 0");
+        while (s.step()) open.push_back({s.text(0), s.text(1), s.i64(2)});
     }
-    for (auto& id : open) {
+    for (auto& n : open) {
+        // Only the net heard on its own channel, at its own time (audit C).
+        if (!n.channel.empty() && n.channel != ch) continue;           // another channel, or not known
+        if (n.channel.empty() && open.size() > 1) continue;            // can't tell which net it called
+        if (n.sitting_end > 0 && t > n.sitting_end) continue;          // after its sitting
         Stmt s(db_, "SELECT 1 FROM checkins WHERE net = ? AND station = ?");
-        s.bind(1, id).bind(2, st);
+        s.bind(1, n.id).bind(2, st);
         if (s.step()) continue;  // already in, or checked out: radio doesn't undo a check-out
-        net_checkin(id, st, "radio", 0, "", nullptr);
+        if (net_checkin(n.id, st, "radio", 0, "", nullptr)) in.push_back(n.id);
     }
+    return in;
 }
 
 
@@ -927,11 +957,13 @@ std::string Ops::sched_open(const std::string& name, std::string* error) {
     }
     std::string note = "from schedule " + s->name + (s->note.empty() ? "" : ": " + s->note);
     if (note.size() > 80) note = note.substr(0, 80);
-    std::string id = net_open(s->name, s->roster, s->exercise, s->ncs, note, error);
+    std::string id = net_open(s->name, s->roster, s->exercise, s->ncs, note, error, s->channel);
     if (id.empty()) return "";
     // Opened during a sitting or up to 30 minutes ahead of it: that sitting.
     int64_t sitting = 0;
     if (st && (st->state == "due" || st->start - now() <= 30 * 60)) sitting = st->start;
+    if (sitting)  // radio check-ins end with the sitting (audit C)
+        Stmt(db_, "UPDATE nets SET sitting_end = ? WHERE id = ?").bind(1, st->end).bind(2, id).step();
     Stmt(db_, "UPDATE schedules SET last_start = ?, last_net = ? WHERE name = ?")
         .bind(1, sitting ? sitting : s->last_start)
         .bind(2, id)
