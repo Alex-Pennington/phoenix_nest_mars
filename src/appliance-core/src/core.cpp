@@ -35,8 +35,64 @@ bool valid_link_format(const std::string& f) { return f == "pna1" || f == "plain
 
 Core::~Core() { stop(); }
 
-void Core::log(const std::string& msg_id, const std::string& text) {
+namespace {
+
+// The dial a capture's file name carries, "_<dial>kHz" (the engine's tag), in
+// Hz; 0 when the name carries none.
+int64_t dial_tag_hz(const std::string& name) {
+    for (size_t at = name.find('_'); at != std::string::npos; at = name.find('_', at + 1)) {
+        size_t i = at + 1;
+        size_t digits = 0, dots = 0;
+        while (i < name.size() && (std::isdigit(static_cast<unsigned char>(name[i])) || name[i] == '.')) {
+            if (name[i] == '.') ++dots;
+            else ++digits;
+            ++i;
+        }
+        if (digits == 0 || dots > 1 || i + 3 > name.size()) continue;
+        if (std::tolower(static_cast<unsigned char>(name[i])) != 'k' ||
+            std::tolower(static_cast<unsigned char>(name[i + 1])) != 'h' ||
+            std::tolower(static_cast<unsigned char>(name[i + 2])) != 'z')
+            continue;
+        const double khz = std::atof(name.substr(at + 1, i - at - 1).c_str());
+        if (khz > 0) return static_cast<int64_t>(khz * 1000 + 0.5);
+    }
+    return 0;
+}
+
+}  // namespace
+
+// A log line never quotes a capture's file name with its dial tag: each such
+// name (a capture, its listing or a payload beside it) becomes "a capture on
+// DESIGNATOR", or "a capture" when no channel has that dial.
+std::string Core::without_dial_tags(const std::string& text) {
+    auto stop = [](char c) {
+        return std::isspace(static_cast<unsigned char>(c)) || c == '(' || c == ')' || c == ',' || c == ';' ||
+               c == ':' || c == '"' || c == '\'' || c == '[' || c == ']';
+    };
+    std::string out;
+    size_t i = 0;
+    while (i < text.size()) {
+        if (stop(text[i])) {
+            out += text[i++];
+            continue;
+        }
+        size_t j = i;
+        while (j < text.size() && !stop(text[j])) ++j;
+        const std::string tok = text.substr(i, j - i);
+        if (const int64_t hz = dial_tag_hz(tok)) {
+            const std::string des = ops_ ? ops_->channels().display_name_for(hz) : std::string();
+            out += des.empty() ? "a capture" : "a capture on " + des;
+        } else {
+            out += tok;
+        }
+        i = j;
+    }
+    return out;
+}
+
+void Core::log(const std::string& msg_id, const std::string& raw) {
     // caller holds mu_ (the store is not shared across threads otherwise)
+    const std::string text = without_dial_tags(raw);
     store_.log_event(msg_id, text);
     if (log_fn_) log_fn_(msg_id.empty() ? text : msg_id + ": " + text);
 }

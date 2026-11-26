@@ -302,7 +302,10 @@ private:
     // The outbox write-back: gale-key keyed a burst (sent from now) or
     // refused it (failed, with why).
     void handle_key_result(const std::string& burst, bool keyed, const std::string& why);
+    // Every line goes through without_dial_tags first (no capture name with its
+    // _<dial>kHz tag reaches the log).
     void log(const std::string& msg_id, const std::string& text);
+    std::string without_dial_tags(const std::string& text);
     void release_due_parts();  // caller holds mu_
     void read_codress(const std::string& id, const std::string& body);  // caller holds mu_
     // caller holds mu_ for these:

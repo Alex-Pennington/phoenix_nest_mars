@@ -518,6 +518,11 @@ With `--link-gate`, a message whose station has no link yet carries
 Oldest first. Pass the reply's `last` as `after` next time to get only new
 lines.
 
+No line quotes a capture's file name that carries its dial (the engine's
+`_<dial>kHz` tag), nor the listing or payload files named after it. Each
+becomes `a capture on DESIGNATOR` when a channel in the plan has that dial,
+else `a capture`. The same holds for the core's standard error.
+
 ## list, get
 
 `{"cmd":"list","limit":50}` and `{"cmd":"get","id":"AAR4XX-17"}` →

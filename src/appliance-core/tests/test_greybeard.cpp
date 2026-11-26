@@ -4,14 +4,18 @@
 #include "../src/core.h"
 #include "../src/greybeard_modem.h"
 #include "../src/json.h"
+#include "../src/ops.h"
 #include "../src/run_program.h"
 #include "../src/sha256.h"
 #include "check.h"
 
+#include <cctype>
 #include <chrono>
+#include <cstdio>
 #include <filesystem>
 #include <fstream>
 #include <functional>
+#include <mutex>
 #include <thread>
 #include <unistd.h>
 
@@ -382,6 +386,71 @@ int main() {
         CHECK(ls.find("\"id\":\"" + id + "\"") != std::string::npos && ls.find("\"unverified\":true") != std::string::npos);
         CHECK(ApiServer::handle(u, R"({"cmd":"status"})").find("\"unverified\":1") != std::string::npos);
         u.stop();
+    }
+
+    // C4: no log line quotes a capture's file name with its dial tag
+    // (_<dial>kHz). The channel's designator stands in, else "a capture".
+    {
+        std::string cap = (dir / "K-cap").string();
+        fs::create_directories(cap);
+        GreybeardConfig c;
+        c.mode = "600S";
+        c.captures_dir = cap;
+        c.work_dir = (dir / "K-work").string();
+        c.outbox_dir = (dir / "K-outbox").string();
+        c.state_file = (dir / "K-seen.txt").string();
+        c.poll_ms = 50;
+        c.settle_ms = 300;
+        const std::string db = (dir / "K.db").string();
+        Core k(CoreConfig{"K", db, 3, 1, true}, std::make_unique<GreybeardModem>(c));
+        k.set_ops(std::make_shared<Ops>("K", db));
+        CHECK(ApiServer::handle(k, R"({"cmd":"channel_put","name":"P1","frequency":"13579"})").find("\"ok\":true") !=
+              std::string::npos);
+        std::mutex lm;
+        std::string lines;
+        k.on_log([&](const std::string& t) {
+            std::lock_guard<std::mutex> g(lm);
+            lines += t + "\n";
+        });
+        k.start();
+        const fs::path cp(cap);
+        const std::string raw = "SOME DECODED BYTES";
+        // A decode, then the same bytes from another capture.
+        write(cp / "20991231T000010Z_13579kHz.m110a.0.bin", raw);
+        write(cp / "20991231T000010Z_13579kHz.modems.json", listing("20991231T000010Z_13579kHz.m110a.0.bin", raw));
+        CHECK(wait_for([&] { return k.status().counts.unverified == 1; }, 3000));
+        write(cp / "20991231T000011Z_13579kHz.m110a.0.bin", raw);
+        write(cp / "20991231T000011Z_13579kHz.modems.json", listing("20991231T000011Z_13579kHz.m110a.0.bin", raw));
+        // A wrong digest, on a dial in no channel; a listing that isn't JSON;
+        // one with no payloads; one with no sha256.
+        write(cp / "20991231T000012Z_7345.5kHz.m110a.0.bin", "BAD");
+        write(cp / "20991231T000012Z_7345.5kHz.modems.json",
+              listing("20991231T000012Z_7345.5kHz.m110a.0.bin", "BAD", false));
+        write(cp / "20991231T000013Z_7345kHz.modems.json", "{not json");
+        write(cp / "20991231T000014Z_13579kHz.modems.json", R"({"files":[]})");
+        write(cp / "20991231T000015Z_13579kHz.m110a.0.bin", "NODIGEST");
+        write(cp / "20991231T000015Z_13579kHz.modems.json",
+              R"({"files":[{"file":"20991231T000015Z_13579kHz.m110a.0.bin","bytes":8}]})");
+        auto logged = [&] {
+            std::lock_guard<std::mutex> g(lm);
+            return lines;
+        };
+        CHECK(wait_for([&] { return logged().find("not readable JSON") != std::string::npos; }, 3000));
+        CHECK(wait_for([&] { return logged().find("wrong digest") != std::string::npos; }, 3000));
+        CHECK(wait_for([&] { return logged().find("lists no payload files") != std::string::npos; }, 3000));
+        CHECK(wait_for([&] { return logged().find("no sha256") != std::string::npos; }, 3000));
+        CHECK(wait_for([&] { return logged().find("came again") != std::string::npos; }, 3000));
+        std::string all = logged();
+        for (auto& e : k.events(0, 1000)) all += e.text + "\n";
+        std::string low = all;
+        for (auto& ch : low) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+        CHECK(low.find("khz") == std::string::npos);
+        if (low.find("khz") != std::string::npos) std::fprintf(stderr, "%s", all.c_str());
+        // The designator where the dial is a channel, "a capture" where not.
+        CHECK(all.find("bytes from a capture on P1") != std::string::npos);
+        CHECK(all.find("skipped a capture:") != std::string::npos ||
+              all.find("skipped a capture ") != std::string::npos);
+        k.stop();
     }
 
     fs::remove_all(dir);
