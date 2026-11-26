@@ -274,15 +274,26 @@ reports it (see Services). Clients read it here; the operator never types it:
 **Layers** (MIL-STD-187-721D, with the terms of MIL-STD-188-141B Appendix D, as
 greybeard-ale #18 section 2 gives them):
 
-- **Network.** The core is the station's networking controller (HFNC, 141B D.4.2). This
-  section defines its address list, routes and route function. Stations heard and LQA in use
-  are its path quality matrix (D.4.2.1.2). Message passing is store and forward (D.4.2.3).
-- **Application.** Compose, the formats and the in-box are Application. They call the route
+The core holds three layers, and its route function stays apart from the Transport and
+Application code that calls it.
+
+- **Application.** Compose, the formats, the in-box, nets and machine mode. They call the route
   function, and they never decide a crossing.
-- **No transport layer.** Appendix D leaves recovery by retransmission to a transport layer
-  above Network (D.4.2.3, D.5.2.5). The core's own ACK and resend code stands in for it.
-- **Below and beside.** The station controller below the core is the link controller, Data link
-  and Physical (Keying, below). The service tables beside it are Network management.
+- **Transport.** End-to-end delivery of a whole message: QSL receipts, the resend queue and
+  duplicates. Appendix D puts retransmission here, not in the network layer (D.5.2.5).
+- **Network.** The core's Network layer is the station's networking controller (HFNC, 141B
+  D.4.2). This section defines its address list, its routing table and its route function. It
+  also covers link selection (which link controller carries the traffic), store and forward
+  (D.4.2.3) and connectivity tracking (stations heard).
+- **Below and beside.** Below the core is the station controller, the link controller (Data link
+  and Physical; see Keying, below). Beside it are the service tables, network management and the
+  station's data fill (D.4.4).
+
+Stage 1 targets a table D-I Level 1 networking controller (D.4.2.6). It controls the radio
+through the link controller, delivers to a named station, and does no automatic routing.
+Stage 5 reaches Level 2: a static routing table, and store and forward. The core takes the
+standard's structure and names, not its on-air protocols (no AME headers, CONEX or HNMP), and
+MARS traffic stays in its own formats.
 
 The station works one or more services, such as amateur and MARS. Each service is one network,
 named by a service table (greybeard-ale `docs/services.md`). The core names no service in code:
@@ -300,15 +311,24 @@ as MARS. Alex's hard rule stands: there is no forward or auto-copy route between
   (`route_list`, `route_set`), channel (`channels_list`, `channels_get_full`, `channel_put`) and
   message (`list`, `get`, the in-box row) carries `service`. A route's service is stored. A
   record with no service, or one that names no table, is refused.
-- **A message's service.** A message takes the service of its destination's book entry. A
-  broadcast (ALL), or an address the book does not hold, takes the `service` the operator picks
-  at compose. `send` and `compose_send` carry `service`. When it differs from the destination's,
+- **A message's service.** A message takes the service of its destination's book entry. An
+  address the book does not hold takes the `service` the operator picks at compose. A broadcast
+  (ALL) is a Network-layer address (D.5.2.8), so it needs a network named with it: a broadcast
+  with no `service` is refused. `send` and `compose_send` carry `service`. When it differs from the destination's,
   the send is refused as a crossing. A collective's members must all have the message's service.
 - **Received traffic** takes the service of the channel it was heard on.
-- **A send's channel.** Channel selection is the link controller's (141B D.4.2.8.2), so the
-  core passes the operator's pick down and never sets the radio. `compose_send` and `send` take
-  `channel`, a designator of the message's service. Left out, the send uses the channel the
+- **Channels belong to the link controller.** The channel table, with each channel's label,
+  frequency, mode and service, is the link controller's. The core keeps channel labels only,
+  for the screens and for nets, and it does not reason about frequency or mode. Stage 1 leaves
+  the channel plan file where it is, so `channels_get_full` and `channel_put` work as they do
+  now. Stage 2 moves the file's ownership to the controller.
+- **A send's channel.** Channel selection is the link controller's (D.4.2.8.2). The core passes
+  the operator's pick down as a requirement and never sets the radio. `compose_send` and `send`
+  take `channel`, a label of the message's service. Left out, the send uses the channel the
   controller reports the radio on, when that channel's service is the message's.
+- **The routing table** follows D.4.2.1.1 and D.5.2.1.2. It has one entry per destination,
+  and each entry also names the destination's service. Operator entries are kept, and nothing
+  automatic ever overwrites them. Each `route_set` rule is an operator entry.
 - **The one route function.** Every send path asks one function for its route: `send`,
   `compose_send`, `send_acp127`, `send_acp126`, `send_chat`, replies, `qsl` receipts,
   `retransmit`, net call-ups, BBS routing, machine answers, ACKs and orderwires, and the resend
@@ -324,8 +344,9 @@ as MARS. Alex's hard rule stands: there is no forward or auto-copy route between
 - **No station-wide transmit world.** A send carries its own service. The settings row
   `tx-world` and the keying file's `tx_world` retire.
 - **The controller, not gale-key.** The core hands each burst to greybeard-ale's station
-  controller (greybeard-ale `docs/station-controller.md`) as a network message (141B D.4.2.8),
-  and never talks to gale-key (Keying, below).
+  controller (greybeard-ale `docs/station-controller.md`) as a network message (D.4.2.8.3),
+  and never talks to gale-key (Keying, below). EMCON is the standard's "radio silence"
+  (D.5.2.7, table D-IX), a network management setting.
   `radio_channel` in `status` is the controller's report of the radio's channel and its service.
   It is no longer a label the core was told.
 - **`world` is an alias for `service` for one release.** A request carrying `world` and no
@@ -1787,24 +1808,42 @@ gale-key: the controller orders it. There is no VOX. The socket is
 controller). `--gale-key-socket` is read as it for one release. Only a station
 on the greybeard modem has one. Training refuses every call here.
 
-The caller of each request, and what it sends:
+The interface has the three parts of D.4.2.8. No channel number and no
+frequency cross it.
+
+1. **Link control** (D.4.2.8.1). The core asks for the radio, and names the
+   destination by its link-level address. The controller reports success or
+   failure, who is linked, and why a send waits: `claim`, `release` and
+   `status`. `key_status` sends `{"cmd":"status"}`.
+2. **Link quality reporting** (D.4.2.8.2). Reports per station, which feed the
+   core's stations heard. They name no channel. Today they come from the
+   scanner, and stage 1 adds none.
+3. **Network messages** (D.4.2.8.3). Each burst goes down in two parts. The
+   first is `message`, which the controller carries unopened. The second is
+   `control`, the control information: the link-level addressee `to`, the
+   `service`, and the requirements for the transmission (the `channel` label
+   the operator picked, `kind`, `control`, `final`, and the token or a
+   standing mode).
 
 | When | The core sends the controller |
 |---|---|
-| `key_prepare` | `{"cmd":"prepare","kind":"air","wav":"/abs/OUTBOX/BURST.wav","service":"S","channel":"<LABEL>","control":"local","final":false}` |
-| `key_confirm` on a send | the same with `"cmd":"key"`, `"to"` (the link-layer address) and `"token"` |
-| an automatic send, once written | `{"cmd":"key","kind":"air","wav":...,"service":"S","channel":"<LABEL>","to":"<ADDRESS>","control":"automatic","final":false,"standing":"routing"}` |
+| `key_prepare` | `{"cmd":"prepare","message":{"wav":"/abs/OUTBOX/BURST.wav"},"control":{"to":"<ADDRESS>","service":"S","channel":"<LABEL>","kind":"air","control":"local","final":false}}` |
+| `key_confirm` on a send | the same with `"cmd":"key"` and `"token"` in `control` |
+| an automatic send, once written | `{"cmd":"key","message":{"wav":...},"control":{"to":"<ADDRESS>","service":"S","channel":"<LABEL>","kind":"air","control":"automatic","final":false,"standing":"routing"}}` |
 | an ACK or orderwire, once written | the same with `"standing":"machine"` |
 | `standing_prepare` | `{"cmd":"prepare","kind":"standing:routing","service":"S"}` |
 | `key_confirm` on a mode | `{"cmd":"grant","mode":"routing","service":"S","token":...}` |
 | `standing_off`, or the BBS mode turned off | `{"cmd":"revoke","mode":"routing"}` (or `"all"`) |
 | `key_status` | `{"cmd":"status"}` |
 
-**The reply comes when the controller accepts the send.** It accepts the
-send and takes custody of it, and then it claims the radio, tunes it, reads
-it back and orders gale-key. `--controller-timeout-ms` (default 5000) bounds
-that reply and never the key. The outcome arrives only as the result file
-(Transmit, above).
+Grants and revocations are network management, and the controller passes them
+to gale-key.
+
+**The reply comes when the controller accepts the send.** The controller
+takes custody of what it accepts and answers at once. It then claims the
+radio, tunes it, reads it back and orders gale-key. `--controller-timeout-ms`
+(default 5000) bounds that reply, never the key. The result follows when the
+key is over, as the result file (Transmit, above).
 
 A burst is handed down only when all of these hold. Otherwise the call is
 refused with the reason, or, for an automatic send, the reason is logged once:
