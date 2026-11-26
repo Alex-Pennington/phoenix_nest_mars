@@ -48,7 +48,7 @@ struct Event {
 
 struct QueueCounts {
     int queued = 0, sending = 0, sent = 0, acked = 0, failed = 0, received = 0;
-    int unacked = 0, held = 0, cancelled = 0, overheard = 0, garbled = 0, unverified = 0;
+    int unacked = 0, held = 0, cancelled = 0, overheard = 0, garbled = 0, unverified = 0, written = 0;
 };
 
 class Store {
@@ -93,6 +93,10 @@ public:
     // Went out whole: state sent, one more send, and the time an ack is due
     // (0: none is expected).
     void mark_sent(const std::string& id, int64_t ack_due);
+    // Written to the outbox as `burst`, not on the air yet (the write-back).
+    void mark_written(const std::string& id, const std::string& burst);
+    // The message of ours a burst file holds, if any.
+    std::optional<std::string> id_by_burst(const std::string& burst);
     // Sent messages whose ack is overdue.
     std::vector<Message> overdue_acks(int64_t now);
     // Back to the queue with fresh counts (the operator's requeue, or a

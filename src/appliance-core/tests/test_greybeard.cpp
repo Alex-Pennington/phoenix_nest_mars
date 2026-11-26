@@ -25,6 +25,16 @@ static void write(const fs::path& p, const std::string& s) {
     f << s;
 }
 
+static double json_num(const std::string& reply, const char* k) {
+    JsonValue v;
+    if (!parse_json(reply, v) || !v.is_object()) return -1;
+    const JsonValue* x = v.get(k);
+    if (!x) {
+        const JsonValue* q = v.get("queue");
+        x = q && q->is_object() ? q->get(k) : nullptr;
+    }
+    return x && x->type == JsonValue::Type::Number ? x->n : -1;
+}
 static bool wait_for(const std::function<bool()>& cond, int ms) {
     auto end = std::chrono::steady_clock::now() + std::chrono::milliseconds(ms);
     while (std::chrono::steady_clock::now() < end) {
@@ -251,7 +261,7 @@ int main() {
         std::atomic<bool> run{true};
         std::thread channel([&] {
             while (run) {
-                run_program({"python3", "-I", kSrc + "/tools/stub_channel.py", "--once", "--from",
+                run_program({"python3", "-I", kSrc + "/tools/stub_channel.py", "--once", "--key-results", "--from",
                              (dir / "A-outbox").string(), "--to", capB, "--from", (dir / "B-outbox").string(),
                              "--to", capA},
                             10000);
@@ -262,6 +272,12 @@ int main() {
         std::string id = a.submit("B", 'P', "HELLO B THROUGH GREYBEARD\r\nLINE 2", &err);
         CHECK(!id.empty());
         CHECK(wait_for([&] { auto m = a.get(id); return m && m->state == "acked"; }, 20000));
+        // The channel played gale-key's part: each burst's key result came back.
+        CHECK(wait_for([&] {
+            for (auto& e : a.events(0, 500))
+                if (e.text.find("keyed by gale-key") != std::string::npos) return true;
+            return false;
+        }, 5000));
         auto rx = b.get(id);
         CHECK(rx && rx->body == "HELLO B THROUGH GREYBEARD\r\nLINE 2" && rx->src == "A");
         std::string back = b.submit("A", 'Z', "ROGER", &err);
@@ -271,6 +287,67 @@ int main() {
         channel.join();
         a.stop();
         b.stop();
+    }
+
+    // The outbox write-back: a burst in the outbox is "written", not sent.
+    // gale-key's BURST.key.json says it keyed it (sent, the ack clock starts)
+    // or refused (failed, with its reason); one that can't be read is kept as
+    // .bad and changes nothing.
+    {
+        GreybeardConfig c;
+        c.mode = "600S";
+        c.tx_cmd = {"python3", "-I", kSrc + "/tools/stub_gale_tx.py"};
+        c.captures_dir = (dir / "K-cap").string();
+        c.work_dir = (dir / "K-work").string();
+        c.outbox_dir = (dir / "K-outbox").string();
+        c.state_file = (dir / "K-seen.txt").string();
+        c.poll_ms = 50;
+        CoreConfig cc{"K", (dir / "K.db").string(), 3, 1, true};
+        cc.ack_timeout_s = 600;
+        Core k(cc, std::make_unique<GreybeardModem>(c));
+        k.start();
+        auto burst_of = [&](const std::string& id) {
+            for (auto& e : k.events(0, 500))
+                if (e.msg_id == id && e.text.rfind("written to the outbox as ", 0) == 0) {
+                    std::string b = e.text.substr(25);
+                    return b.substr(0, b.find(';'));
+                }
+            return std::string();
+        };
+        auto state = [&](const std::string& id) {
+            auto m = k.get(id);
+            return m ? m->state : std::string();
+        };
+        std::string err;
+        const std::string one = k.submit("FAR", 'R', "KEY ME", &err), two = k.submit("FAR", 'R', "REFUSE ME", &err);
+        CHECK(wait_for([&] { return state(one) == "written" && state(two) == "written"; }, 10000));
+        const std::string b1 = burst_of(one), b2 = burst_of(two);
+        CHECK(!b1.empty() && fs::exists(fs::path(c.outbox_dir) / b1) && !b2.empty());
+        std::this_thread::sleep_for(std::chrono::milliseconds(300));
+        CHECK(state(one) == "written");  // nothing keyed it: still not sent
+        CHECK(json_num(ApiServer::handle(k, R"({"cmd":"status"})"), "written") == 2);
+        auto key = [&](const std::string& b, const std::string& body) {
+            write(fs::path(c.outbox_dir) / (b.substr(0, b.size() - 4) + ".key.json"), body);
+        };
+        // One that names another burst is not taken.
+        key(b1, R"({"version":1,"burst":")" + b2 + R"(","result":"keyed"})");
+        CHECK(wait_for([&] { return fs::exists(fs::path(c.outbox_dir) / (b1.substr(0, b1.size() - 4) + ".key.json.bad")); },
+                       3000));
+        CHECK(state(one) == "written" && state(two) == "written");
+        key(b1, R"({"version":1,"burst":")" + b1 + R"(","result":"keyed","why":""})");
+        key(b2, R"({"version":1,"burst":")" + b2 + R"(","result":"refused","why":"EMCON is on"})");
+        CHECK(wait_for([&] { return state(one) == "sent" && state(two) == "failed"; }, 3000));
+        {
+            auto m = k.get(two);
+            CHECK(m && m->last_error == "not keyed: EMCON is on");
+            auto s = k.get(one);
+            CHECK(s && s->sends == 1 && s->next_try_at > 0);  // the ack clock runs from the key
+            CHECK(!fs::exists(fs::path(c.outbox_dir) / (b1.substr(0, b1.size() - 4) + ".key.json")));
+        }
+        // A refused one goes again only when the operator requeues it.
+        CHECK(k.requeue(two, &err));
+        CHECK(wait_for([&] { return state(two) == "written"; }, 10000));
+        k.stop();
     }
 
     // A decode goes into the inbox whole, flagged unverified (issue 3 ruling):

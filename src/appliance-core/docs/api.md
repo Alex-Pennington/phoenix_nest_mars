@@ -1200,6 +1200,10 @@ Outgoing: `queued`, `sending`, `sent`, `acked`, `failed`, and:
 
 - `unacked`: went out 1 + `ack_retries` times with no ack. Goes again by
   itself when its station is heard.
+- `written` (greybeard modem): the burst is in the outbox but nothing has
+  keyed it yet. It becomes `sent` only when gale-key's key result says it was
+  keyed, and `failed` ("not keyed: why") when gale-key refused. See
+  "Transmit: written, then sent" below. `cancel` and `requeue` work on it.
 - `held`: the operator held it.
 - `cancelled`: the operator cancelled it.
 - `expired`: still not through `--expire-h` hours after it was filed.
@@ -1557,3 +1561,24 @@ database, as `KIND-FROM-TO.txt` (gale-term's name; an earlier file of the same
 name is replaced), and returns `{"ok":true,"kind","from","to","folder","file","bytes"}`.
 It is MSG-REPORTS `e`. A bad kind or day gets `report`'s own error and writes
 nothing. In training it writes to the practice station's folder, as `export` does.
+
+## Transmit: written, then sent (stub for gale-key)
+
+The core never keys the radio. With the greybeard modem it writes each burst
+to the outbox as `BURST.wav` and marks the message `written`. gale-key keys
+it (or refuses) and then writes one result file beside it, whole, by writing
+`.BURST.key.json.tmp` and renaming it to `BURST.key.json`:
+
+```
+{"version":1,"burst":"BURST.wav","result":"keyed","why":"","at":"2026-11-26T15:00:00Z"}
+```
+
+- `result` is `keyed` or `refused`; `why` says why it refused (shown to the
+  operator as "not keyed: why").
+- On `keyed` the message becomes `sent` and its ack clock starts then.
+- The core reads and removes each result file. One it can't read, or one
+  naming another burst, is renamed `.key.json.bad` and changes nothing.
+- A result for an ack or orderwire burst is logged only.
+- There is no timeout: a burst stays `written` until a result comes.
+- `status` counts `written`. `tools/stub_channel.py --key-results` writes
+  these files for testing.

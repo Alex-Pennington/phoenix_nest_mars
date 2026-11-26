@@ -89,6 +89,13 @@ Store::Store(const std::string& path) {
             if (t.text(1) == "world") has = true;
         if (!has) exec("ALTER TABLE messages ADD COLUMN world TEXT NOT NULL DEFAULT 'mars'");
     }
+    {
+        bool has = false;
+        Stmt t(db_, "PRAGMA table_info(messages)");
+        while (t.step())
+            if (t.text(1) == "burst") has = true;
+        if (!has) exec("ALTER TABLE messages ADD COLUMN burst TEXT NOT NULL DEFAULT ''");
+    }
     exec("CREATE TABLE IF NOT EXISTS links (station TEXT PRIMARY KEY, format TEXT NOT NULL)");
     exec("CREATE TABLE IF NOT EXISTS keymaster_refused (station TEXT PRIMARY KEY, fingerprint TEXT NOT NULL,"
          " at INTEGER NOT NULL)");
@@ -272,6 +279,7 @@ QueueCounts Store::counts() {
         else if (st == "overheard") c.overheard = n;
         else if (st == "garbled") c.garbled = n;
         else if (st == "unverified") c.unverified = n;
+        else if (st == "written") c.written = n;
     }
     return c;
 }
@@ -281,6 +289,20 @@ void Store::mark_sent(const std::string& id, int64_t ack_due) {
            "UPDATE messages SET state = 'sent', sends = sends + 1, next_try_at = ?, updated_at = ? WHERE id = ?");
     s.bind(1, ack_due).bind(2, now_utc()).bind(3, id);
     s.step();
+}
+
+void Store::mark_written(const std::string& id, const std::string& burst) {
+    Stmt s(db_, "UPDATE messages SET state = 'written', burst = ?, next_try_at = 0, updated_at = ? WHERE id = ?");
+    s.bind(1, burst).bind(2, now_utc()).bind(3, id);
+    s.step();
+}
+
+std::optional<std::string> Store::id_by_burst(const std::string& burst) {
+    if (burst.empty()) return std::nullopt;
+    Stmt s(db_, "SELECT id FROM messages WHERE direction = 'out' AND burst = ? ORDER BY rowid DESC LIMIT 1");
+    s.bind(1, burst);
+    if (!s.step()) return std::nullopt;
+    return s.text(0);
 }
 
 std::vector<Message> Store::overdue_acks(int64_t now) {

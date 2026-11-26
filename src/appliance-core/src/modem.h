@@ -28,6 +28,15 @@ public:
         // with no bytes hidden). Called just before on_rx gets the same bytes.
         // Optional: a modem that has no bursts never calls it.
         std::function<void(const ModemDecode& d)> on_decode;
+        // The send ended as an audio file in the outbox that is not on the air
+        // yet (greybeard-ale's gale-key keys it). Called just before
+        // on_tx_done(true) for that send, with the burst's file name. A modem
+        // that keys itself never calls it.
+        std::function<void(const std::string& burst)> on_tx_written;
+        // What gale-key did with a burst it was written: keyed on the air, or
+        // refused (why says why). Called once per result, from the modem's
+        // own thread, at any later time.
+        std::function<void(const std::string& burst, bool keyed, const std::string& why)> on_key_result;
     };
 
     virtual ~ModemDriver() = default;

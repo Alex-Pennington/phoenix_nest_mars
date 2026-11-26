@@ -268,6 +268,9 @@ private:
     void handle_rx(const std::string& bytes);
     void decode_in(const ModemDecode& d);
     void handle_tx_done(bool ok, const std::string& err);
+    // The outbox write-back: gale-key keyed a burst (sent from now) or
+    // refused it (failed, with why).
+    void handle_key_result(const std::string& burst, bool keyed, const std::string& why);
     void log(const std::string& msg_id, const std::string& text);
     void release_due_parts();  // caller holds mu_
     void read_codress(const std::string& id, const std::string& body);  // caller holds mu_
@@ -298,6 +301,7 @@ private:
     std::deque<Answer> acks_;
     std::optional<Frame> on_air_;      // what the modem is sending now
     bool on_air_plain_ = false;        // ... as bare text, no PNA1 frame
+    std::string written_burst_;        // the send ended as this outbox file, not on the air yet
     bool emcon_ = false;
     std::chrono::steady_clock::time_point last_air_{};    // last send done or byte heard
     std::string loose_;                                   // bare text not yet cut into messages

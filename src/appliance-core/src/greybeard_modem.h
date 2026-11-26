@@ -53,6 +53,9 @@ struct GreybeardConfig {
     int tx_timeout_ms = 60000;
     int poll_ms = 500;
     int settle_ms = 30000;       // how long a listed file may stay missing or short
+    // The outbox write-back: a burst is "written", not "sent", until gale-key
+    // leaves BURST.key.json beside it saying it keyed it (or refused to).
+    bool await_key = true;
 };
 
 class GreybeardModem : public ModemDriver {
@@ -69,6 +72,9 @@ public:
 
     // One pass over the capture folders; the watcher thread calls it, tests may too.
     void scan_captures();
+    // One pass over the outbox for gale-key's results (BURST.key.json); the
+    // watcher thread calls it, tests may too.
+    void scan_key_results();
     // The last burst written to the outbox (for status and tests).
     std::string last_burst() const;
 

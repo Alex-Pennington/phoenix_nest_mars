@@ -50,6 +50,13 @@ void Core::start() {
     cb.on_rx = [this](const std::string& b) { handle_rx(b); };
     cb.on_decode = [this](const ModemDecode& d) { decode_in(d); };
     cb.on_tx_done = [this](bool ok, const std::string& e) { handle_tx_done(ok, e); };
+    cb.on_tx_written = [this](const std::string& burst) {
+        std::lock_guard<std::mutex> g(mu_);
+        written_burst_ = burst;
+    };
+    cb.on_key_result = [this](const std::string& burst, bool keyed, const std::string& why) {
+        handle_key_result(burst, keyed, why);
+    };
     cb.on_event = [this](const std::string& t) {
         std::lock_guard<std::mutex> g(mu_);
         log("", t);
@@ -575,6 +582,8 @@ void Core::handle_tx_done(bool ok, const std::string& err) {
     on_air_.reset();
     on_air_plain_ = false;
     last_air_ = std::chrono::steady_clock::now();
+    const std::string burst = ok ? written_burst_ : std::string();
+    written_burst_.clear();
 
     if (f.type == FrameType::Ack) {
         const bool ow = f.id.compare(0, 3, "OW-") == 0;
@@ -588,6 +597,13 @@ void Core::handle_tx_done(bool ok, const std::string& err) {
             return;
         }
         if (now_m && now_m->state == "cancelled") return;
+        if (!burst.empty()) {
+            // The write-back: a file in the outbox is not on the air. It is
+            // sent only when gale-key says it keyed it (handle_key_result).
+            store_.mark_written(f.id, burst);
+            log(f.id, "written to the outbox as " + burst + "; not on the air until gale-key keys it");
+            return;
+        }
         // Only our own frames and CP's chat form are answered on the air.
         const bool cp_chat = plain && f.body.compare(0, 5, "chat|") == 0;
         const bool awaits = !is_broadcast(f.dst) && cfg_.send_acks && (!plain || cp_chat);
@@ -607,6 +623,33 @@ void Core::handle_tx_done(bool ok, const std::string& err) {
         store_.schedule_retry(f.id, now_utc() + delay, err);
         log(f.id, "send failed (" + err + "), retry in " + std::to_string(delay) + " s");
     }
+}
+
+void Core::handle_key_result(const std::string& burst, bool keyed, const std::string& why) {
+    std::lock_guard<std::mutex> g(mu_);
+    auto id = store_.id_by_burst(burst);
+    auto m = id ? store_.get(*id) : std::nullopt;
+    const std::string said = keyed ? "keyed by gale-key" : "not keyed by gale-key: " + (why.empty() ? "no reason given" : why);
+    if (!m) {
+        log("", burst + " " + said + " (an ack, an orderwire or traffic no longer held)");
+        return;
+    }
+    if (m->state != "written") {
+        log(m->id, burst + " " + said + " (it is " + m->state + " now, so nothing changes)");
+        return;
+    }
+    if (!keyed) {
+        store_.set_state(m->id, "failed", "not keyed: " + (why.empty() ? "gale-key gave no reason" : why));
+        log(m->id, burst + " " + said + "; failed (requeue to try again)");
+        return;
+    }
+    const bool plain = !is_broadcast(m->dst) && store_.link_format(m->dst) == "plain";
+    const bool cp_chat = plain && m->body.compare(0, 5, "chat|") == 0;
+    const bool awaits = !is_broadcast(m->dst) && cfg_.send_acks && (!plain || cp_chat);
+    store_.mark_sent(m->id, awaits && cfg_.ack_timeout_s > 0 ? now_utc() + cfg_.ack_timeout_s : 0);
+    if (is_broadcast(m->dst)) log(m->id, burst + " keyed by gale-key: sent to all stations, no ack expected");
+    else if (plain && !cp_chat) log(m->id, burst + " keyed by gale-key: sent as plain text; this link has no ack on the air");
+    else log(m->id, burst + (awaits ? " keyed by gale-key: sent, waiting for ack" : " keyed by gale-key: sent"));
 }
 
 // Every byte of a burst, as text that hides none: printable ASCII and line
@@ -771,8 +814,9 @@ bool Core::cancel(const std::string& id, std::string* error, const std::string& 
     if (on_air_ && on_air_->id == id && on_air_->type == FrameType::Msg)
         return refuse(error, id + " is on the air now; cancel it when the send ends");
     if (m->state != "queued" && m->state != "held" && m->state != "sent" && m->state != "unacked" &&
-        m->state != "failed")
-        return refuse(error, id + " is " + m->state + "; only queued, held, sent, unacked or failed traffic can be cancelled");
+        m->state != "failed" && m->state != "written")
+        return refuse(error, id + " is " + m->state +
+                                 "; only queued, held, written, sent, unacked or failed traffic can be cancelled");
     store_.set_state(id, "cancelled", "cancelled by " + by);
     log(id, "cancelled by " + by + " (was " + m->state + ")");
     return true;
@@ -839,9 +883,9 @@ bool Core::requeue(const std::string& id, std::string* error) {
     auto m = store_.get(id);
     if (!m || m->direction != "out") return refuse(error, "no message " + id + " of ours");
     if (m->state != "failed" && m->state != "unacked" && m->state != "cancelled" && m->state != "held" &&
-        m->state != "expired")
+        m->state != "expired" && m->state != "written")
         return refuse(error, id + " is " + m->state +
-                                 "; only failed, unacked, cancelled, expired or held traffic can be requeued");
+                                 "; only failed, unacked, cancelled, expired, written or held traffic can be requeued");
     if (m->world != "mars") return refuse(error, id + " is an amateur-world item; the MARS message center never sends it");
     if (std::string why = world_refusal(m->dst); !why.empty()) return refuse(error, why);
     overdue_.erase(id);

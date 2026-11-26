@@ -2803,6 +2803,7 @@ std::string ApiServer::handle_call(Core& core, const std::string& line) {
             .field("overheard", s.counts.overheard)
             .field("garbled", s.counts.garbled)
             .field("unverified", s.counts.unverified)
+            .field("written", s.counts.written)
             .field("emcon", s.emcon)
             .field("acks_waiting", s.acks_waiting)
             .field("frames_dropped", static_cast<long long>(s.frames_dropped));

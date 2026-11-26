@@ -200,6 +200,7 @@ void GreybeardModem::tx_loop() {
         std::error_code ec;
         fs::remove(payload, ec);
         sending_ = false;
+        if (ok && cfg_.await_key && cb_.on_tx_written) cb_.on_tx_written(burst.filename().string());
         if (cb_.on_tx_done) cb_.on_tx_done(ok, why);
     }
 }
@@ -207,8 +208,55 @@ void GreybeardModem::tx_loop() {
 void GreybeardModem::rx_loop() {
     while (running_) {
         scan_captures();
+        if (cfg_.await_key) scan_key_results();
         std::unique_lock<std::mutex> lk(mu_);
         cv_.wait_for(lk, std::chrono::milliseconds(cfg_.poll_ms), [this] { return !running_.load(); });
+    }
+}
+
+// gale-key's write-back (docs/api.md, "Transmit: written, then sent"):
+// BURST.key.json in the outbox, beside the BURST.wav it is about:
+//   {"version":1,"burst":"BURST.wav","result":"keyed"|"refused","why":"..."}
+// Read once, handed to the core, then removed; one that can't be read is
+// renamed BURST.key.json.bad so it is looked at once and kept for a person.
+void GreybeardModem::scan_key_results() {
+    if (cfg_.outbox_dir.empty()) return;
+    std::error_code ec;
+    std::vector<fs::path> found;
+    for (auto& de : fs::directory_iterator(cfg_.outbox_dir, ec)) {
+        const std::string n = de.path().filename().string();
+        const std::string suffix = ".key.json";
+        if (n.empty() || n[0] == '.' || n.size() <= suffix.size() ||
+            n.compare(n.size() - suffix.size(), suffix.size(), suffix) != 0)
+            continue;
+        found.push_back(de.path());
+    }
+    std::sort(found.begin(), found.end());
+    for (auto& p : found) {
+        const std::string n = p.filename().string();
+        const std::string expect = n.substr(0, n.size() - 9) + ".wav";
+        std::ifstream f(p, std::ios::binary);
+        std::stringstream ss;
+        ss << f.rdbuf();
+        f.close();
+        JsonValue v;
+        std::string bad;
+        if (!parse_json(ss.str(), v) || !v.is_object()) bad = "not JSON";
+        auto text = [&](const char* k) {
+            const JsonValue* x = v.is_object() ? v.get(k) : nullptr;
+            return x && x->type == JsonValue::Type::String ? x->s : std::string();
+        };
+        const std::string burst = text("burst").empty() ? expect : text("burst");
+        const std::string result = text("result");
+        if (bad.empty() && burst != expect) bad = "it names " + burst + ", not " + expect;
+        if (bad.empty() && result != "keyed" && result != "refused") bad = "result must be keyed or refused";
+        if (!bad.empty()) {
+            fs::rename(p, fs::path(p.string() + ".bad"), ec);
+            event("gale-key result " + n + " not read (" + bad + "); kept as " + n + ".bad");
+            continue;
+        }
+        fs::remove(p, ec);
+        if (cb_.on_key_result) cb_.on_key_result(burst, result == "keyed", text("why"));
     }
 }
 
