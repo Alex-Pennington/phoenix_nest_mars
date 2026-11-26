@@ -146,6 +146,17 @@ bool core_standing_mode(const std::string& mode) {
     return std::find(m.begin(), m.end(), mode) != m.end();
 }
 
+bool gale_key_holds_no_grant(const GaleKeyReply& r, const std::string& mode) {
+    // greybeard-ale tools/gale_key.py, the key under a grant:
+    //   raise Refused(f"no standing grant for {standing}: the operator's y when turning it on grants it")
+    // answered {"ok": false, "exit": EXIT_REFUSED (2), "reason": ...}. Exit 2
+    // is every refusal (docs/gale-tx.md, Command line), so the wording is the
+    // only mark. Bound to the mode asked for, so gale-key's other "no standing
+    // grant for amateur_auto" refusal can't turn a MARS mode off.
+    constexpr int kRefused = 2;
+    return r.answered && !r.ok && r.exit == kRefused && r.reason.rfind("no standing grant for " + mode, 0) == 0;
+}
+
 std::string no_frequency(const std::string& s) {
     // A bare number of six digits or more standing on its own is taken as a
     // frequency in Hz. One joined to a name (a burst's time stamp, a path's
@@ -206,6 +217,21 @@ void GaleKey::set_clock(std::function<double()> clock) {
 void GaleKey::set_log(std::function<void(const std::string&, const std::string&)> log) {
     std::lock_guard<std::mutex> g(mu_);
     log_ = std::move(log);
+}
+
+void GaleKey::set_around(Around around) {
+    std::lock_guard<std::mutex> g(mu_);
+    around_ = std::move(around);
+}
+
+GaleKeyReply GaleKey::send_key(const KeyItem& it, const std::string& request) {
+    Around a;
+    {
+        std::lock_guard<std::mutex> g(mu_);
+        a = around_;
+    }
+    if (!a) return ask(request);
+    return a(it, [this, &request] { return ask(request); });
 }
 
 void GaleKey::note(const std::string& msg_id, const std::string& text) {
@@ -474,7 +500,7 @@ GaleKeyReply GaleKey::key(const Held& h) {
     JsonWriter t;
     t.begin_object().field("token", h.token).end_object();
     req += "," + t.str().substr(1);  // ,"token":"..."}
-    GaleKeyReply r = ask(req);
+    GaleKeyReply r = send_key(h.item, req);
     note(h.item.msg_id, "asked gale-key to key " + h.item.burst + " on the operator's y: " +
                             (r.answered ? (r.ok ? std::string("it answered ok") : "it answered " + no_frequency(r.reason))
                                         : no_frequency(r.reason)) +
@@ -530,11 +556,11 @@ GaleKeyReply GaleKey::key_standing_now(const KeyItem& it, const std::string& mod
     JsonWriter t;
     t.begin_object().field("standing", mode).end_object();
     req += "," + t.str().substr(1);
-    GaleKeyReply r = ask(req);
+    GaleKeyReply r = send_key(it, req);
     // gale-key revokes grants itself (the hourly cap, a change of transmit
     // world). Told it holds none for this mode, the core turns the mode off
     // too, so its next bursts wait for the operator's y instead of failing.
-    if (r.answered && !r.ok && r.reason.rfind("no standing grant", 0) == 0) {
+    if (gale_key_holds_no_grant(r, mode)) {
         {
             std::lock_guard<std::mutex> g(mu_);
             standing_.erase(mode);

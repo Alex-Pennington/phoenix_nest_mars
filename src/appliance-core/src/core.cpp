@@ -592,6 +592,22 @@ void Core::handle_tx_done(bool ok, const std::string& err) {
     if (f.type == FrameType::Ack) {
         const bool ow = f.id.compare(0, 3, "OW-") == 0;
         if (!ok) log(ow ? "" : f.id, (ow ? "orderwire to " : "ack to ") + f.dst + " failed: " + err);
+        if (ok && !burst.empty()) {
+            // Written to the outbox, not on the air: gale-key keys it under
+            // standing machine (key_answers), on the channel the radio is on.
+            // It takes the world of the message it answers, or of the station
+            // it goes to.
+            AnswerBurst a;
+            a.about = ow ? std::string() : f.id;
+            a.what = (ow ? "orderwire to " : "ack to ") + f.dst;
+            a.dst = f.dst;
+            auto m = ow ? std::nullopt : store_.get(f.id);
+            a.world = m && !m->world.empty() ? m->world : (world_refusal(f.dst).empty() ? "mars" : "amateur");
+            a.channel = tuner_->current_channel();
+            answer_bursts_[burst] = a;
+            log(a.about, a.what + " written to the outbox as " + burst +
+                             "; not on the air until gale-key keys it (under standing machine)");
+        }
         return;
     }
     if (ok) {
@@ -635,11 +651,42 @@ void Core::handle_tx_done(bool ok, const std::string& err) {
 
 void Core::set_gale_key(std::shared_ptr<GaleKey> g) {
     gk_ = std::move(g);
-    if (gk_)
-        gk_->set_log([this](const std::string& id, const std::string& text) {
+    if (!gk_) return;
+    gk_->set_log([this](const std::string& id, const std::string& text) {
+        std::lock_guard<std::mutex> lk(mu_);
+        log(id, text);
+    });
+    // The tuner's sequence around every key gale-key is asked for (tuner.h,
+    // around_key): tuner_pre_tx first, and the key only on ok; tuner_post_tx
+    // once gale-key's key has ended. With no tuner daemon, the key goes as is.
+    GaleKey* gk = gk_.get();
+    gk_->set_around([this, gk](const KeyItem& it, const std::function<GaleKeyReply()>& send) {
+        std::shared_ptr<TunerKeying> tk = tuner_;
+        GaleKeyReply r;
+        bool asked = false;
+        TunerOutcome o = tk->around_key(
+            [&] { r = send(); },
+            [&] {
+                // gale-key answers a key once it has ended. One that took the
+                // request and answered after the timeout may still be keyed:
+                // its status says when it no longer is (and waits for it).
+                if (r.answered || !r.reached) return true;
+                GaleKeyReply st = gk->status();
+                const JsonValue* k = st.answered ? st.body.get("keyed") : nullptr;
+                return k && k->type == JsonValue::Type::Bool && !k->b;
+            },
+            &asked);
+        if (!asked) {
+            GaleKeyReply n;
+            n.reason = "tuner_pre_tx " + o.code + ": " + o.reason + "; gale-key not asked to key";
+            return n;
+        }
+        if (!o.ok) {
             std::lock_guard<std::mutex> lk(mu_);
-            log(id, text);
-        });
+            log(it.msg_id, "after gale-key's key of " + it.burst + ": " + no_frequency(o.reason));
+        }
+        return r;
+    });
 }
 
 bool Core::key_checks(const Store::KeyRow& r, std::string* error) {
@@ -718,11 +765,58 @@ void Core::standing_off(const std::string& mode, const std::string& why) {
     if (gk_) gk_->revoke(mode, why);
 }
 
+size_t Core::answer_bursts() {
+    std::lock_guard<std::mutex> g(mu_);
+    return answer_bursts_.size();
+}
+
+// Caller holds mu_. ACK and orderwire bursts: keyed under standing machine
+// only, MARS only, on the channel they were written on (ask 40).
+void Core::key_answers(bool machine_on) {
+    const auto now = std::chrono::steady_clock::now();
+    for (auto& [burst, a] : answer_bursts_) {
+        if (a.queued || a.asked) continue;
+        std::string why;
+        if (a.world != "mars")
+            why = "it answers an item of the " + a.world + " world: the MARS message center never asks gale-key to key it";
+        else if (std::string w = world_refusal(a.dst); !w.empty())
+            why = w + " (ask 40)";
+        else if (a.channel.empty())
+            why = "no channel was set through tuner_channel when it was written: never sent to gale-key";
+        if (!why.empty()) {
+            if (key_told_.insert(burst).second) log(a.about, a.what + " (" + burst + ") not asked of gale-key: " + why);
+            continue;
+        }
+        if (!machine_on || now < a.retry) continue;
+        a.queued = true;
+        gk_->key_standing(
+            KeyItem{a.about, burst, a.world, a.channel}, "machine",
+            [this](const KeyItem& it) {
+                std::lock_guard<std::mutex> g(mu_);
+                auto x = answer_bursts_.find(it.burst);
+                if (x == answer_bursts_.end()) return false;
+                x->second.queued = false;
+                if (emcon_ || x->second.asked || !world_refusal(x->second.dst).empty()) return false;
+                x->second.asked = true;
+                return true;
+            },
+            [this](const KeyItem& it, const GaleKeyReply& rep) {
+                if (rep.reached) return;
+                std::lock_guard<std::mutex> g(mu_);
+                auto x = answer_bursts_.find(it.burst);
+                if (x == answer_bursts_.end()) return;
+                x->second.asked = false;
+                x->second.retry = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+            });
+    }
+}
+
 void Core::key_automatic() {
     if (!gk_) return;
     gk_->held();  // y dialogs past gale-key's 120 s are dropped here, even if never touched again
     if (emcon_) return;
     const std::vector<std::string> on = gk_->standing();
+    key_answers(std::find(on.begin(), on.end(), "machine") != on.end());
     if (on.empty()) return;
     const auto now = std::chrono::steady_clock::now();
     for (auto& r : store_.written_automatic(16)) {
@@ -761,6 +855,13 @@ void Core::handle_key_result(const std::string& burst, bool keyed, const std::st
     auto id = store_.id_by_burst(burst);
     auto m = id ? store_.get(*id) : std::nullopt;
     const std::string said = keyed ? "keyed by gale-key" : "not keyed by gale-key: " + (why.empty() ? "no reason given" : why);
+    if (auto a = answer_bursts_.find(burst); a != answer_bursts_.end() && !m) {
+        // An ACK or orderwire: its result is logged only.
+        log(a->second.about, a->second.what + " (" + burst + ") " + said);
+        key_told_.erase(burst);
+        answer_bursts_.erase(a);
+        return;
+    }
     if (!m) {
         log("", burst + " " + said + " (an ack, an orderwire or traffic no longer held)");
         return;

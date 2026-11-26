@@ -36,7 +36,8 @@ void write_keying(JsonWriter& w, Core& core) {
     w.begin_object("keying");
     if (!gk) {
         w.field("gale_key", "none").field("why", "no gale-key is set up for this station: nothing is keyed");
-        w.begin_array("standing").end_array().field("held", 0).end_object();
+        w.begin_array("standing").end_array().field("held", 0);
+        w.field("answers_written", static_cast<long long>(core.answer_bursts())).end_object();
         return;
     }
     std::string why;
@@ -52,7 +53,9 @@ void write_keying(JsonWriter& w, Core& core) {
     w.field("gale_key", state).field("socket", where).field("why", no_frequency(why));
     w.begin_array("standing");
     for (auto& m : gk->standing()) w.field("", m);
-    w.end_array().field("held", static_cast<long long>(gk->held())).end_object();
+    w.end_array().field("held", static_cast<long long>(gk->held()));
+    // ACK and orderwire bursts in the outbox with no result yet (keyed under machine only).
+    w.field("answers_written", static_cast<long long>(core.answer_bursts())).end_object();
 }
 
 std::optional<std::string> handle_key(Core& core, const std::string& cmd, std::map<std::string, std::string>& req) {
