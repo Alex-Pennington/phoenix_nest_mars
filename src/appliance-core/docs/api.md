@@ -521,7 +521,7 @@ lines.
 No line quotes a capture's file name that carries its dial (the engine's
 `_<dial>kHz` tag), nor the listing or payload files named after it. Each
 becomes `a capture on DESIGNATOR` when a channel in the plan has that dial,
-else `a capture`. Each line goes to standard error as the log holds it.
+else `a capture`. Each line goes to standard output as the log holds it.
 
 ## list, get
 
