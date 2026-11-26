@@ -840,12 +840,13 @@ void Core::key_automatic() {
         key_queued_.insert(r.id);
         gk_->key_standing(
             KeyItem{r.id, r.burst, r.world, r.channel}, r.mode,
-            [this](const KeyItem& it) {
+            [this, mode = r.mode](const KeyItem& it) {
                 std::lock_guard<std::mutex> g(mu_);
                 key_queued_.erase(it.msg_id);
                 auto row = store_.key_row(it.msg_id);
                 std::string why;
-                if (!row || row->burst != it.burst || !key_checks(*row, &why)) return false;
+                // Still that mode's: an operator's requeue or release made it his own.
+                if (!row || row->burst != it.burst || row->mode != mode || !key_checks(*row, &why)) return false;
                 return store_.claim_key(it.msg_id, it.burst);
             },
             [this](const KeyItem& it, const GaleKeyReply& rep) {
@@ -1118,6 +1119,8 @@ bool Core::release(const std::string& id, std::string* error) {
     if (m->world != "mars") return refuse(error, id + " is an amateur-world item; the MARS message center never sends it");
     if (std::string why = world_refusal(m->dst); !why.empty()) return refuse(error, why);
     store_.set_state(id, "queued");
+    // The operator's own from here: no standing grant keys it, only a y.
+    store_.set_key_mode(id, "");
     log(id, "released to the queue");
     return true;
 }
@@ -1135,6 +1138,9 @@ bool Core::requeue(const std::string& id, std::string* error) {
     overdue_.erase(id);
     if (m->state == "expired") no_expire_.insert(id);
     store_.requeue(id, false);
+    // The operator's own from here: no standing grant keys it, only a y.
+    store_.set_key_mode(id, "");
+    key_retry_.erase(id);
     log(id, "put back in the queue by the operator (was " + m->state + ")");
     return true;
 }

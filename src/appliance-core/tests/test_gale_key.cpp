@@ -1053,6 +1053,50 @@ int main() {
         CHECK(wait_for([&] { return s.state(id) == "sent"; }, 5000));
     }
 
+    // ---- the operator's requeue or release makes an automatic send the
+    // operator's own: a standing grant never keys it, only key_prepare and a y
+    {
+        FakeGaleKey f;
+        f.sock = sock;
+        Station s(base / "J", "JJJ", sock);
+        f.outbox = s.gc.outbox_dir;
+        f.start();
+        s.set_channel("P1");
+        // Requeued: written by routing, put back by the operator, written again.
+        const std::string rq = s.written("FARSTN", "ROUTED THEN REQUEUED");
+        s.core->set_key_mode(rq, "routing");
+        std::string err;
+        CHECK(s.core->requeue(rq, &err));
+        CHECK(wait_for([&] { return s.state(rq) == "written"; }, 10000));
+        // Released: held while marked routing, then released by the operator.
+        err.clear();
+        const std::string hd = s.core->submit("FARSTN", 'R', "ROUTED THEN RELEASED", &err, /*held=*/true);
+        CHECK(!hd.empty());
+        s.core->set_key_mode(hd, "routing");
+        CHECK(s.core->release(hd, &err));
+        CHECK(wait_for([&] { return s.state(hd) == "written"; }, 10000));
+
+        std::string pr = call(*s.core, {{"cmd", "standing_prepare"}, {"mode", "routing"}});
+        const std::string sid = str(parsed(pr), "prepare_id");
+        s.now = s.now + 2;
+        CHECK(ok(call(*s.core, {{"cmd", "key_confirm"}, {"prepare_id", sid}, {"confirm", "Y"}})));
+        CHECK(s.gk->standing_on("routing"));
+        std::this_thread::sleep_for(std::chrono::milliseconds(800));
+        CHECK(f.count("key") == 0 && s.state(rq) == "written" && s.state(hd) == "written");
+
+        // The operator's y keys each, as a local key with a token.
+        for (const std::string& id : {rq, hd}) {
+            JsonValue v = parsed(call(*s.core, {{"cmd", "key_prepare"}, {"msg_id", id}}));
+            const std::string pid = str(v, "prepare_id");
+            CHECK(!pid.empty());
+            s.now = s.now + 2;
+            CHECK(ok(call(*s.core, {{"cmd", "key_confirm"}, {"prepare_id", pid}, {"confirm", "Y"}})));
+            auto k = f.last("key");
+            CHECK(k && !k->get("standing") && str(*k, "control") == "local");
+            CHECK(wait_for([&] { return s.state(id) == "sent"; }, 5000));
+        }
+    }
+
     // ---- a station with no gale-key at all: the calls say so, status says why
     {
         GreybeardConfig gc;

@@ -106,7 +106,8 @@ public:
     std::optional<KeyRow> key_row(const std::string& id);
     // Written bursts of automatic sends not yet asked of gale-key, oldest first.
     std::vector<KeyRow> written_automatic(int limit);
-    // Marks an automatic send with its standing mode (machine, routing, auto_qsl).
+    // Marks an automatic send with its standing mode (machine, routing, auto_qsl);
+    // "" makes it the operator's own again (his requeue or release).
     void set_key_mode(const std::string& id, const std::string& mode);
     // Marks the burst asked of gale-key, once: false when it already was, or the
     // message is no longer written with that burst.

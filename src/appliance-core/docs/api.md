@@ -1383,6 +1383,9 @@ It holds across a restart.
   Not while it is on the air.
 - `requeue`: an unacked, failed, cancelled or held message goes again with
   fresh counts.
+- After a `release` or a `requeue` the message is the operator's own, even
+  when it was an automatic send (machine, routing, auto-QSL): no standing
+  grant keys its new burst, only `key_prepare` and the operator's y.
 
 Each gives `"ok":false` with an `error` when the message can't take that step.
 
@@ -1887,7 +1890,8 @@ It is refused under EMCON, and when gale-key's transmit world isn't `mars`.
 
 While a mode is on, each written burst of that mode is keyed with
 `"standing":MODE`, once, on the core's own thread. When gale-key can't be
-reached, it is tried again 30 s later.
+reached, it is tried again 30 s later. An automatic send the operator
+requeues or releases is his own from then on: no grant keys it, only his y.
 
 `{"cmd":"standing_off","mode":"routing"}` (or `"all"`) →
 `{"ok":true,"mode":"routing","on":false,"gale_key":{...}}`. The mode is off in
