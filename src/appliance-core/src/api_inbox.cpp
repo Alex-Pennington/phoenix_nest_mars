@@ -190,7 +190,8 @@ struct Row {
     Message m;
 };
 
-const char* kRowCols = "rowid, id, direction, src, dst, prec, body, state, created_at, updated_at, last_error";
+const char* kRowCols =
+    "rowid, id, direction, src, dst, prec, body, state, created_at, updated_at, last_error, world";
 
 Row read_row(Stmt& s) {
     Row r;
@@ -206,6 +207,7 @@ Row read_row(Stmt& s) {
     r.m.created_at = s.i64(8);
     r.m.updated_at = s.i64(9);
     r.m.last_error = s.text(10);
+    r.m.world = s.text(11) == "amateur" ? "amateur" : "mars";
     return r;
 }
 
@@ -355,6 +357,7 @@ void write_item(JsonWriter& w, const Item& it, bool with_body = false) {
         .field("type", it.type)
         .field("state", it.label)
         .field("core_state", it.row.m.state)
+        .field("world", it.row.m.world)
         .field("unverified", it.row.m.state == "unverified")
         .field("mine", it.mine)
         .field("read", it.read)

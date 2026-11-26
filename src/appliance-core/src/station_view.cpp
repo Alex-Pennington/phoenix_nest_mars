@@ -1372,6 +1372,46 @@ std::string name_channels(const std::string& reply_json, const ChannelNames& nam
     return o;
 }
 
+std::map<std::string, std::string> amateur_calls() {
+    static std::mutex mu;
+    static std::string key;
+    static std::map<std::string, std::string> cached;
+    Paths p = paths();
+    Paths pa = p;
+    pa.words = p.amateur_words;
+    std::string log = newest_words_file(pa.words);
+    auto stamp = [](const std::string& f) {
+        std::error_code ec;
+        if (f.empty() || !fs::exists(f, ec)) return std::string("-");
+        auto t = fs::last_write_time(f, ec).time_since_epoch().count();
+        return std::to_string(t) + "/" + std::to_string(fs::file_size(f, ec));
+    };
+    std::string k = p.amateur_own + "=" + stamp(p.amateur_own) + ";" + log + "=" + stamp(log);
+    std::lock_guard<std::mutex> g(mu);
+    if (k == key) return cached;
+    std::map<std::string, std::string> out;
+    auto plain = [](std::string a) {
+        a.erase(std::remove(a.begin(), a.end(), '@'), a.end());
+        return a;
+    };
+    if (!log.empty()) {
+        WordLog L = read_word_log(pa);
+        for (auto& t : group_words(L.words)) {
+            if (!t.world.empty() && t.world != "amateur") continue;
+            if (!t.caller.empty()) out[plain(t.caller)] = "heard on amateur channels";
+            for (auto& c : t.called)
+                if (!c.empty()) out[plain(c)] = "heard on amateur channels";
+        }
+    }
+    bool found = false;
+    for (auto& [a, n] : load_addresses(p.amateur_own, &found))
+        if (!plain(a).empty()) out[plain(a)] = "this station's own amateur address";
+    out.erase("");
+    key = k;
+    cached = out;
+    return out;
+}
+
 namespace {
 
 // ---- the amateur world's identity (ask 33) ----------------------------------

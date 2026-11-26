@@ -56,7 +56,7 @@ void write_entry(JsonWriter& w, const BookEntry& e) {
     w.begin_object().field("name", e.name).field("kind", e.kind).field("call", e.call).field("ri", e.ri)
         .field("ale", e.ale);
     strings(w, "members", e.members);
-    w.field("note", e.note).field("source", e.source).end_object();
+    w.field("note", e.note).field("source", e.source).field("world", e.world).end_object();
 }
 
 void write_net(JsonWriter& w, const Net& n, bool with_checkins) {
@@ -171,6 +171,7 @@ std::optional<std::string> handle_ops(Core& core, const std::string& cmd, std::m
         std::replace(members.begin(), members.end(), ',', ';');
         e.members = list_of(members, ';');
         e.note = req["note"];
+        e.world = req["world"];
         if (!ops->book_put(e, &err)) return err_reply(err);
         return ok_reply();
     }

@@ -234,6 +234,41 @@ With the station book on, `status` also has `on_duty`, `net` (the open net) and
 `keyed`, `tx_locked`, `meter` and the rest. It is read at most once a second.
 It is left out when no tuner socket is set or nothing answers on it.
 
+## Worlds: MARS only, never amateur (ask 37)
+
+Alex's hard rule: there is no forward or auto-copy route between MARS and
+amateur, ever. The core is the MARS message center, so every item it holds
+is MARS:
+
+- Every message (`list`, `get`, the in-box row) carries `"world":"mars"`.
+- Every station-book entry carries `world` (`mars` default, or `amateur`);
+  `book_put` takes it, and `book_import`/`book_export` have a `world` column.
+- Every routing rule (`route_list`) carries `"world":"mars"`; `route_set`
+  with any other world is refused.
+
+A send to a station of the amateur world is refused in code, with an error
+that says why, and is never rerouted or queued. A station is amateur when it
+is one of this station's own amateur addresses (the scanner's
+`amateur/own_address.txt`), when it was heard on the amateur channels (the
+amateur word log), or when the station book marks it `amateur`. The check is
+in `Core::submit`, so it covers `send` (a collective holding one amateur
+station refuses the whole send, before any copy is queued), `compose_send`,
+`send_acp127`, `send_acp126`, `send_chat`, `retransmit`, `qsl` receipts, net
+call-ups, the BBS's machine answers and routed sends, and the resend queue;
+`requeue` and `release` check again, and so does the airtime point itself: a
+queued item whose station became amateur after it was queued is failed
+there ("refused at the air"), and an ack or answer to one is dropped with a
+log line. A routing rule naming an amateur ALE address is refused.
+
+A call that carries `world` other than `mars` is refused, except calls that
+only read or set up (`word_feed`, `heard_stations`, `scanner_status`,
+`settings_*`, `identity_*`, `keying_settings`, `book_put`, `book_get`,
+`book_list`, `station_health`, `captures_list`, `status`). The refusal reads
+`refused: world amateur: the MARS message center never sends, copies or
+forwards into the amateur world`; a station refusal reads `K0TEST is an
+amateur station (heard on amateur channels); the MARS message center never
+sends to the amateur world`. Broadcasts (ALL) are not a station and still go.
+
 ## compose_templates
 
 `{"cmd":"compose_templates"}` →

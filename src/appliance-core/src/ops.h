@@ -32,6 +32,7 @@ struct BookEntry {
     std::vector<std::string> members;  // collective: names of stations or collectives
     std::string note;     // short, no personal details
     std::string source;   // "local" or what the import said
+    std::string world = "mars";  // mars or amateur: an amateur entry is never sent to (ask 37)
 };
 
 struct Resolved {

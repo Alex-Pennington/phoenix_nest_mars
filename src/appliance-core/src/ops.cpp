@@ -201,6 +201,12 @@ Ops::Ops(std::string station, const std::string& db_path) : station_(book_key(st
     exec(
         "CREATE TABLE IF NOT EXISTS book (name TEXT PRIMARY KEY, kind TEXT NOT NULL, call TEXT, ri TEXT,"
         " ale TEXT, members TEXT, note TEXT, source TEXT)");
+    {
+        bool has = false;
+        Stmt q(db_, "PRAGMA table_info(book)");
+        while (q.step()) has = has || q.text(1) == "world";
+        if (!has) exec("ALTER TABLE book ADD COLUMN world TEXT DEFAULT 'mars'");
+    }
     exec(
         "CREATE TABLE IF NOT EXISTS nets (id TEXT PRIMARY KEY, name TEXT, ncs TEXT, exercise INTEGER,"
         " opened_at INTEGER, closed_at INTEGER DEFAULT 0, roster TEXT, note TEXT)");
@@ -261,6 +267,7 @@ static BookEntry row_entry(Stmt& s) {
     e.members = split(s.text(5), "\n");
     e.note = s.text(6);
     e.source = s.text(7);
+    e.world = s.text(8) == "amateur" ? "amateur" : "mars";
     return e;
 }
 
@@ -277,6 +284,9 @@ bool Ops::book_put(BookEntry e, std::string* error) {
     e.ale = book_key(e.ale);
     for (auto& m : e.members) m = book_key(m);
     if (e.source.empty()) e.source = "local";
+    for (auto& c : e.world) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    if (e.world.empty()) e.world = "mars";
+    if (e.world != "mars" && e.world != "amateur") return fail("world: mars or amateur");
     if (e.name.empty() || e.name.size() > 64 || !chars_ok(e.name, " -/."))
         return fail("name: use letters, digits, spaces, - / or ., up to 64");
     if (e.note.size() > 80) return fail("note: keep it to 80 characters");
@@ -297,7 +307,8 @@ bool Ops::book_put(BookEntry e, std::string* error) {
     if (!e.ale.empty() && (e.ale.size() > 15 || !chars_ok(e.ale, "@?")))
         return fail("ale: up to 15 letters, digits, @ or ?");
     std::lock_guard<std::recursive_mutex> g(mu_);
-    Stmt(db_, "INSERT OR REPLACE INTO book VALUES(?,?,?,?,?,?,?,?)")
+    Stmt(db_, "INSERT OR REPLACE INTO book (name, kind, call, ri, ale, members, note, source, world) "
+              "VALUES(?,?,?,?,?,?,?,?,?)")
         .bind(1, e.name)
         .bind(2, e.kind)
         .bind(3, e.call)
@@ -306,6 +317,7 @@ bool Ops::book_put(BookEntry e, std::string* error) {
         .bind(6, join(e.members, '\n'))
         .bind(7, e.note)
         .bind(8, e.source)
+        .bind(9, e.world)
         .step();
     return true;
 }
@@ -318,7 +330,7 @@ bool Ops::book_remove(const std::string& name) {
 
 std::optional<BookEntry> Ops::book_get(const std::string& name) {
     std::lock_guard<std::recursive_mutex> g(mu_);
-    Stmt s(db_, "SELECT name, kind, call, ri, ale, members, note, source FROM book WHERE name = ?");
+    Stmt s(db_, "SELECT name, kind, call, ri, ale, members, note, source, world FROM book WHERE name = ?");
     s.bind(1, book_key(name));
     if (!s.step()) return std::nullopt;
     return row_entry(s);
@@ -330,7 +342,7 @@ std::optional<BookEntry> Ops::book_find(const std::string& any) {
     if (auto e = book_get(k)) return e;
     std::lock_guard<std::recursive_mutex> g(mu_);
     Stmt s(db_,
-           "SELECT name, kind, call, ri, ale, members, note, source FROM book"
+           "SELECT name, kind, call, ri, ale, members, note, source, world FROM book"
            " WHERE call = ?1 OR ri = ?1 OR ale = ?1 ORDER BY name LIMIT 1");
     s.bind(1, k);
     if (!s.step()) return std::nullopt;
@@ -339,7 +351,7 @@ std::optional<BookEntry> Ops::book_find(const std::string& any) {
 
 std::vector<BookEntry> Ops::book_list() {
     std::lock_guard<std::recursive_mutex> g(mu_);
-    Stmt s(db_, "SELECT name, kind, call, ri, ale, members, note, source FROM book ORDER BY kind DESC, name");
+    Stmt s(db_, "SELECT name, kind, call, ri, ale, members, note, source, world FROM book ORDER BY kind DESC, name");
     std::vector<BookEntry> out;
     while (s.step()) out.push_back(row_entry(s));
     return out;
@@ -351,7 +363,7 @@ int Ops::book_import(const std::string& csv, const std::string& source, std::vec
     std::vector<std::string> head, row;
     if (!csv_row(in, &head)) return 0;
     std::map<std::string, int> col;
-    static const std::set<std::string> kKnown = {"name", "kind", "call", "ri", "ale", "members", "note"};
+    static const std::set<std::string> kKnown = {"name", "kind", "call", "ri", "ale", "members", "note", "world"};
     for (size_t i = 0; i < head.size(); ++i) {
         std::string h = book_key(head[i]);
         for (auto& c : h) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
@@ -382,6 +394,7 @@ int Ops::book_import(const std::string& csv, const std::string& source, std::vec
         e.ale = get("ale");
         e.members = split(get("members"), ";|");
         e.note = get("note");
+        e.world = get("world");
         e.source = source.empty() ? "import" : source;
         std::string err;
         if (book_put(e, &err))
@@ -394,10 +407,10 @@ int Ops::book_import(const std::string& csv, const std::string& source, std::vec
 }
 
 std::string Ops::book_export() {
-    std::string out = "name,kind,call,ri,ale,members,note\n";
+    std::string out = "name,kind,call,ri,ale,members,note,world\n";
     for (auto& e : book_list())
         out += csv_cell(e.name) + "," + e.kind + "," + e.call + "," + e.ri + "," + e.ale + "," +
-               csv_cell(join(e.members, ';')) + "," + csv_cell(e.note) + "\n";
+               csv_cell(join(e.members, ';')) + "," + csv_cell(e.note) + "," + e.world + "\n";
     return out;
 }
 

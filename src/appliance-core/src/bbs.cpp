@@ -232,6 +232,11 @@ Engine::Engine(Core& core) : core_(core), clock_(system_now) {
          " match TEXT NOT NULL, route TEXT NOT NULL, ale TEXT NOT NULL, key TEXT NOT NULL DEFAULT '',"
          " sched TEXT NOT NULL DEFAULT '', compress INTEGER NOT NULL DEFAULT 0,"
          " mark_processed INTEGER NOT NULL DEFAULT 1)");
+    // Ask 37: every rule carries its world, and only mars is ever routed.
+    {
+        Stmt c(db_, "SELECT COUNT(*) FROM pragma_table_info('bbs_rule') WHERE name = 'world'");
+        if (c.step() && c.i64(0) == 0) exec("ALTER TABLE bbs_rule ADD COLUMN world TEXT NOT NULL DEFAULT 'mars'");
+    }
     exec("CREATE TABLE IF NOT EXISTS bbs_routed (msg_id TEXT PRIMARY KEY, rule INTEGER NOT NULL, state TEXT NOT NULL,"
          " out_id TEXT NOT NULL DEFAULT '', due INTEGER NOT NULL, processed INTEGER NOT NULL DEFAULT 0,"
          " why TEXT NOT NULL DEFAULT '', at INTEGER NOT NULL)");
@@ -474,7 +479,7 @@ bool Engine::del_alias(const std::string& ri, std::string* error) {
 std::vector<Rule> Engine::rules() {
     std::lock_guard<std::recursive_mutex> g(mu_);
     std::vector<Rule> out;
-    Stmt s(db_, "SELECT id, pos, match, route, ale, key, sched, compress, mark_processed FROM bbs_rule ORDER BY pos, id");
+    Stmt s(db_, "SELECT id, pos, match, route, ale, key, sched, compress, mark_processed, world FROM bbs_rule ORDER BY pos, id");
     while (s.step()) {
         Rule r;
         r.id = s.i64(0);
@@ -486,6 +491,7 @@ std::vector<Rule> Engine::rules() {
         r.sched = s.text(6);
         r.compress = s.i64(7) != 0;
         r.mark_processed = s.i64(8) != 0;
+        r.world = s.text(9) == "amateur" ? "amateur" : "mars";
         out.push_back(r);
     }
     return out;
@@ -521,6 +527,16 @@ bool Engine::set_rule(const Rule& r0, int64_t* id, std::string* error) {
         ale.push_back(u);
     }
     if (ale.empty()) return fail(error, "give at least one ALE address, in the order to call them");
+    // Ask 37: a MARS rule only, and never an ALE address of the amateur world.
+    {
+        std::string w = trim(r.world);
+        for (auto& c : w) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        if (!w.empty() && w != "mars")
+            return fail(error, "refused: world " + w + ": the MARS BBS never routes into the amateur world");
+        r.world = "mars";
+        for (auto& a : ale)
+            if (std::string why = core_.world_refusal(a); !why.empty()) return fail(error, "refused: " + why);
+    }
     r.ale = ale;
     if (!valid_sched(r.sched)) return fail(error, "schedule must be empty or HHMMZ");
     if (!r.key.empty() && resolve_key(core_.keyring(), r.key).empty())
@@ -595,7 +611,7 @@ bool Engine::move_rule(int64_t id, const std::string& dir, int to, std::string* 
 
 std::vector<Engine::Held> Engine::pool() {
     std::vector<Held> out;
-    Stmt s(db_, "SELECT id, src, dst, prec, body, state, created_at FROM messages WHERE direction = 'in'"
+    Stmt s(db_, "SELECT id, src, dst, prec, body, state, created_at FROM messages WHERE direction = 'in' AND world = 'mars'"
                 " AND state IN ('received', 'overheard')"
                 // Traffic the operator discarded in the in box (api_inbox.h) isn't held.
                 " AND id NOT IN (SELECT msg_id FROM inbox_flags WHERE done = 'discarded')"
@@ -971,7 +987,7 @@ bool Engine::send_routed(Routed& rt) {
     bool found = false;
     std::string p, raw;
     {
-        Stmt q(db_, "SELECT src, prec, body FROM messages WHERE id = ?");
+        Stmt q(db_, "SELECT src, prec, body FROM messages WHERE id = ? AND world = 'mars'");
         q.bind(1, rt.msg_id);
         if (q.step()) {
             found = true;
@@ -1087,7 +1103,7 @@ void Engine::process(const std::string& id) {
     }
     Held h;
     {
-        Stmt q(db_, "SELECT src, dst, prec, body, state, created_at FROM messages WHERE id = ? AND direction = 'in'");
+        Stmt q(db_, "SELECT src, dst, prec, body, state, created_at FROM messages WHERE id = ? AND direction = 'in' AND world = 'mars'");
         q.bind(1, id);
         if (!q.step()) return;
         h.id = id;

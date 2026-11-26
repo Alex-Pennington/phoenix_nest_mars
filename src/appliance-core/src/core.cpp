@@ -7,6 +7,8 @@
 #include "filemsg.h"
 #include "parts.h"
 #include "sha256.h"
+#include "ops.h"
+#include "station_view.h"
 
 #include <cctype>
 #include <ctime>
@@ -74,9 +76,11 @@ std::string Core::submit(const std::string& to, char prec, const std::string& bo
     if (!valid_prec(prec)) return fail("precedence must be Z, O, P or R");
     if (body.empty()) return fail("message is empty");
     if (body.size() > kMaxBody) return fail("message is longer than " + std::to_string(kMaxBody) + " bytes");
+    if (std::string why = world_refusal(to); !why.empty()) return fail(why);
 
     std::lock_guard<std::mutex> g(mu_);
     Message m;
+    m.world = "mars";
     m.id = cfg_.station + "-" + std::to_string(store_.next_seq());
     m.direction = "out";
     m.src = cfg_.station;
@@ -88,6 +92,25 @@ std::string Core::submit(const std::string& to, char prec, const std::string& bo
     store_.insert(m);
     log(m.id, std::string(held ? "held " : "queued ") + prec_name(prec) + " for " + to);
     return m.id;
+}
+
+std::string Core::world_refusal(const std::string& call) const {
+    std::string c;
+    for (char ch : call)
+        if (ch != '@' && !std::isspace(static_cast<unsigned char>(ch)))
+            c += static_cast<char>(std::toupper(static_cast<unsigned char>(ch)));
+    if (c.empty() || is_broadcast(c)) return "";
+    auto refuse = [&](const std::string& why) {
+        return c + " is an amateur station (" + why +
+               "); the MARS message center never sends to the amateur world";
+    };
+    auto am = sv::amateur_calls();
+    if (auto it = am.find(c); it != am.end()) return refuse(it->second);
+    if (ops_) {
+        if (auto e = ops_->book_find(c); e && e->world == "amateur")
+            return refuse("the station book has " + e->name + " in the amateur world");
+    }
+    return "";
 }
 
 std::string Core::submit_codress(const std::string& to, char prec, const std::string& codress,
@@ -462,6 +485,12 @@ void Core::tick() {
 
     if (!acks_.empty()) {
         Answer a = acks_.front();
+        // The airtime point: nothing goes to the amateur world (ask 37).
+        if (std::string why = world_refusal(a.f.dst); !why.empty()) {
+            acks_.pop_front();
+            log(a.orderwire ? "" : a.f.id, "not sent to " + a.f.dst + ": " + why);
+            return;
+        }
         if (modem_->send(a.raw.empty() ? encode(a.f) : a.raw + "\r\n")) {
             acks_.pop_front();
             on_air_ = a.f;
@@ -501,6 +530,14 @@ void Core::tick() {
         next = store_.next_to_send(now_utc());
     }
     if (!next) return;
+    if (std::string why = next->world != "mars" ? std::string("it is an amateur-world item") : world_refusal(next->dst);
+        !why.empty()) {
+        store_.set_state(next->id, "failed", why);
+        log(next->id, "refused at the air: " + why);
+        waiting_since_.erase(next->id);
+        told_waiting_.erase(next->id);
+        return;
+    }
     waiting_since_.erase(next->id);
     if (told_waiting_.erase(next->id)) log(next->id, "link to " + next->dst + " is up");
     Frame f;
@@ -790,6 +827,8 @@ bool Core::release(const std::string& id, std::string* error) {
     auto m = store_.get(id);
     if (!m || m->direction != "out") return refuse(error, "no message " + id + " of ours");
     if (m->state != "held") return refuse(error, id + " is " + m->state + ", not held");
+    if (m->world != "mars") return refuse(error, id + " is an amateur-world item; the MARS message center never sends it");
+    if (std::string why = world_refusal(m->dst); !why.empty()) return refuse(error, why);
     store_.set_state(id, "queued");
     log(id, "released to the queue");
     return true;
@@ -803,6 +842,8 @@ bool Core::requeue(const std::string& id, std::string* error) {
         m->state != "expired")
         return refuse(error, id + " is " + m->state +
                                  "; only failed, unacked, cancelled, expired or held traffic can be requeued");
+    if (m->world != "mars") return refuse(error, id + " is an amateur-world item; the MARS message center never sends it");
+    if (std::string why = world_refusal(m->dst); !why.empty()) return refuse(error, why);
     overdue_.erase(id);
     if (m->state == "expired") no_expire_.insert(id);
     store_.requeue(id, false);

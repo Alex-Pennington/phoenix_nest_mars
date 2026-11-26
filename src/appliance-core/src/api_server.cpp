@@ -96,6 +96,7 @@ void write_message(JsonWriter& w, const Message& m, bool waiting_for_link = fals
         .field("state", m.state)
         .field("attempts", m.attempts)
         .field("sends", m.sends)
+        .field("world", m.world)
         .field("created_at", static_cast<long long>(m.created_at))
         .field("updated_at", static_cast<long long>(m.updated_at))
         .field("body", m.body);
@@ -385,7 +386,25 @@ std::string compose_check(Core& core, std::map<std::string, std::string>& req) {
 
 // compose_send: refused while any error stands; otherwise takes the serials
 // and queues the message.
+// Station calls in a list (space, comma or ; between them).
+static std::vector<std::string> split_targets(const std::string& s) {
+    std::vector<std::string> out;
+    std::string cur;
+    for (char c : s + " ") {
+        if (c == ' ' || c == ',' || c == ';' || c == '\n' || c == '\r' || c == '\t') {
+            if (!cur.empty()) out.push_back(cur);
+            cur.clear();
+        } else {
+            cur += c;
+        }
+    }
+    return out;
+}
+
 std::string compose_send(Core& core, std::map<std::string, std::string>& req) {
+    // Ask 37: a station of the amateur world is refused before the form is checked.
+    for (auto& t : split_targets(req["to_station"]))
+        if (std::string why = core.world_refusal(t); !why.empty()) return error_reply(why);
     compose::Draft d = draft_of(req, {"sign", "hold"});
     compose::Context ctx = compose_ctx(core);
     ctx.now = std::time(nullptr);
@@ -398,6 +417,8 @@ std::string compose_send(Core& core, std::map<std::string, std::string>& req) {
         return w.str();
     }
     if (r.to_targets.empty()) return error_reply("no station to send to");
+    for (auto& t : r.to_targets)  // the whole send, before any copy is queued
+        if (std::string why = core.world_refusal(t); !why.empty()) return error_reply(why);
     compose::Serials s;
     if (!r.channel_counter.empty()) s.channel_serial = static_cast<int>(core.next_counter(r.channel_counter, 999));
     if (!r.serial_counter.empty()) {
@@ -2680,6 +2701,22 @@ std::string ApiServer::handle_call(Core& core, const std::string& line) {
     if (!parse_flat_object(line, req)) return error_reply("request must be one flat JSON object");
     const std::string cmd = req["cmd"];
 
+    // Ask 37: the core is the MARS message center. A call that carries a
+    // world other than mars is refused, unless it only reads or sets up
+    // (the word feed, the settings, the book's world mark): nothing is ever
+    // queued, copied or forwarded into the amateur world from here.
+    if (req.count("world")) {
+        std::string wv = req["world"];
+        for (auto& c : wv) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        static const std::set<std::string> reads = {
+            "word_feed",      "heard_stations", "scanner_status", "settings_list", "settings_set", "settings_reset",
+            "keying_settings", "identity_get",  "identity_set",   "book_put",      "book_get",     "book_list",
+            "station_health", "captures_list",  "status"};
+        if (!wv.empty() && wv != "mars" && !reads.count(cmd))
+            return error_reply("refused: world " + wv +
+                               ": the MARS message center never sends, copies or forwards into the amateur world");
+    }
+
     // Training: turned on and off here, on the real station.
     if (cmd == "training" || cmd == "training_status") {
         auto t = training_for(core);
@@ -2869,6 +2906,10 @@ std::string ApiServer::handle_call(Core& core, const std::string& line) {
         // collective sends one copy to each.
         std::vector<std::string> to = core.ops() ? core.ops()->send_targets(req["to"]) : std::vector<std::string>{};
         if (to.empty()) to.push_back(req["to"]);
+        // Ask 37: one station of the amateur world refuses the whole send, before any copy is queued.
+        for (auto& t : to)
+            if (std::string why = core.world_refusal(t); !why.empty())
+                return error_reply(to.size() > 1 ? "refused for " + req["to"] + ": " + why : why);
         std::string err;
         std::vector<std::string> ids;
         for (auto& t : to) {

@@ -102,6 +102,7 @@ struct Rule {
     std::string sched;               // "" or "HHMMZ"
     bool compress = false;
     bool mark_processed = true;
+    std::string world = "mars";      // ask 37: always mars; a rule into the amateur world is refused
 };
 
 // A routed message (route_rerun and the engine).

@@ -125,6 +125,12 @@ private:
     std::vector<std::vector<int64_t>> windows_;          // scanner plan dials, Hz
 };
 
+// The amateur world's calls the station knows of, each with why: this
+// station's own amateur addresses, and every call heard in the amateur word
+// log (as caller or called). Read again only when those files change. The
+// MARS message center never sends to one of them (ask 37).
+std::map<std::string, std::string> amateur_calls();
+
 // Copies a scanner reply object with every frequency named or dropped: a
 // member whose key holds "khz" becomes the same key with "label" for "khz"
 // (numbers and arrays of numbers named), one holding "hz" or "freq" goes.

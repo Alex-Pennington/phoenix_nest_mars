@@ -19,7 +19,7 @@ namespace {
 
 
 constexpr const char* kCols =
-    "id, direction, src, dst, prec, body, state, attempts, created_at, updated_at, next_try_at, last_error, sends";
+    "id, direction, src, dst, prec, body, state, attempts, created_at, updated_at, next_try_at, last_error, sends, world";
 
 Message row(Stmt& s) {
     Message m;
@@ -37,6 +37,7 @@ Message row(Stmt& s) {
     m.next_try_at = s.i64(10);
     m.last_error = s.text(11);
     m.sends = static_cast<int>(s.i64(12));
+    m.world = s.text(13) == "amateur" ? "amateur" : "mars";
     return m;
 }
 
@@ -80,6 +81,13 @@ Store::Store(const std::string& path) {
         while (t.step())
             if (t.text(1) == "sends") has = true;
         if (!has) exec("ALTER TABLE messages ADD COLUMN sends INTEGER NOT NULL DEFAULT 0");
+    }
+    {
+        bool has = false;
+        Stmt t(db_, "PRAGMA table_info(messages)");
+        while (t.step())
+            if (t.text(1) == "world") has = true;
+        if (!has) exec("ALTER TABLE messages ADD COLUMN world TEXT NOT NULL DEFAULT 'mars'");
     }
     exec("CREATE TABLE IF NOT EXISTS links (station TEXT PRIMARY KEY, format TEXT NOT NULL)");
     exec("CREATE TABLE IF NOT EXISTS keymaster_refused (station TEXT PRIMARY KEY, fingerprint TEXT NOT NULL,"
@@ -128,10 +136,11 @@ int64_t Store::next_counter(const std::string& key, int64_t wrap) {
 void Store::insert(const Message& m) {
     Stmt s(db_,
            "INSERT INTO messages(id, direction, src, dst, prec, body, state, attempts, created_at,"
-           " updated_at, next_try_at, last_error) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)");
+           " updated_at, next_try_at, last_error, world) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)");
     s.bind(1, m.id).bind(2, m.direction).bind(3, m.src).bind(4, m.dst).bind(5, std::string(1, m.prec));
     s.bind_blob(6, m.body).bind(7, m.state).bind(8, static_cast<int64_t>(m.attempts));
     s.bind(9, m.created_at).bind(10, m.updated_at).bind(11, m.next_try_at).bind(12, m.last_error);
+    s.bind(13, m.world.empty() ? std::string("mars") : m.world);
     s.step();
 }
 

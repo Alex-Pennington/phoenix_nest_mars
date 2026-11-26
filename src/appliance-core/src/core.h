@@ -109,6 +109,15 @@ public:
     std::string submit(const std::string& to, char prec, const std::string& body, std::string* error,
                        bool held = false);
 
+    // Ask 37, Alex's hard rule: no route between MARS and amateur, ever.
+    // Why a send to `call` would cross into the amateur world ("" when it
+    // would not): it is one of this station's own amateur addresses, it has
+    // been heard on the amateur channels (station_view.h amateur_calls), or
+    // the station book marks it amateur. Checked in code at every send path
+    // and again at the airtime point, never left to configuration. A refused
+    // send is an error; it is never rerouted.
+    std::string world_refusal(const std::string& call) const;
+
     // Next value of a named counter, 1..wrap (see Store::next_counter).
     int64_t next_counter(const std::string& key, int64_t wrap);
 
