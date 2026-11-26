@@ -117,6 +117,9 @@ std::optional<std::string> handle_key(Core& core, const std::string& cmd, std::m
             w.end_object();
             return w.str();
         }
+        // The very burst the token was prepared for: same WAV, same bytes, and
+        // (claim_key) still written, same world and channel, not yet asked.
+        if (!gk->unchanged(h, &why)) return err(why);
         if (!core.claim_key(h.item, &why)) return err(why);
         GaleKeyReply r = gk->key(h);
         if (!r.reached) {

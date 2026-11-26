@@ -2618,6 +2618,7 @@ void ApiServer::accept_loop() {
 }
 
 void ApiServer::client_loop(int fd) {
+    KeyConnection conn;  // y dialogs opened here are dropped when it closes (gale_key.h)
     std::string buf;
     while (running_) {
         int r = wait_readable(fd, 200);

@@ -88,6 +88,23 @@ const std::vector<std::string>& core_standing_modes();
 // a row, a frequency in Hz).
 std::string no_frequency(const std::string& s);
 
+// The connection a request comes on. The API and web servers run one thread
+// per connection and make one of these at its start. A y dialog belongs to
+// the connection that opened it: it is confirmed only on that connection, and
+// dropped when that connection closes (a page reloaded with the dialog open).
+class KeyConnection {
+public:
+    KeyConnection();
+    ~KeyConnection();  // drops this connection's held y dialogs, in every GaleKey
+    KeyConnection(const KeyConnection&) = delete;
+    KeyConnection& operator=(const KeyConnection&) = delete;
+    // This thread's connection; 0 for none (a call the core makes itself, a test).
+    static unsigned long long current();
+
+private:
+    unsigned long long id_;
+};
+
 // A burst the core may ask gale-key to key: the message it carries, the
 // burst's file name in the outbox, the message's world and the channel the
 // core sent it on.
@@ -114,8 +131,10 @@ public:
         std::string id;     // the prepare_id the kiosk holds
         std::string kind;   // "air" (one burst) or "standing" (a mode)
         KeyItem item;       // air
+        std::string wav, sha256;  // air: the WAV gale-key bound the token to, and its bytes' sha256
         std::string mode;   // standing
         double at = 0, until = 0;
+        unsigned long long conn = 0;  // the connection that opened it (KeyConnection)
         std::string token;
     };
 
@@ -139,6 +158,11 @@ public:
     bool take(const std::string& prepare_id, Held& out, std::string* error);
     // Drops a held token. False when there was none (unknown, spent or expired).
     bool cancel(const std::string& prepare_id);
+    // Drops every token held for a connection (it closed). Returns how many.
+    size_t drop_connection(unsigned long long conn);
+    // An air token's burst is the very one it was prepared for: the same WAV,
+    // still there, with the same sha256. False with *error otherwise.
+    bool unchanged(const Held& h, std::string* error) const;
     // How many tokens are held now (expired ones dropped first).
     size_t held();
 

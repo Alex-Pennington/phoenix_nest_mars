@@ -14,6 +14,8 @@
 #include "check.h"
 
 #include <sqlite3.h>
+#include <arpa/inet.h>
+#include <netinet/in.h>
 #include <sys/select.h>
 #include <sys/socket.h>
 #include <sys/un.h>
@@ -584,6 +586,136 @@ int main() {
         std::string rep = call(*s.core, {{"cmd", "key_prepare"}, {"msg_id", id}});
         CHECK(!ok(rep) && str(parsed(rep), "error").find("no channel") != std::string::npos);
         CHECK(f.count("prepare") == 0);
+    }
+
+    // ---- key_prepare is bound to one written burst: its WAV, its sha256, its
+    // world and channel, and the connection that opened the dialog
+    {
+        FakeGaleKey f;
+        f.sock = sock;
+        Station s(base / "E", "EEE", sock);
+        f.outbox = s.gc.outbox_dir;
+        f.start();
+        s.set_channel("P3");
+        auto err_of = [](const std::string& r) { return str(parsed(r), "error"); };
+
+        // 1. Empty, unbound, or not a written burst: refused, gale-key not asked.
+        std::string rep = call(*s.core, {{"cmd", "key_prepare"}});
+        CHECK(!ok(rep) && err_of(rep).find("msg_id or a burst") != std::string::npos);
+        rep = call(*s.core, {{"cmd", "key_prepare"}, {"burst", "NOSUCH.wav"}});
+        CHECK(!ok(rep) && err_of(rep).find("no burst of a message of ours") != std::string::npos);
+        rep = call(*s.core, {{"cmd", "key_prepare"}, {"msg_id", "NOSUCH-1"}});
+        CHECK(!ok(rep) && err_of(rep).find("no outgoing message") != std::string::npos);
+        std::string e;
+        const std::string held = s.core->submit("FARSTN", 'R', "HELD, NOT WRITTEN", &e, true);
+        rep = call(*s.core, {{"cmd", "key_prepare"}, {"msg_id", held}});
+        CHECK(!ok(rep) && err_of(rep).find("is held, not a burst written") != std::string::npos);
+        const std::string gone = s.written("FARSTN", "WAV REMOVED");
+        std::string gb;
+        for (auto& ev : s.core->events(0, 5000))
+            if (ev.msg_id == gone && ev.text.rfind("written to the outbox as ", 0) == 0)
+                gb = ev.text.substr(25, ev.text.find(';') - 25);
+        CHECK(!gb.empty() && fs::remove(fs::path(s.gc.outbox_dir) / gb));
+        rep = call(*s.core, {{"cmd", "key_prepare"}, {"msg_id", gone}});
+        CHECK(!ok(rep) && err_of(rep).find("is not in the outbox") != std::string::npos);
+        rep = call(*s.core, {{"cmd", "key_prepare"}, {"msg_id", gone}, {"burst", "OTHER.wav"}});
+        CHECK(!ok(rep) && err_of(rep).find("is not " + gone + "'s burst") != std::string::npos);
+        CHECK(f.count("prepare") == 0);
+
+        // 3. The burst changed after the prepare: rewritten, removed, or no longer written.
+        auto prep = [&](const std::string& id, std::string* burst) {
+            JsonValue v = parsed(call(*s.core, {{"cmd", "key_prepare"}, {"msg_id", id}}));
+            const JsonValue* c = v.get("confirm");
+            if (burst) *burst = c ? str(*c, "burst") : std::string();
+            return str(v, "prepare_id");
+        };
+        std::string b1;
+        const std::string m1 = s.written("FARSTN", "REWRITTEN UNDER THE DIALOG");
+        std::string p1 = prep(m1, &b1);
+        CHECK(!p1.empty() && !b1.empty());
+        {
+            std::ofstream w(fs::path(s.gc.outbox_dir) / b1, std::ios::binary | std::ios::app);
+            w << "XX";
+        }
+        s.now = s.now + 2;
+        rep = call(*s.core, {{"cmd", "key_confirm"}, {"prepare_id", p1}, {"confirm", "Y"}});
+        CHECK(!ok(rep) && err_of(rep).find("changed since the y dialog opened") != std::string::npos);
+        std::string b2;
+        const std::string m2 = s.written("FARSTN", "REMOVED UNDER THE DIALOG");
+        std::string p2 = prep(m2, &b2);
+        fs::remove(fs::path(s.gc.outbox_dir) / b2);
+        s.now = s.now + 2;
+        rep = call(*s.core, {{"cmd", "key_confirm"}, {"prepare_id", p2}, {"confirm", "Y"}});
+        CHECK(!ok(rep) && err_of(rep).find("no longer in the outbox") != std::string::npos);
+        const std::string m3 = s.written("FARSTN", "CANCELLED UNDER THE DIALOG");
+        std::string p3 = prep(m3, nullptr);
+        CHECK(s.core->cancel(m3, &e));
+        s.now = s.now + 2;
+        rep = call(*s.core, {{"cmd", "key_confirm"}, {"prepare_id", p3}, {"confirm", "Y"}});
+        CHECK(!ok(rep) && err_of(rep).find("is cancelled, not a burst written") != std::string::npos);
+        CHECK(f.count("key") == 0);
+        CHECK(s.state(m1) == "written" && s.state(m2) == "written");
+
+        // 4. Never confirmed nor cancelled: dropped by the core at gale-key's 120 s.
+        const std::string m4 = s.written("FARSTN", "LEFT OPEN");
+        std::string p4 = prep(m4, nullptr);
+        CHECK(!p4.empty() && s.gk->held() == 1);
+        s.now = s.now + 121;
+        JsonValue st = parsed(call(*s.core, {{"cmd", "status"}}));
+        CHECK(st.get("keying") && st.get("keying")->get("held") && st.get("keying")->get("held")->n == 0);
+        CHECK(!ok(call(*s.core, {{"cmd", "key_confirm"}, {"prepare_id", p4}, {"confirm", "Y"}})));
+
+        // 4. A connection that closes takes its dialogs with it; another
+        // connection can't confirm them.
+        uint16_t port = 0;
+        std::unique_ptr<ApiServer> srv;
+        for (int i = 0; i < 50 && !srv; ++i) {
+            uint16_t p = static_cast<uint16_t>(20000 + (::getpid() * 7 + i * 131) % 30000);
+            auto x = std::make_unique<ApiServer>(*s.core, p);
+            if (x->start()) {
+                srv = std::move(x);
+                port = p;
+            }
+        }
+        CHECK(srv != nullptr);
+        auto dial = [&]() {
+            int fd = ::socket(AF_INET, SOCK_STREAM, 0);
+            sockaddr_in a{};
+            a.sin_family = AF_INET;
+            a.sin_port = htons(port);
+            a.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+            CHECK(::connect(fd, reinterpret_cast<sockaddr*>(&a), sizeof a) == 0);
+            return fd;
+        };
+        auto line = [&](int fd, const std::string& req) {
+            std::string l = req + "\n";
+            ::send(fd, l.data(), l.size(), MSG_NOSIGNAL);
+            std::string buf;
+            char ch[4096];
+            while (buf.find('\n') == std::string::npos) {
+                ssize_t k = ::recv(fd, ch, sizeof ch, 0);
+                if (k <= 0) break;
+                buf.append(ch, static_cast<size_t>(k));
+            }
+            return buf.substr(0, buf.find('\n'));
+        };
+        if (srv) {
+            int a1 = dial(), a2 = dial();
+            rep = line(a1, R"({"cmd":"key_prepare","msg_id":")" + m4 + R"("})");
+            const std::string pa = str(parsed(rep), "prepare_id");
+            CHECK(!pa.empty() && s.gk->held() == 1);
+            s.now = s.now + 2;
+            rep = line(a2, R"({"cmd":"key_confirm","prepare_id":")" + pa + R"(","confirm":"Y"})");
+            CHECK(!ok(rep) && err_of(rep).find("another connection") != std::string::npos);
+            CHECK(s.gk->held() == 1);
+            ::close(a1);  // the page reloads with the dialog open
+            CHECK(wait_for([&] { return s.gk->held() == 0; }, 3000));
+            rep = line(a2, R"({"cmd":"key_confirm","prepare_id":")" + pa + R"(","confirm":"Y"})");
+            CHECK(!ok(rep) && err_of(rep).find("no such y dialog") != std::string::npos);
+            ::close(a2);
+            srv->stop();
+        }
+        CHECK(f.count("key") == 0 && s.state(m4) == "written");
     }
 
     // ---- a station with no gale-key at all: the calls say so, status says why

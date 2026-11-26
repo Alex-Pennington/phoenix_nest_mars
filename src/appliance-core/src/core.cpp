@@ -669,7 +669,8 @@ bool Core::key_item(const std::string& msg_id, const std::string& burst, KeyItem
     auto r = id ? store_.key_row(*id) : std::nullopt;
     if (!r) {
         if (error)
-            *error = msg_id.empty() ? (burst.empty() ? std::string("give msg_id or burst")
+            *error = msg_id.empty() ? (burst.empty() ? std::string("name a msg_id or a burst: a prepare is only for a "
+                                                                   "burst already written to the outbox")
                                                      : burst + " is no burst of a message of ours: never sent to gale-key")
                                     : "no outgoing message " + msg_id;
         return false;
@@ -718,7 +719,9 @@ void Core::standing_off(const std::string& mode, const std::string& why) {
 }
 
 void Core::key_automatic() {
-    if (!gk_ || emcon_) return;
+    if (!gk_) return;
+    gk_->held();  // y dialogs past gale-key's 120 s are dropped here, even if never touched again
+    if (emcon_) return;
     const std::vector<std::string> on = gk_->standing();
     if (on.empty()) return;
     const auto now = std::chrono::steady_clock::now();

@@ -1,6 +1,8 @@
 // The operator screen's web port: see web_server.h and docs/api.md.
 #include "web_server.h"
 
+#include "gale_key.h"
+
 #include "json.h"
 #include "net.h"
 
@@ -518,6 +520,7 @@ void WebServer::serve_file(int fd, const std::string& target) {
 }
 
 void WebServer::serve_ws(int fd, const std::string& key, std::string buf) {
+    KeyConnection conn;  // gale-web's y dialogs are dropped when its socket closes (gale_key.h)
     if (!send_all(fd, "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
                       "Sec-WebSocket-Accept: " + web::ws_accept(key) + "\r\n\r\n")) {
         close_fd(fd);

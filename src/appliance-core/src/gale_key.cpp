@@ -1,12 +1,16 @@
 #include "gale_key.h"
 
 #include "compose.h"
+#include "sha256.h"
 
 #include <algorithm>
 #include <cerrno>
 #include <chrono>
 #include <cstring>
 #include <filesystem>
+#include <fstream>
+#include <set>
+#include <sstream>
 #include <random>
 #include <sys/socket.h>
 #include <sys/time.h>
@@ -38,7 +42,39 @@ bool one_of(const std::string& s, std::initializer_list<const char*> set) {
     return false;
 }
 
+bool read_whole(const std::string& path, std::string& out) {
+    std::error_code ec;
+    if (!fs::is_regular_file(path, ec)) return false;
+    std::ifstream f(path, std::ios::binary);
+    if (!f) return false;
+    std::stringstream ss;
+    ss << f.rdbuf();
+    out = ss.str();
+    return static_cast<bool>(f) || f.eof();
+}
+
+// Every GaleKey alive, so a closing connection drops its dialogs in each.
+std::mutex g_reg_mu;
+std::set<GaleKey*>& registry() {
+    static std::set<GaleKey*> r;
+    return r;
+}
+std::atomic<unsigned long long> g_next_conn{1};
+thread_local unsigned long long t_conn = 0;
+
 }  // namespace
+
+// ------------------------------------------------------------------ connections
+
+KeyConnection::KeyConnection() : id_(g_next_conn++) { t_conn = id_; }
+
+KeyConnection::~KeyConnection() {
+    t_conn = 0;
+    std::lock_guard<std::mutex> g(g_reg_mu);
+    for (GaleKey* k : registry()) k->drop_connection(id_);
+}
+
+unsigned long long KeyConnection::current() { return t_conn; }
 
 // ------------------------------------------------------------------ socket
 
@@ -140,9 +176,17 @@ GaleKey::GaleKey(std::shared_ptr<GaleKeyLink> link, std::string outbox_dir)
         return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
     };
     thread_ = std::thread([this] { worker(); });
+    std::lock_guard<std::mutex> g(g_reg_mu);
+    registry().insert(this);
 }
 
-GaleKey::~GaleKey() { halt(); }
+GaleKey::~GaleKey() {
+    {
+        std::lock_guard<std::mutex> g(g_reg_mu);
+        registry().erase(this);
+    }
+    halt();
+}
 
 void GaleKey::halt() {
     {
@@ -232,6 +276,16 @@ size_t GaleKey::held() {
 
 GaleKey::Prepared GaleKey::prepare(const KeyItem& it) {
     Prepared p;
+    // gale-key binds its token to the WAV's bytes, so a prepare is only for a
+    // burst already whole in the outbox, never for the next one written.
+    const std::string wav = wav_path(it.burst);
+    std::string bytes;
+    if (it.burst.empty() || !read_whole(wav, bytes) || bytes.empty()) {
+        p.error = (it.burst.empty() ? std::string("no burst") : it.burst) +
+                  " is not in the outbox: nothing to prepare (a prepare is only for a burst already written)";
+        return p;
+    }
+    const std::string digest = sha256_hex(bytes);
     std::string req = air_request("prepare", it, "local");
     req += "}";
     GaleKeyReply r = ask(req);
@@ -274,6 +328,9 @@ GaleKey::Prepared GaleKey::prepare(const KeyItem& it) {
     Held h;
     h.kind = "air";
     h.item = it;
+    h.wav = wav;
+    h.sha256 = digest;
+    h.conn = KeyConnection::current();
     h.token = token;
     {
         std::lock_guard<std::mutex> g(mu_);
@@ -334,6 +391,7 @@ GaleKey::Prepared GaleKey::prepare_standing(const std::string& mode) {
     Held h;
     h.kind = "standing";
     h.mode = mode;
+    h.conn = KeyConnection::current();
     h.token = token;
     {
         std::lock_guard<std::mutex> g(mu_);
@@ -364,6 +422,10 @@ bool GaleKey::take(const std::string& prepare_id, Held& out, std::string* error)
         if (error) *error = "that y dialog has expired (gale-key's token lasts 120 s): open it again";
         return false;
     }
+    if (it->second.conn != 0 && it->second.conn != KeyConnection::current()) {
+        if (error) *error = "that y dialog was opened on another connection: confirm it there, or open it again here";
+        return false;
+    }
     if (now - it->second.at < kGaleKeySoonestS) {
         if (error) *error = "too soon after the prompt (under 0.5 s): gale-key would refuse it; still held";
         return false;
@@ -377,6 +439,34 @@ bool GaleKey::cancel(const std::string& prepare_id) {
     std::lock_guard<std::mutex> g(mu_);
     drop_expired();
     return held_.erase(prepare_id) > 0;
+}
+
+size_t GaleKey::drop_connection(unsigned long long conn) {
+    if (conn == 0) return 0;
+    std::lock_guard<std::mutex> g(mu_);
+    size_t n = 0;
+    for (auto it = held_.begin(); it != held_.end();) {
+        if (it->second.conn == conn) {
+            it = held_.erase(it);
+            ++n;
+        } else {
+            ++it;
+        }
+    }
+    return n;
+}
+
+bool GaleKey::unchanged(const Held& h, std::string* error) const {
+    std::string bytes;
+    if (h.wav != wav_path(h.item.burst) || !read_whole(h.wav, bytes) || bytes.empty()) {
+        if (error) *error = h.item.burst + " is no longer in the outbox: not keyed";
+        return false;
+    }
+    if (sha256_hex(bytes) != h.sha256) {
+        if (error) *error = h.item.burst + " changed since the y dialog opened (its sha256 differs): not keyed; open it again";
+        return false;
+    }
+    return true;
 }
 
 GaleKeyReply GaleKey::key(const Held& h) {

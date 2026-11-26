@@ -1657,6 +1657,12 @@ the kiosk opens its y dialog →
      "confirm":{"kind":"air","world":"mars","channel":"P1","control":"local","id":false,"ptt":"rts",
                 "msg_id":"ID","burst":"BURST.wav"}}
 
+A prepare is only for a burst already written: `msg_id` or `burst` must name
+a message of ours in state `written` whose `BURST.wav` is in the outbox now.
+An empty call, an unknown message or burst, a message in any other state, or
+a burst whose WAV is gone is refused, and gale-key isn't asked. gale-key binds
+its token to the WAV's bytes, so a prepare never covers a burst written later.
+
 The core asks gale-key to prepare, which runs every gate and answers with a
 one-shot token. The core holds the token against `prepare_id`. The token
 never leaves the core: not in a reply, not in the log. `confirm` is gale-key's
@@ -1666,6 +1672,13 @@ frequency goes to the kiosk: any text from gale-key that names one is
 replaced by "(gale-key's text named a frequency; not shown)". A refused
 prepare holds nothing and returns gale-key's reason. A new `key_prepare` for
 the same burst drops the token held before it.
+
+The held token is bound to that exact burst: the WAV's path and sha256 (read
+when the prepare is made), the message's world and the channel. It belongs to
+the connection (API socket or gale-web's WebSocket) that opened the dialog: it
+is confirmed only there, and dropped when that connection closes (a page
+reloaded with the dialog open). One never confirmed or cancelled is dropped at
+`expires_s` (gale-key's 120 s), whether or not anything asks for it again.
 
 `{"cmd":"key_confirm","prepare_id":"KP-...","confirm":"Y"}`, sent on the
 keyboard y →
@@ -1682,9 +1695,15 @@ is sent:
 
 - without `confirm` of `Y` (the core never makes up a Y; the dialog stays held);
 - sooner than 0.5 s after the prepare (gale-key would refuse it; still held);
-- after `key_cancel`, after the token was used, or once it is past
-  `expires_s` (gale-key's 120 s at most): open the dialog again;
-- when the checks above no longer hold, or the burst changed since.
+- after `key_cancel`, after the token was used, once it is past `expires_s`
+  (gale-key's 120 s at most), or after its connection closed: open the dialog
+  again;
+- on another connection than the one that opened it;
+- when the WAV is no longer in the outbox, or its sha256 differs from the
+  prepare's;
+- when the message is no longer `written` with that burst, its world or
+  channel changed, gale-key was already asked to key it, or the checks above
+  no longer hold.
 
 When gale-key can't be reached, nothing keys: the call says why, the burst
 stays `written` and may be prepared again.
