@@ -24,6 +24,7 @@ find_package(EXPAT REQUIRED)
 # are the ones a box comes with.
 file(GLOB PNA_FORM_FILES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/forms/*.form)
 list(SORT PNA_FORM_FILES)
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${PNA_FORM_FILES})  # an edited form reconfigures
 set(PNA_FORMS_CPP ${CMAKE_CURRENT_BINARY_DIR}/builtin_forms.cpp)
 set(_pna_forms_body "")
 foreach(_f ${PNA_FORM_FILES})
