@@ -238,11 +238,12 @@ With the station book on, `status` also has `on_duty`, `net` (the open net) and
 `keyed`, `tx_locked`, `meter` and the rest. It is read at most once a second.
 It is left out when no tuner socket is set or nothing answers on it.
 
-`keying` says whether the core can ask gale-key to key (see "Keying: the core
-asks gale-key" below):
+`keying` says whether the core can hand a burst to the station controller
+(see "Keying: the core asks the station controller" below). `controller` is
+its state; `gale_key` carries the same value for one release:
 
-    "keying":{"gale_key":"not answering","socket":"/run/gale-key/key.sock",
-      "why":"gale-key isn't running (no socket at /run/gale-key/key.sock): nothing is keyed, bursts stay written",
+    "keying":{"controller":"not answering","gale_key":"not answering","socket":"/run/gale-rx/control.sock",
+      "why":"the station controller isn't running (no socket at /run/gale-rx/control.sock): nothing is keyed, bursts stay written",
       "standing":[],"held":0,"answers_written":0}
 
 - `gale_key`: `answering` (the last request had its reply), `busy` (gale-key
@@ -318,7 +319,12 @@ as MARS. Alex's hard rule stands: there is no forward or auto-copy route between
   (ALL) is a Network-layer address (D.5.2.8), so it needs a network named with it: a broadcast
   with no `service` is refused. `send` and `compose_send` carry `service`. When it differs from the destination's,
   the send is refused as a crossing. A collective's members must all have the message's service.
-- **Received traffic** takes the service of the channel it was heard on.
+- **Received traffic** takes the service of the channel it was heard on: the channel plan's
+  channel on the dial its capture's name carries. A link that names no channel (loopback,
+  STANAG 5066, Appendix A) gives its traffic the service `--rx-service S` names, or none.
+- **Where the tables are.** `--services-dir DIR` (default `/etc/greybeard-ale/services`) is read
+  once at start. A file not root's is refused; `--services-unlocked` lifts that on a test stand
+  only. A refused file is said at start and the other services still load.
 - **Channels belong to the link controller.** The channel table, with each channel's label,
   frequency, mode and service, is the link controller's. The core keeps channel labels only,
   for the screens and for nets, and it does not reason about frequency or mode. Stage 1 leaves
@@ -327,14 +333,22 @@ as MARS. Alex's hard rule stands: there is no forward or auto-copy route between
 - **A send's channel.** Channel selection is the link controller's (D.4.2.8.2). The core passes
   the operator's pick down as a requirement and never sets the radio. `compose_send` and `send`
   take `channel`, a label of the message's service. Left out, the send uses the channel the
-  controller reports the radio on, when that channel's service is the message's.
+  controller reports the radio on, when that channel's service is the message's. On
+  `compose_send`, `send_acp127` and `send_acp126` the label is `radio_channel`, because their
+  `channel` is already the ACP 127 channel letters after VZCZC; `send` and `send_chat` take
+  either name.
 - **The routing table** follows D.4.2.1.1 and D.5.2.1.2. It has one entry per destination,
   and each entry also names the destination's service. Operator entries are kept, and nothing
-  automatic ever overwrites them. Each `route_set` rule is an operator entry.
+  automatic ever overwrites them. Each `route_set` rule is an operator entry, and it is refused
+  without its `service` or with an ALE address of another service; `route_list` gives `service`
+  (and `world` for one release).
 - **The one route function.** Every send path asks one function for its route: `send`,
   `compose_send`, `send_acp127`, `send_acp126`, `send_chat`, replies, `qsl` receipts,
   `retransmit`, net call-ups, BBS routing, machine answers, ACKs and orderwires, and the resend
-  queue, `requeue` and `release`. `qsl` and `retransmit` carry the source message's service. The
+  queue, `requeue` and `release`. `qsl` and `retransmit` carry the source message's service, and
+  `reply_draft` gives it as `service`. A net call-up takes the request's `service`, else its
+  channel's. `card_send`, `bundle_send`, `net_tape` and the parts calls take `service`, and
+  `form_submit` passes its `service` to the call its form runs. The
   function is the only place a crossing is refused. A crossing is a message whose service differs
   from its destination's, its route's or its channel's. The refusal names both services, and the
   item is never rerouted or queued: `refused: crossing: an amateur message on a MARS channel
