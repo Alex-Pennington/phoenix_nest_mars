@@ -1331,9 +1331,9 @@ void same_channels(JsonValue& v, const ChannelNames& names) {
         x.s = s;
         return x;
     };
+    const JsonValue* win = v.get("window");
+    const long long w = win && win->type == JsonValue::Type::Number ? std::llround(win->n) : 0;
     if (lab != v.obj.end() && lab->second.is_array()) {
-        const JsonValue* win = v.get("window");
-        long long w = win && win->type == JsonValue::Type::Number ? std::llround(win->n) : 0;
         for (size_t i = 0; i < lab->second.arr.size(); ++i) {
             const JsonValue& l = lab->second.arr[i];
             if (l.type == JsonValue::Type::String && !l.s.empty()) {
@@ -1345,8 +1345,17 @@ void same_channels(JsonValue& v, const ChannelNames& names) {
             }
         }
     } else if (khz != v.obj.end() && khz->second.is_array()) {
-        for (auto& e : khz->second.arr) {
-            JsonValue x = e.type == JsonValue::Type::Number ? text(names.name(e.n)) : JsonValue{};
+        // A dial named nowhere takes its place in the running window, as a
+        // channel with no label does above; "unlisted" only with no window.
+        for (size_t i = 0; i < khz->second.arr.size(); ++i) {
+            const JsonValue& e = khz->second.arr[i];
+            std::string n = e.type == JsonValue::Type::Number ? names.name(e.n) : std::string();
+            if (n == "unlisted" && w > 0) {
+                out.arr.push_back(text("W" + std::to_string(w) + "C" + std::to_string(i + 1)));
+                labels.arr.push_back(JsonValue{});
+                continue;
+            }
+            JsonValue x = n.empty() ? JsonValue{} : text(n);
             out.arr.push_back(x);
             labels.arr.push_back(x);
         }

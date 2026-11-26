@@ -840,7 +840,8 @@ needs only port 4100 (issue 3). The core does no ALE or modem work here.
 the scanner becomes a name before it leaves the core: the channel's
 designator in the channel plan, else its label in the scan plan
 (`record`/`voice HZ:LABEL`), else its place in the scan plan, `W<window>C<channel>`
-(1-based), else `unlisted`. No reply carries a key with `khz`, `hz` or `freq`
+(1-based), else, in a scanner's reply, its place in the running window the
+reply names, else `unlisted`. No reply carries a key with `khz`, `hz` or `freq`
 in it.
 
 **Where the files are.** Settings (config keys, or the same as `--options`),
@@ -882,7 +883,8 @@ last_ok_at, error?, view, scanner, scanner_stale?, incoming?, store?}`.
   with none), `channel_labels` the labels (null for none) and
   `channel_count` how many. A newer scanner (greybeard-ale
   docs/amateur-world.md) sends `channel_labels` and a count; an older one
-  sent `channels_khz`, which is named here and dropped. That older form is
+  sent `channels_khz`, which is named here and dropped (a dial named nowhere
+  is `W<window>C<n>` by its place in the reply's `window`, as above). That older form is
   read for one more release only. The newer scanner's world fields pass
   through as they are: `world` (`mars`, `amateur` or `both`),
   `channel_worlds`, `cycle_s`, `cycle_long`, `amateur_channels`,
