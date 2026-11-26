@@ -269,6 +269,30 @@ forwards into the amateur world`; a station refusal reads `K0TEST is an
 amateur station (heard on amateur channels); the MARS message center never
 sends to the amateur world`. Broadcasts (ALL) are not a station and still go.
 
+### The BBS's own automatic sends (ask 40)
+
+gale-term only guards the switch that turns routing on, so the core guards
+every automatic path itself. The BBS never answers, QSLs, lists for QRU, lets
+another station pull, or routes on a message whose world isn't `mars` or that
+came from a station of the amateur world. Each is refused with a log line
+(`BBS: ID not answered or routed: it came from K7AMA is an amateur station
+...`), never sent somewhere else:
+
+- received traffic and machine commands: no QSL, no answer, no route;
+- held traffic (QRU, ZEE pulls, `route_rerun`): an amateur sender's traffic
+  is never held;
+- a routed message is checked again when it comes due, so one whose sender
+  became amateur, or whose world changed, after it was routed is `refused`
+  with `why`;
+- `bbs_set ack_to` naming an amateur station is refused, and every answer is
+  checked before the hourly gate;
+- unacked traffic to a station later known as amateur is failed when that
+  station is heard ("not sent again"), never sent again.
+
+Behind these, every send the BBS makes goes through `Core::submit`, and every
+resend (unacked, ack timeout, `requeue`, the rule's next ALE address) passes
+the airtime check, so no rule or resend can skip the guard.
+
 ## compose_templates
 
 `{"cmd":"compose_templates"}` →

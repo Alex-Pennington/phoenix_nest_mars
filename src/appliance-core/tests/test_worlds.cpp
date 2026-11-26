@@ -262,7 +262,7 @@ int main() {
     }));
     CHECK(wait_for([&] {
         bbs::engine(a).pump();
-        return logged(a, "not sent to K7AMA") && logged(a, "BBS: answer to K7AMA");
+        return logged(a, "not sent to K7AMA") && logged(a, "not answered or routed: it came from K7AMA");
     }));
     for (auto& m : a.list(100)) CHECK(!(m.direction == "out" && m.dst == "K7AMA"));
     {

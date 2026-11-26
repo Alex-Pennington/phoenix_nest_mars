@@ -356,6 +356,8 @@ bool Engine::set(const std::map<std::string, std::string>& kv, std::string* erro
             if (!c.empty() && (is_broadcast(c) || c == "ALL" || c.compare(0, 4, "ALL-") == 0))
                 return fail(error, "ack_to can't be ALL: give one station, or leave it empty to answer the sender");
             if (!c.empty() && !valid_station(c)) return fail(error, "ack_to must be a call sign");
+            if (std::string w = core_.world_refusal(c); !c.empty() && !w.empty())
+                return fail(error, "refused: ack_to " + w);
             put[k] = c;
         } else if (k == "max_errors") {
             if (!as_int(v, 0, 100, iv)) return fail(error, "max_errors must be 0 to 100");
@@ -631,9 +633,23 @@ std::vector<Engine::Held> Engine::pool() {
         h.body = s.blob(4);
         h.state = s.text(5);
         h.created = s.i64(6);
+        // Ask 40: traffic from a station of the amateur world is never held
+        // for QRU, pulled or routed on into MARS.
+        if (!core_.world_refusal(strip_cm(h.src)).empty()) continue;
         out.push_back(h);
     }
     return out;
+}
+
+std::string Engine::world_block(const std::string& msg_id, const std::string& src) {
+    {
+        Stmt q(db_, "SELECT world FROM messages WHERE id = ?");
+        q.bind(1, msg_id);
+        if (q.step() && q.text(0) != "mars")
+            return "it is an item of the " + q.text(0) + " world; the MARS BBS never handles it";
+    }
+    if (std::string why = core_.world_refusal(strip_cm(src)); !why.empty()) return "it came from " + why;
+    return "";
 }
 
 bool Engine::held_for(const Held& m, const Settings& s, const std::vector<std::string>& guard) {
@@ -701,6 +717,10 @@ std::string Engine::answer(const std::string& to, const std::string& body, const
     std::string dst = strip_cm(to);
     if (!valid_station(dst) || is_broadcast(dst) || dst.compare(0, 4, "ALL-") == 0) {
         core_.note("BBS: no answer to " + to + " (" + what + "): answers never go to ALL");
+        return "";
+    }
+    if (std::string w = core_.world_refusal(dst); !w.empty()) {
+        core_.note("BBS: not answering " + dst + " (" + what + "): " + w);
         return "";
     }
     std::string why = gate(false);
@@ -991,12 +1011,13 @@ bool Engine::send_routed(Routed& rt) {
     // Read and let go of the row before anything writes: a read left open
     // across the core's write would pin an old snapshot and lock our own.
     bool found = false;
-    std::string p, raw;
+    std::string p, raw, src;
     {
-        Stmt q(db_, "SELECT src, prec, body FROM messages WHERE id = ? AND world = 'mars'");
+        Stmt q(db_, "SELECT src, prec, body FROM messages WHERE id = ?");
         q.bind(1, rt.msg_id);
         if (q.step()) {
             found = true;
+            src = q.text(0);
             p = q.text(1);
             raw = q.blob(2);
         }
@@ -1005,6 +1026,15 @@ bool Engine::send_routed(Routed& rt) {
         rt.state = "refused";
         rt.why = !rule ? "its rule was removed" : "the message is gone";
         save();
+        return false;
+    }
+    // Ask 40: checked again when it goes, so a rule, a re-run or a sitting
+    // that comes due later can't carry amateur traffic into MARS.
+    if (std::string why = world_block(rt.msg_id, src); !why.empty()) {
+        rt.state = "refused";
+        rt.why = why;
+        save();
+        core_.note("BBS: routing " + rt.msg_id + " refused: " + why);
         return false;
     }
     char prec = p.empty() ? 'R' : p[0];
@@ -1125,7 +1155,7 @@ void Engine::process(const std::string& id) {
     }
     Held h;
     {
-        Stmt q(db_, "SELECT src, dst, prec, body, state, created_at FROM messages WHERE id = ? AND direction = 'in' AND world = 'mars'");
+        Stmt q(db_, "SELECT src, dst, prec, body, state, created_at FROM messages WHERE id = ? AND direction = 'in'");
         q.bind(1, id);
         if (!q.step()) return;
         h.id = id;
@@ -1138,6 +1168,11 @@ void Engine::process(const std::string& id) {
         h.created = q.i64(5);
     }
     if (h.state != "received" && h.state != "overheard") return;
+    // Ask 40: no machine answer, QSL or route for amateur-world traffic.
+    if (std::string why = world_block(id, h.src); !why.empty()) {
+        core_.note("BBS: " + id + " not answered or routed: " + why);
+        return;
+    }
     Settings s = load();
     const std::string me = core_.station();
 

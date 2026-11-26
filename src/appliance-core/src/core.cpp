@@ -886,6 +886,14 @@ void Core::heard(const std::string& who) {
     // Traffic that went unanswered goes again now the station is on frequency.
     auto un = store_.out_to(src, "unacked");
     if (un.empty()) return;
+    // Ask 40: never to a station now known to be of the amateur world.
+    if (std::string why = world_refusal(src); !why.empty()) {
+        for (auto& m : un) {
+            store_.set_state(m.id, "failed", why);
+            log(m.id, "not sent again: " + why);
+        }
+        return;
+    }
     for (auto& m : un) store_.requeue(m.id, false);
     log("", "heard " + src + ": sending its " + std::to_string(un.size()) + " unacked message(s) again");
 }

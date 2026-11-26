@@ -204,6 +204,9 @@ private:
     std::optional<Rule> rule_for(const Held& m, const std::vector<Rule>& rs, const Settings& s);
     Routed route_one(const Held& m, const Rule& r, const Settings& s, bool dry_run);
     bool send_routed(Routed& rt);
+    // Ask 40: why the BBS must not answer, list, pull or route a message (its
+    // world isn't mars, or it came from a station of the amateur world), or "".
+    std::string world_block(const std::string& msg_id, const std::string& src);
     // Routed messages whose outgoing copy failed or went unacked: on to the
     // rule's next ALE address, or failed when none is left.
     void next_ale();
