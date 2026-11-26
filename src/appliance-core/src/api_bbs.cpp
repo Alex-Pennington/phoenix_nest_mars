@@ -87,6 +87,7 @@ void write_routed(JsonWriter& w, const bbs::Routed& r) {
         .field("state", r.state)
         .field("out_id", r.out_id)
         .field("due", static_cast<long long>(r.due))
+        .field("ale_pos", r.ale_pos)
         .field("processed", r.processed)
         .field("why", r.why)
         .end_object();

@@ -240,6 +240,11 @@ Engine::Engine(Core& core) : core_(core), clock_(system_now) {
     exec("CREATE TABLE IF NOT EXISTS bbs_routed (msg_id TEXT PRIMARY KEY, rule INTEGER NOT NULL, state TEXT NOT NULL,"
          " out_id TEXT NOT NULL DEFAULT '', due INTEGER NOT NULL, processed INTEGER NOT NULL DEFAULT 0,"
          " why TEXT NOT NULL DEFAULT '', at INTEGER NOT NULL)");
+    {
+        // Audit A: which of the rule's ALE addresses a routed message is on.
+        Stmt c(db_, "SELECT COUNT(*) FROM pragma_table_info('bbs_routed') WHERE name = 'ale_pos'");
+        if (c.step() && c.i64(0) == 0) exec("ALTER TABLE bbs_routed ADD COLUMN ale_pos INTEGER NOT NULL DEFAULT 0");
+    }
     exec("CREATE TABLE IF NOT EXISTS bbs_seen (msg_id TEXT PRIMARY KEY)");
     exec("CREATE TABLE IF NOT EXISTS bbs_qru (requester TEXT NOT NULL, line INTEGER NOT NULL, msg_id TEXT NOT NULL,"
          " PRIMARY KEY(requester, line))");
@@ -970,8 +975,9 @@ Routed Engine::route_one(const Held& m, const Rule& r, const Settings&, bool dry
 bool Engine::send_routed(Routed& rt) {
     std::string why = gate(true);
     auto save = [&]() {
-        Stmt u(db_, "UPDATE bbs_routed SET state = ?, out_id = ?, processed = ?, why = ? WHERE msg_id = ?");
-        u.bind(1, rt.state).bind(2, rt.out_id).bind(3, static_cast<int64_t>(rt.processed)).bind(4, rt.why).bind(5, rt.msg_id);
+        Stmt u(db_, "UPDATE bbs_routed SET state = ?, out_id = ?, processed = ?, why = ?, ale_pos = ? WHERE msg_id = ?");
+        u.bind(1, rt.state).bind(2, rt.out_id).bind(3, static_cast<int64_t>(rt.processed)).bind(4, rt.why)
+            .bind(5, static_cast<int64_t>(rt.ale_pos)).bind(6, rt.msg_id);
         u.step();
     };
     if (!why.empty()) {
@@ -1003,27 +1009,40 @@ bool Engine::send_routed(Routed& rt) {
     }
     char prec = p.empty() ? 'R' : p[0];
     std::string body = strip_ri(raw, load().broadcast_ri);
-    const std::string dst = rule->ale.front();
-    std::string err, id;
-    if (!rule->key.empty() && !codress::is_codress(body)) {
-        // Our own cipher only (the cipher slot), as compose_send does.
-        std::string ind = resolve_key(core_.keyring(), rule->key), secret, out;
-        if (ind.empty() || !core_.keyring()->send_key(ind, secret, &err)) {
-            if (err.empty()) err = "no key " + rule->key + " to send with";
-        } else if (!codress::encipher(*core_.cipher(), body, ind, secret, out, &err)) {
-            // err says why
+    // The rule's ALE addresses in calling order, from the one it is on (audit
+    // A): an address the core refuses is passed over for the next.
+    std::string err, id, dst, refusals;
+    for (int pos = std::max(0, rt.ale_pos); pos < static_cast<int>(rule->ale.size()) && id.empty(); ++pos) {
+        dst = rule->ale[pos];
+        err.clear();
+        if (!rule->key.empty() && !codress::is_codress(body)) {
+            // Our own cipher only (the cipher slot), as compose_send does.
+            std::string ind = resolve_key(core_.keyring(), rule->key), secret, out;
+            if (ind.empty() || !core_.keyring()->send_key(ind, secret, &err)) {
+                if (err.empty()) err = "no key " + rule->key + " to send with";
+            } else if (!codress::encipher(*core_.cipher(), body, ind, secret, out, &err)) {
+                // err says why
+            } else {
+                id = core_.submit_codress(dst, prec, out, body, ind, &err);
+            }
+            crypto::wipe(secret);
         } else {
-            id = core_.submit_codress(dst, prec, out, body, ind, &err);
+            id = core_.submit(dst, prec, body, &err);
         }
-        crypto::wipe(secret);
-    } else {
-        id = core_.submit(dst, prec, body, &err);
+        if (id.empty()) {
+            refusals += (refusals.empty() ? "" : "; ") + dst + ": " + err;
+            if (pos + 1 < static_cast<int>(rule->ale.size()))
+                core_.note("BBS: routing " + rt.msg_id + " to " + dst + " refused (" + err + "); calling " +
+                           rule->ale[pos + 1] + " next");
+        } else {
+            rt.ale_pos = pos;
+        }
     }
     if (id.empty()) {
         rt.state = "refused";
-        rt.why = err;
+        rt.why = refusals.empty() ? "the rule has no ALE address left to call" : refusals;
         save();
-        core_.note("BBS: routing " + rt.msg_id + " by rule " + std::to_string(rule->id) + " refused: " + err);
+        core_.note("BBS: routing " + rt.msg_id + " by rule " + std::to_string(rule->id) + " refused: " + rt.why);
         return false;
     }
     count_auto("route", id);
@@ -1033,7 +1052,8 @@ bool Engine::send_routed(Routed& rt) {
     rt.why = "";
     save();
     core_.note("BBS: routed " + rt.msg_id + " by rule " + std::to_string(rule->id) + " (" + rule->route +
-               "), queued as " + id + " for " + dst + "; ALE call order " + join(rule->ale, ",") +
+               "), queued as " + id + " for " + dst + " (ALE address " + std::to_string(rt.ale_pos + 1) + " of " +
+               std::to_string(rule->ale.size()) + "); ALE call order " + join(rule->ale, ",") +
                (rule->compress ? " (compress asked; sent uncompressed)" : ""));
     return true;
 }
@@ -1076,7 +1096,8 @@ std::vector<Routed> Engine::rerun(bool dry_run, std::string*) {
 std::vector<Routed> Engine::routed(int limit) {
     std::lock_guard<std::recursive_mutex> g(mu_);
     std::vector<Routed> out;
-    Stmt s(db_, "SELECT msg_id, rule, state, out_id, due, processed, why FROM bbs_routed ORDER BY at DESC, rowid DESC LIMIT ?");
+    Stmt s(db_, "SELECT msg_id, rule, state, out_id, due, processed, why, ale_pos FROM bbs_routed"
+                " ORDER BY at DESC, rowid DESC LIMIT ?");
     s.bind(1, static_cast<int64_t>(limit));
     while (s.step()) {
         Routed r;
@@ -1087,6 +1108,7 @@ std::vector<Routed> Engine::routed(int limit) {
         r.due = s.i64(4);
         r.processed = s.i64(5) != 0;
         r.why = s.text(6);
+        r.ale_pos = static_cast<int>(s.i64(7));
         out.push_back(r);
     }
     return out;
@@ -1257,19 +1279,77 @@ void Engine::pump() {
     // Routed traffic whose time has come and whose gate is open.
     std::vector<Routed> due;
     {
-        Stmt s(db_, "SELECT msg_id, rule, due FROM bbs_routed WHERE state = 'due' AND due <= ? ORDER BY due, rowid");
+        Stmt s(db_, "SELECT msg_id, rule, due, ale_pos FROM bbs_routed WHERE state = 'due' AND due <= ?"
+                    " ORDER BY due, rowid");
         s.bind(1, clock_());
         while (s.step()) {
             Routed r;
             r.msg_id = s.text(0);
             r.rule = s.i64(1);
             r.due = s.i64(2);
+            r.ale_pos = static_cast<int>(s.i64(3));
             r.state = "due";
             due.push_back(r);
         }
     }
     for (auto& r : due)
         if (!send_routed(r) && r.state == "due") break;  // gate shut: the rest wait too
+    next_ale();
+}
+
+void Engine::next_ale() {
+    struct Q {
+        std::string msg_id, out_id;
+        int64_t rule = 0;
+        int ale_pos = 0;
+        bool processed = false;
+    };
+    std::vector<Q> qs;
+    {
+        Stmt s(db_, "SELECT msg_id, out_id, rule, ale_pos, processed FROM bbs_routed WHERE state = 'queued' AND out_id != ''");
+        while (s.step()) qs.push_back({s.text(0), s.text(1), s.i64(2), static_cast<int>(s.i64(3)), s.i64(4) != 0});
+    }
+    for (auto& q : qs) {
+        auto m = core_.get(q.out_id);
+        if (!m || (m->state != "failed" && m->state != "unacked" && m->state != "expired")) continue;
+        std::optional<Rule> rule;
+        for (auto& r : rules())
+            if (r.id == q.rule) rule = r;
+        Routed rt;
+        rt.msg_id = q.msg_id;
+        rt.rule = q.rule;
+        rt.processed = q.processed;
+        rt.out_id = q.out_id;
+        const std::string what = m->dst + " (" + m->state + (m->last_error.empty() ? "" : ": " + m->last_error) + ")";
+        const int next = q.ale_pos + 1;
+        if (!rule || next >= static_cast<int>(rule->ale.size())) {
+            rt.state = "failed";
+            rt.ale_pos = q.ale_pos;
+            rt.why = !rule ? "its rule was removed; last tried " + what
+                           : "no ALE address of rule " + std::to_string(rule->id) + " answered; last tried " + what;
+            if (m->state == "unacked") rt.why += "; that copy still goes if " + m->dst + " is heard";
+            Stmt u(db_, "UPDATE bbs_routed SET state = ?, why = ? WHERE msg_id = ?");
+            u.bind(1, rt.state).bind(2, rt.why).bind(3, rt.msg_id);
+            u.step();
+            core_.note("BBS: routing " + rt.msg_id + " failed: " + rt.why);
+            continue;
+        }
+        // An unacked copy would go again by itself when its station is heard:
+        // it is stopped, so the message isn't delivered twice.
+        if (m->state == "unacked") core_.cancel(q.out_id, nullptr, "the BBS, calling the rule's next ALE address");
+        core_.note("BBS: routed " + rt.msg_id + " got no answer from " + what + "; calling " + rule->ale[next] +
+                   ", ALE address " + std::to_string(next + 1) + " of " + std::to_string(rule->ale.size()));
+        rt.state = "due";
+        rt.ale_pos = next;
+        rt.due = clock_();
+        rt.why = "calling " + rule->ale[next] + " next";
+        {
+            Stmt u(db_, "UPDATE bbs_routed SET state = 'due', due = ?, ale_pos = ?, why = ? WHERE msg_id = ?");
+            u.bind(1, rt.due).bind(2, static_cast<int64_t>(rt.ale_pos)).bind(3, rt.why).bind(4, rt.msg_id);
+            u.step();
+        }
+        send_routed(rt);
+    }
 }
 
 void Engine::start() {

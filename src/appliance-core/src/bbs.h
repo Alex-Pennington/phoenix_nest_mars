@@ -109,8 +109,13 @@ struct Rule {
 struct Routed {
     std::string msg_id;
     int64_t rule = 0;
-    std::string state;   // "due" (waits for its time or the gate), "queued", "refused"
+    // "due" (waits for its time or the gate), "queued", "refused", or
+    // "failed" (no ALE address of its rule answered).
+    std::string state;
     std::string out_id;  // the outgoing message, once queued
+    // Audit A: which of the rule's ALE addresses it is on (0: the first). When
+    // the message to one fails or goes unacked, the engine calls the next.
+    int ale_pos = 0;
     int64_t due = 0;     // unix seconds
     bool processed = false;
     std::string why;
@@ -199,6 +204,9 @@ private:
     std::optional<Rule> rule_for(const Held& m, const std::vector<Rule>& rs, const Settings& s);
     Routed route_one(const Held& m, const Rule& r, const Settings& s, bool dry_run);
     bool send_routed(Routed& rt);
+    // Routed messages whose outgoing copy failed or went unacked: on to the
+    // rule's next ALE address, or failed when none is left.
+    void next_ale();
     int64_t next_due(const std::string& sched, int64_t now);
 
     Core& core_;

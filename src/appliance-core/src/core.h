@@ -240,7 +240,8 @@ public:
     bool emcon();
     // The operator's hand on the queue. Each returns false with *error when
     // the message isn't one of ours or isn't in a state it can leave.
-    bool cancel(const std::string& id, std::string* error);   // not while on the air
+    bool cancel(const std::string& id, std::string* error,     // not while on the air
+                const std::string& by = "the operator");
     bool hold(const std::string& id, std::string* error);     // queued -> held
     bool release(const std::string& id, std::string* error);  // held -> queued
     bool requeue(const std::string& id, std::string* error);  // failed, unacked, cancelled, expired -> queued

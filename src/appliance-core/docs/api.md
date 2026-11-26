@@ -1297,7 +1297,9 @@ position wins.
 
 - `route_list` returns `routing`, `broadcast_ri`, `auto_send`,
   `auto_send_why_not`, `rules`, and `routed` (the last 20: `msg_id`, `rule`,
-  `state` `due`/`queued`/`refused`, `out_id`, `due`, `processed`, `why`).
+  `state` `due`/`queued`/`refused`/`failed`, `out_id`, `due`, `ale_pos`,
+  `processed`, `why`). `ale_pos` is which of the rule's ALE addresses it is
+  on (0: the first). Each rule also has `"world":"mars"`.
 - `route_set {id?, match, route, ale, key, sched, compress,
   mark_processed}` adds a rule, or changes rule `id` keeping what isn't
   named. Returns `id`. Needs at least one ALE address; an unknown key is
@@ -1309,7 +1311,14 @@ position wins.
   and `auto_send_why_not`.
 
 A routed message goes to the rule's first ALE address with the broadcast RI
-struck off; the log names the whole calling order. With `key` set, plain
+struck off; the log names the whole calling order. When the copy to one
+address fails, expires or goes unacked, the rule's next address is called
+with the same message (the unacked copy is cancelled first, so the message
+isn't delivered twice), and `ale_pos` moves on. An address the core refuses
+(this station, or a station of the amateur world) is passed over for the
+next. When no address is left, the routed message is `failed` with why; a
+last copy that is unacked is left as it is, so it still goes if that
+station is heard. With `key` set, plain
 traffic is enciphered in our cipher slot first (it needs a date-time group
 line). Traffic this station originated isn't routed.
 

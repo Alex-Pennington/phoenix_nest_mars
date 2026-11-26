@@ -764,7 +764,7 @@ bool refuse(std::string* error, const std::string& why) {
 }
 }  // namespace
 
-bool Core::cancel(const std::string& id, std::string* error) {
+bool Core::cancel(const std::string& id, std::string* error, const std::string& by) {
     std::lock_guard<std::mutex> g(mu_);
     auto m = store_.get(id);
     if (!m || m->direction != "out") return refuse(error, "no message " + id + " of ours");
@@ -773,8 +773,8 @@ bool Core::cancel(const std::string& id, std::string* error) {
     if (m->state != "queued" && m->state != "held" && m->state != "sent" && m->state != "unacked" &&
         m->state != "failed")
         return refuse(error, id + " is " + m->state + "; only queued, held, sent, unacked or failed traffic can be cancelled");
-    store_.set_state(id, "cancelled", "cancelled by the operator");
-    log(id, "cancelled by the operator (was " + m->state + ")");
+    store_.set_state(id, "cancelled", "cancelled by " + by);
+    log(id, "cancelled by " + by + " (was " + m->state + ")");
     return true;
 }
 
