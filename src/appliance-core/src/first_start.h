@@ -16,6 +16,8 @@
 #include <cstdint>
 #include <string>
 
+#include "station.h"
+
 namespace pna {
 namespace first_start {
 
@@ -29,6 +31,12 @@ bool saved_call(const std::string& db_dir, std::string& call);
 // DB_DIR/CALL.id (where the station looks for them), then writes the call
 // file; *call_set gets the call.
 std::string handle(const std::string& db_dir, int64_t now, const std::string& line, std::string* call_set);
+
+// The station keys for CALL at DB_DIR/CALL.id: read if there, made if not
+// (*made). False with *err when they can't be read or made, or are another
+// call's.
+bool station_keys(const std::string& db_dir, const std::string& call, int64_t now, station::Identity& id, bool* made,
+                  std::string* err);
 
 // Serves setup mode on 127.0.0.1:port until a call is set (returned) or
 // *stop turns true (returns ""). False in *opened when the port can't open.

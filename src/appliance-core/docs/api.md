@@ -704,6 +704,68 @@ it has. None of them transmits.
 Refused by the core, before anything is sent: a bad window or seconds, an
 empty or malformed channel or plan name, no `link-socket`.
 
+### settings_list, settings_set, settings_reset, keying_settings
+
+The station's settings as the operator sees them (src/settings.h). Every
+setting is one row of a table compiled into the core. Alex's ruling
+(2026-11-26): only host plumbing is kept from the operator. Store paths,
+ports, programs and link plumbing are `locked` and stay in appliance.conf;
+the operator edits every other setting, the station call included.
+
+- `settings_list {group?, all?}` returns `{ok, settings[], file}`. Each row:
+  `{key, group, label, type, class, gate, applies, choices?, min?, max?,
+  unit?, value, default, source, pending_restart, help?, warning?}`, or for
+  an `action` row (`amateur-calls`, `cipher`) `call` in place of the value:
+  the call that sets it. `type` is `text`, `int`, `bool` (`yes`/`no`),
+  `choice`, `call`, `list` or `action`. `source` is `operator`, `command
+  line`, `config`, `world file` or `default`. `applies` is `now` or
+  `restart`; `pending_restart` is true when the saved value differs from the
+  one in force since start. `group` filters (Station, Worlds, Keying,
+  Display, Traffic); locked rows show only with `all:"Y"`.
+- `settings_set {key, value, confirm?}`: `key` takes `-` or `_`
+  (`ptt_line`). A row with `gate:"confirm"` (station, world, tx-world, and
+  cat-ptt when turned on) answers `{ok:false, confirm_needed:true, warning}`
+  until it is sent again with `confirm:"Y"`. Reply: `{ok, key, value,
+  changed, applies, restart_needed, also_set[]?, keys_made?, fingerprint?,
+  note?}`. A new station call has its keys made at once (`fingerprint`) and
+  starts its own message store at the next start. A new `world` is written to
+  GALE-DIR/world, the file the scanner picks its world from; when tx-world no
+  longer fits it, tx-world follows (`also_set`).
+- `settings_reset {key}`: drops the operator's value; the config's or the
+  default stands again.
+- `keying_settings {}` returns `{ok, keying, file}`, `keying` being the
+  object in the keying file.
+
+The operator's values are kept in DB_DIR/operator-settings (`key = "value"`,
+mode 600), written whole by the core, never by hand. The core never writes
+appliance.conf. At start they are read after appliance.conf and the command
+line, so the operator's word stands; a line no longer valid is skipped with
+a log line and never stops the core.
+
+The new rows (asks 35, 36):
+
+| key | values | applies |
+|---|---|---|
+| `world` | `mars`, `amateur`, `both` (default: GALE-DIR/world, else mars with GALE-DIR/net_plans, else amateur) | now |
+| `tx-world` | `mars` or `amateur`, one of the worlds worked (default: amateur for an amateur station, else mars) | now |
+| `ptt-line` | `RTS` or `DTR`; must match switch S1001 in the SCU-17; unset until chosen | now |
+| `cat-ptt` | `yes`/`no`, default `no`; turning it on needs the operator's yes (a PTT-line kill switch won't stop it) | now |
+| `engineering-readouts` | `yes`/`no`, default `no` | now |
+
+**The keying file** (`keying-file`, default GALE-DIR/keying.json, mode 644)
+is for gale-key, greybeard-ale's host keying service. The core writes it
+whole (temp file renamed over it) at start and on every change of a keying
+row:
+
+```
+{"version":1,"ptt_line":"RTS"|null,"cat_ptt":false,"world":"both",
+ "tx_world":"mars","engineering_readouts":false,"station":"CALL",
+ "updated_at":UNIX}
+```
+
+The core never keys the radio. There is no VOX setting, and none will be
+added.
+
 ### identity_get, identity_set (the amateur world's own addresses)
 
 The calls this station answers to in the amateur world, kept apart from

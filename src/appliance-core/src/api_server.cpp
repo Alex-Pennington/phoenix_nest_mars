@@ -27,6 +27,7 @@
 #include "net.h"
 #include "training.h"
 #include "station_view.h"
+#include "settings.h"
 
 #include <sys/socket.h>
 
@@ -2535,7 +2536,8 @@ std::string mark_training(const std::string& reply) {
 // material is built in), or change the real station's backup or cipher.
 std::string training_refuses(const std::string& cmd, std::map<std::string, std::string>& req) {
     static const std::set<std::string> never = {"station_backup", "station_restore", "cipher_install", "cipher_remove",
-                                                "identity_set", "settings_set"};
+                                                "identity_set", "settings_set",
+                                                "settings_reset"};
     if (never.count(cmd)) return cmd + " isn't done in training: turn training off first";
     if (!req["out"].empty()) return "training doesn't write files: turn training off first";
     if (!req["file"].empty()) return "training doesn't read files in: its traffic is built in";
@@ -2724,6 +2726,7 @@ std::string ApiServer::handle_call(Core& core, const std::string& line) {
 
     if (auto r = handle_forms(core, cmd, req)) return *r;
     if (auto r = handle_guide(core, cmd, req)) return *r;
+    if (auto r = settings::handle(cmd, req, static_cast<int64_t>(std::time(nullptr)))) return *r;
     if (auto r = handle_bbs(core, cmd, req)) return *r;
     if (auto r = handle_inbox(core, cmd, req)) return *r;
     // The tuner (tuner.h): forwarded to greybeard-ale's ldg-tuner daemon. A
@@ -3179,7 +3182,7 @@ std::string ApiServer::handle_call(Core& core, const std::string& line) {
     if (auto r = handle_ops(core, cmd, req)) return *r;
 
     return error_reply(
-        "unknown cmd; use status, scanner_status, scanner_hold, scanner_release, scanner_record, scanner_plan, word_feed, identity_get, identity_set, station_health, captures_list, heard_stations, tuner_status, tuner_channel, send, list, get, queue, log, emcon, cancel, hold, release, requeue, link_format, orderwire, rx_raw, overdue, send_file, get_file, send_acp127, send_acp126, send_chat, parse_acp127, "
+        "unknown cmd; use status, scanner_status, scanner_hold, scanner_release, scanner_record, scanner_plan, word_feed, identity_get, identity_set, settings_list, settings_set, settings_reset, keying_settings, station_health, captures_list, heard_stations, tuner_status, tuner_channel, send, list, get, queue, log, emcon, cancel, hold, release, requeue, link_format, orderwire, rx_raw, overdue, send_file, get_file, send_acp127, send_acp126, send_chat, parse_acp127, "
         "parse_traffic, compose_templates, compose_form, compose_check, compose_send, compose_advise, key_import, keys_list, key_zeroize, key_open, cipher_status, cipher_install, cipher_remove, station_card, station_backup, station_restore, card_import, cards_list, card_check, card_send, net_tape, tape_seal, or the book's calls (docs/api.md): book_*, net_*, sched_*, duty_*, log_add, station_log, report_monthly");
 }
 

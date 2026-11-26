@@ -10,6 +10,7 @@
 #include "bbs.h"
 #include "compose.h"
 #include "config.h"
+#include "settings.h"
 #include "first_start.h"
 #include "core.h"
 #include "station.h"
@@ -318,7 +319,26 @@ int main(int argc, char** argv) {
             return 2;
         }
     }
-    for (int i = 1; i < argc; ++i) args.push_back(argv[i]);
+    std::vector<std::string> config_args = args, cli_args;
+    for (int i = 1; i < argc; ++i) cli_args.push_back(argv[i]);
+    args.insert(args.end(), cli_args.begin(), cli_args.end());
+    // The operator's own settings (settings.h), read last so the kiosk's word
+    // stands. A line no longer valid is skipped, never a reason not to start.
+    auto config_map = settings::args_map(config_args), cli_map = settings::args_map(cli_args);
+    auto from = [&](const char* k, const std::string& def) {
+        if (cli_map.count(k)) return cli_map[k];
+        if (config_map.count(k)) return config_map[k];
+        return def;
+    };
+    std::vector<std::string> op_skipped;
+    auto op_map = settings::load_operator(from("db-dir", "."), &op_skipped);
+    for (auto& why : op_skipped)
+        std::cerr << "operator settings (" << settings::operator_file(from("db-dir", ".")) << "), skipped " << why
+                  << "\n";
+    {
+        auto ov = settings::overlay_args(op_map);
+        args.insert(args.end(), ov.begin(), ov.end());
+    }
 
     for (size_t i = 0; i < args.size(); ++i) {
         std::string a = args[i];
@@ -354,6 +374,18 @@ int main(int argc, char** argv) {
             else if (a == "--db-dir") db_dir = next();
             else if (a == "--loopback-bps") loop_bps = std::stoi(next());
             else if (a == "--no-acks") acks = false;
+            else if (a == "--acks") acks = true;
+            else if (a == "--no-link-gate") link_gate = false;
+            else if (a == "--world" || a == "--tx-world" || a == "--ptt-line" || a == "--cat-ptt" ||
+                     a == "--engineering-readouts" || a == "--keying-file") {
+                // Read by settings.h (the keying rows are gale-key's): checked below.
+                std::string v = next(), norm, why;
+                if (const settings::Row* r = settings::find(a.substr(2)); r && r->cls == "operator" &&
+                                                                          !settings::check(*r, v, &norm, &why)) {
+                    std::cerr << a << ": " << why << "\n";
+                    return 2;
+                }
+            }
             else if (a == "--max-attempts") max_attempts = std::stoi(next());
             else if (a == "--ack-timeout") g_ack_timeout = std::stoi(next());
             else if (a == "--ack-retries") g_ack_retries = std::stoi(next());
@@ -444,8 +476,28 @@ int main(int argc, char** argv) {
         return 2;
     }
     if (link_gate && link_socket.empty()) {
-        std::cerr << "--link-gate needs --link-socket\n";
-        return 2;
+        if (op_map.count("link-gate")) {
+            // The operator's setting never stops the core: it waits for a link socket.
+            std::cerr << "operator settings: link-gate needs a link socket (link-socket in appliance.conf); "
+                         "sending without it\n";
+            link_gate = false;
+        } else {
+            std::cerr << "--link-gate needs --link-socket\n";
+            return 2;
+        }
+    }
+    {
+        settings::Start st;
+        st.db_dir = db_dir;
+        st.gale_dir = g_view.gale_dir.empty() ? "." : g_view.gale_dir;
+        st.config = config_map;
+        st.cli = cli_map;
+        st.op = op_map;
+        settings::init(st);
+        std::string why;
+        if (!check_only && !settings::write_keying(static_cast<int64_t>(std::time(nullptr)), &why))
+            std::cerr << "keying settings: " << why << " (gale-key reads them from keying_settings)\n";
+        if (!check_only && !settings::sync_world(&why)) std::cerr << "world: " << why << "\n";
     }
     {
         sv::Paths vp = g_view;

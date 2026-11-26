@@ -52,6 +52,33 @@ bool saved_call(const std::string& db_dir, std::string& call) {
     return true;
 }
 
+bool station_keys(const std::string& db_dir, const std::string& call, int64_t now, station::Identity& id, bool* made,
+                  std::string* err) {
+    std::error_code ec;
+    std::filesystem::create_directories(db_dir.empty() ? "." : db_dir, ec);
+    // The station keys, where the station looks for them (DB_DIR/CALL.id).
+    std::string ip = (db_dir.empty() ? std::string(".") : db_dir) + "/" + call + ".id";
+    bool exists = false;
+    std::string e;
+    *made = false;
+    if (!station::load_identity(ip, id, &exists, &e)) {
+        *err = "station keys there can't be read: " + e;
+        return false;
+    }
+    if (!exists || id.station != call) {
+        if (exists) {
+            *err = "the station keys at " + ip + " are for " + id.station + ", not " + call;
+            return false;
+        }
+        if (!station::make_identity(call, now, id, &e) || !station::save_identity(ip, id, &e)) {
+            *err = "station keys not made: " + e;
+            return false;
+        }
+        *made = true;
+    }
+    return true;
+}
+
 std::string handle(const std::string& db_dir, int64_t now, const std::string& line, std::string* call_set) {
     JsonValue req;
     if (!parse_json(line, req) || !req.get("cmd")) return error_reply("send one JSON object with \"cmd\"");
@@ -102,20 +129,10 @@ std::string handle(const std::string& db_dir, int64_t now, const std::string& li
     if (!valid_station(call) || is_broadcast(call))
         return error_reply("\"" + call + "\" isn't a call this box can use: letters A-Z, digits and -, at most 16, not ALL");
     std::error_code ec;
-    std::filesystem::create_directories(db_dir.empty() ? "." : db_dir, ec);
-    // The station keys, where the station looks for them (DB_DIR/CALL.id).
-    std::string ip = (db_dir.empty() ? std::string(".") : db_dir) + "/" + call + ".id";
     station::Identity id;
-    bool exists = false;
-    std::string err;
-    if (!station::load_identity(ip, id, &exists, &err)) return error_reply("station keys there can't be read: " + err);
     bool made = false;
-    if (!exists || id.station != call) {
-        if (exists) return error_reply("the station keys at " + ip + " are for " + id.station + ", not " + call);
-        if (!station::make_identity(call, now, id, &err) || !station::save_identity(ip, id, &err))
-            return error_reply("station keys not made: " + err);
-        made = true;
-    }
+    std::string err;
+    if (!station_keys(db_dir, call, now, id, &made, &err)) return error_reply(err);
     // The call last, written whole, so a cut-off write leaves setup to run again.
     std::string cf = call_file(db_dir), tmp = cf + ".new";
     {

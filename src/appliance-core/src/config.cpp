@@ -31,7 +31,8 @@ const std::vector<std::string>& config_keys() {
         "parts-resend-per-hour", "tuner-socket",
         "gale-dir",    "words",       "scan-log",      "wwv-dir",     "gps-status", "health-file",
         "engine-status", "lqa-db",    "favourites",    "own-address", "scan-plan",  "radio-file", "store-root",
-        "amateur-own-address", "amateur-words"};
+        "amateur-own-address", "amateur-words", "keying-file",
+        "world",       "tx-world",    "ptt-line",      "cat-ptt",     "engineering-readouts"};
     return k;
 }
 
