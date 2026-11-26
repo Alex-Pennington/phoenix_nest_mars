@@ -280,11 +280,32 @@ log line. A routing rule naming an amateur ALE address is refused.
 A call that carries `world` other than `mars` is refused, except calls that
 only read or set up (`word_feed`, `heard_stations`, `scanner_status`,
 `settings_*`, `identity_*`, `keying_settings`, `book_put`, `book_get`,
-`book_list`, `station_health`, `captures_list`, `status`). The refusal reads
+`book_list`, `station_health`, `captures_list`, `status`, `channel_put`,
+`channels_list`, `channels_get_full`, and `form_get`, `form_check` and
+`form_submit`, whose action is checked again when it runs). The refusal reads
 `refused: world amateur: the MARS message center never sends, copies or
 forwards into the amateur world`; a station refusal reads `K0TEST is an
 amateur station (heard on amateur channels); the MARS message center never
 sends to the amateur world`. Broadcasts (ALL) are not a station and still go.
+
+### Channels of the amateur world (station design v1.9, ask 40)
+
+Each channel in the plan carries `world`, `mars` (the default) or `amateur`,
+and an optional HFLink `label` (see Station files). An amateur channel is
+there for CHANNELS and to listen on. The core's routing and automatic sends
+use only MARS channels:
+
+- `net_open`, `sched_put` and `net_callup` naming an amateur channel are
+  refused (`channel: A1 is an amateur channel; a MARS net meets on a MARS
+  channel (ask 40)`);
+- a burst written while the radio was on an amateur channel is never sent to
+  gale-key (Keying, below);
+- `bundle_make` leaves amateur channels out, and `bundle_load` never changes
+  a channel this station keeps for the amateur world;
+- a frequency is named by a MARS channel's designator; the radio side names
+  one held only by an amateur channel by its label (its designator when it
+  has none), and a schedule imported with a frequency never takes an amateur
+  channel's designator.
 
 ### The BBS's own automatic sends (ask 40)
 
@@ -511,6 +532,12 @@ Times are UTC unix seconds.
   (collectives expanded, each station once), `unknown` (names the book doesn't
   have) and `loops` (collectives that contain themselves).
 
+With the setting `book-auto-add-heard` on (ask 30; off by default), a MARS
+station the core hears (any frame from it) that the book doesn't know is
+added as a `station`, its call its name, `source` `heard`, `world` `mars`.
+An entry already there is left as it is, and a station of the amateur world
+is never added.
+
 `send` uses the book: a station name goes to its call, and a collective sends
 one copy to each member, returned as `ids`. A name the book doesn't have goes as
 written. `send` to `ALL` is a broadcast: every station takes it, none acks it,
@@ -521,7 +548,8 @@ and it is marked sent once it is on the air. No station may be called ALL.
 - `net_open` `{name, roster, exercise, ncs, note, channel}` returns `id`
   (NET-n) and the net. `roster` can name collectives; they are expanded when
   the net opens. `ncs` defaults to this station. `channel` (optional) is the
-  net's channel by its designator, one in the channel plan. A net opened
+  net's channel by its designator, one in the channel plan and of the MARS
+  world (an amateur channel is refused, ask 40). A net opened
   from a schedule takes the schedule's channel, and its sitting's end. The
   net shows `channel` and `sitting_end` (0: none).
 - `net_checkin` `{net, station, traffic, remark}` checks a station in by hand.
@@ -563,7 +591,30 @@ still check anyone in by hand. `status` adds `net`, the open net's id.
 - `sched_open {name}` opens the net now with the schedule's roster, net control
   and exercise mark. Opened up to 30 minutes early, or during the sitting, it
   counts as that sitting.
-- `sched_remove {name}`.
+- `sched_remove {name}` returns `{ok, rx_file}`.
+
+What gale-rx needs (ask 28) is part of each schedule:
+
+- `sched_put` also takes `plan`, `index` and `mode`. `plan` is the label of
+  a scan plan in gale-rx's `net_plans` folder (`net03` for
+  `net_plans/net03.plan`): 1 to 32 letters, digits, `-` or `_`, with a
+  letter, never a frequency, its case kept. `index` is the plan's channel
+  gale-rx holds, 0 to 999 counted from 0 in the plan's file order; with none,
+  gale-rx takes the plan channel named by `channel`, else the plan's first.
+  `mode` is `USB`, `LSB`, `CW` or `AM`, given only with an `index` (gale-rx
+  sets a mode only with one; blank is USB). An `index` needs a `plan`. Each
+  left out keeps what the schedule had; sent empty, it is cleared.
+- `sched_list`, `sched_next` and `sched_put`'s reply show `plan`, `index`
+  (a number, or `null` for none) and `mode` on each schedule.
+- `sched_put` and `sched_remove` answer `rx_file`: `written`, `off` (no
+  `rx-schedule-dir` set: no file is written) or `not written: WHY`.
+
+With `rx-schedule-dir DIR` set (a host setting in appliance.conf; none by
+default), the core writes `DIR/net_schedule.txt` and `DIR/slot-channels.txt`
+on every `sched_put` and `sched_remove`, at start, and whenever its half-minute
+look at the schedules finds them changed (an import, a bundle, a restore, or
+a week-of-month day coming into the week). The format is in docs/formats.md,
+"The gale-rx schedule file". A failed write is logged once.
 
 The core looks at the schedules every 30 seconds. It logs, once each, a net
 that starts in 15 minutes and one that is due and not open. A schedule with
@@ -626,21 +677,36 @@ available to copy.
   file should look like is in docs/formats.md. Personal details are never
   imported, and frequencies go only to the channel plan's file.
 - `channels_list`: the channel plan as `channels`, each with `name` (the
-  designator), `mode`, `use`, `source`, `ant_rx` and `ant_tx`. Never a
-  frequency.
-- `channel_put {name, frequency, unit?, mode?, use?, ant_rx?, ant_tx?}`:
-  enters one channel by hand, for a region with no documents. `frequency`
-  reads as kHz (5000), unless `unit` is `khz`, `mhz` or `hz`. A mode, use or
-  antenna left out keeps the old one. `ant_rx` and `ant_tx` are the tuner
+  designator), `world` (`mars` or `amateur`), `label` (its HFLink label, or
+  ""), `mode`, `use`, `source`, `ant_rx` and `ant_tx`. Never a frequency.
+- `channels_get_full {}`: the same, with each channel's `frequency_hz` (a
+  whole number of Hz) after `label`. **It is the one reply that carries a
+  frequency** (Alex's ruling 4 of 2026-11-26, asks 27 and 29: CHANNELS is the
+  one screen that shows one). It is for gale-web's CHANNELS screen only, and
+  each read is logged (`channels_get_full: the channel plan read with its
+  frequencies (N channels)`), never with a frequency. Every other reply, log
+  line and event stays frequency-free.
+- `channel_put {name, frequency?, unit?, mode?, use?, ant_rx?, ant_tx?,
+  world?, label?}`: enters or changes one channel by hand. `frequency` reads
+  as kHz (5000), unless `unit` is `khz`, `mhz` or `hz`. **Left out, a channel
+  already in the plan keeps its frequency**, so a change to its ports, mode,
+  use, world or label needs no retyping; a new channel needs one, and
+  `frequency` sent empty is refused. A mode, use or antenna left out keeps
+  the old one. `world` is `mars` or `amateur`; left out, it keeps the
+  channel's (`mars` for a new one). `label` is the channel's HFLink label: 1
+  to 16 letters, digits or `- / . _`, with a letter, never a frequency, kept
+  in capitals; left out it is kept, sent empty it is cleared. `ant_rx` and `ant_tx` are the tuner
   ports the channel receives and transmits on: `1` or `2`, blank meaning 1;
   anything else is refused. A new channel, and every channel in a plan
   written before these fields, is 1 and 1. A frequency card imported again
-  keeps the ports set by hand. Returns `name`, `result` (`added`, `replaced`
-  or `same`), `frequency_changed`, `mode`, `use`, `ant_rx` and `ant_tx`. The frequency is stored like an
-  imported one and never comes back in a reply or the log.
+  keeps the ports set by hand, and the world and label. Returns `name`,
+  `result` (`added`, `replaced` or `same`), `frequency_changed`, `mode`,
+  `use`, `ant_rx`, `ant_tx`, `world` and `label`. The frequency is stored like
+  an imported one and never comes back in a reply or the log; only
+  `channels_get_full` reads it back.
 - `channel_remove {name}`: takes a channel out of the plan.
 - `sched_put` also takes `channel`, a designator, and `sched_list` returns it.
-  A frequency there is refused.
+  A frequency there is refused, and so is an amateur channel (ask 40).
 
 ## Tuner: the LDG AT-200PC through the core
 
@@ -802,7 +868,8 @@ setting is one row of a table compiled into the core. Alex's ruling
 ports, programs and link plumbing are `locked` and stay in appliance.conf;
 the operator edits every other setting, the station call included.
 
-- `settings_list {group?, all?}` returns `{ok, settings[], file}`. Each row:
+- `settings_list {group?, all?}` returns `{ok, settings[], file, records[]}`.
+  `records` is each kind of record and its class (ask 26, below). Each row:
   `{key, group, label, type, class, gate, applies, choices?, min?, max?,
   unit?, value, default, source, pending_restart, help?, warning?}`, or for
   an `action` row (`amateur-calls`, `cipher`) `call` in place of the value:
@@ -811,7 +878,7 @@ the operator edits every other setting, the station call included.
   line`, `config`, `world file` or `default`. `applies` is `now` or
   `restart`; `pending_restart` is true when the saved value differs from the
   one in force since start. `group` filters (Station, Worlds, Keying,
-  Display, Traffic); locked rows show only with `all:"Y"`.
+  Display, Traffic, Book); locked rows show only with `all:"Y"`.
 - `settings_set {key, value, confirm?}`: `key` takes `-` or `_`
   (`ptt_line`). A row with `gate:"confirm"` (station, world, tx-world, and
   cat-ptt when turned on) answers `{ok:false, confirm_needed:true, warning}`
@@ -841,6 +908,11 @@ The new rows (asks 35, 36):
 | `ptt-line` | `RTS` or `DTR`; must match switch S1001 in the SCU-17; unset until chosen | now |
 | `cat-ptt` | `yes`/`no`, default `no`; turning it on needs the operator's yes (a PTT-line kill switch won't stop it) | now |
 | `engineering-readouts` | `yes`/`no`, default `no` | now |
+| `book-auto-add-heard` (group Book, ask 30) | `yes`/`no`, default `no`: MARS stations heard are added to the book | now |
+
+Two host rows are new as well, locked like the other host plumbing:
+`rx-schedule-dir` (where gale-rx's schedule files are written, ask 28) and
+`lock` (the kinds of record the host locked, ask 26).
 
 **The keying file** (`keying-file`, default GALE-DIR/keying.json, mode 644)
 is for gale-key, greybeard-ale's host keying service. The core writes it
@@ -855,6 +927,35 @@ row:
 
 The core never keys the radio. There is no VOX setting, and none will be
 added.
+
+### Record classes (ask 26)
+
+The station's records come in kinds, each with a class: `operator` (the
+default: the kiosk changes it) or `locked` (the core refuses every call that
+would change it). Only the host locks a kind, with a `lock = KIND` line in
+appliance.conf (repeatable, or `--lock KIND`); the kiosk can't. An unknown
+kind stops the core at start, with the list of kinds.
+
+| kind | label | calls refused while it is locked |
+|---|---|---|
+| `channels` | Channel plan | `channel_put`, `channel_remove`, `mars_import`, `bundle_load`, `station_restore` |
+| `schedule` | Net schedule | `sched_put`, `sched_remove`, `mars_import`, `bundle_load`, `station_restore` |
+| `book` | Station book | `book_put`, `book_remove`, `book_import`, `mars_import`, `bundle_load`, `station_restore` |
+| `key-tape` | Key tape | `key_import`, `key_open`, `key_zeroize`, `net_tape`, `station_restore` |
+| `cipher` | Cipher module | `cipher_install`, `cipher_remove`, `handout_import`, `station_restore` |
+| `cards` | Cards and keymasters | `card_import`, `card_check`, `card_keymaster`, `keymaster_accept`, `keymaster_refuse`, `station_restore` |
+| `handouts` | Member handouts | `handout_import`, `station_restore` |
+| `forms` | Form templates | `form_template_put`, `form_template_reset`, `station_restore` |
+| `guide` | Guide pages | `guide_page_put`, `guide_page_reset`, `station_restore` |
+| `bbs-rules` | BBS guard list, aliases and routes | `guard_set`, `alias_set`, `alias_del`, `route_set`, `route_del`, `route_move`, `station_restore` |
+
+The check is made once, before any handler runs, so it covers `form_submit`
+too: a form's action comes back through the same door. A refusal is
+`{ok:false, error:"locked: Channel plan (channels) is locked in
+appliance.conf on this box: channel_put can't change it from here",
+refused:"locked", record:"channels"}`, and the core logs `refused
+channel_put: channels is locked in appliance.conf`. Reading is never
+refused. `settings_list` gives `records: [{kind, label, class, calls[]}]`.
 
 ### identity_get, identity_set (the amateur world's own addresses)
 
@@ -1646,6 +1747,9 @@ refused with the reason, or, for an automatic send, the reason is logged once:
 - it has a channel: the channel the radio was last set to through
   `tuner_channel` when the burst was written. A burst written with no channel
   set is never sent to gale-key; requeue it once one is set;
+- that channel isn't one the channel plan keeps for the amateur world
+  (station design v1.9, ask 40): a burst written on an amateur channel is
+  never sent to gale-key, by the operator's y or by a standing mode;
 - EMCON is off.
 
 ### key_prepare, key_confirm, key_cancel: the operator's y
