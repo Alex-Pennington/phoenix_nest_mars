@@ -68,24 +68,48 @@ receiver, and `tools/stub_channel.py` carrying each burst WAV across:
         --captures data/A-cap --db-dir data/A --api-port 4100
     appliance-core --station AAR4XY --tx-mode 600S --tx-cmd python3 --tx-arg greybeard-ale/tools/gale_tx.py \
         --captures data/B-cap --db-dir data/B --api-port 4101
-    tools/stub_channel.py --verdict greybeard-ale/tools/modem_verdict.py \
+    tools/stub_channel.py --verdict greybeard-ale/tools/modem_verdict.py --key-results \
         --from data/A/AAR4XX-outbox --to data/B-cap --from data/B/AAR4XY-outbox --to data/A-cap
 
 A message composed on one station decodes on the other and its ACK comes back,
 both ways. The audio is clean: no noise or fading is added.
+
+`--key-results` makes the test channel stand in for gale-key's result as well:
+for each burst it carries it writes `BURST.key.json` in the outbox, saying it
+was keyed, and only then does the core mark the message sent. Without it every
+message stays `written` (in the outbox, not on the air), since no gale-key
+keys anything here (docs/api.md, "Transmit: written, then sent").
 
 ## With no modem build at hand
 
 `tools/stub_gale_tx.py` takes gale-tx's command line and writes a WAV that is
 not a modem signal (one sample per byte), and `tools/stub_channel.py` without
 `--verdict` carries it across and writes the payload file and listing itself.
-`test_greybeard` uses these.
+`--key-results` writes gale-key's result for each burst, as above. `test_greybeard`
+uses these.
 
     appliance-core --station A --tx-mode 600S --tx-cmd python3 --tx-arg tools/stub_gale_tx.py \
         --captures data/A-cap --db-dir data --api-port 4100
     appliance-core --station B --tx-mode 600S --tx-cmd python3 --tx-arg tools/stub_gale_tx.py \
         --captures data/B-cap --db-dir data --api-port 4101
-    tools/stub_channel.py --from data/A-outbox --to data/B-cap --from data/B-outbox --to data/A-cap
+    tools/stub_channel.py --key-results --from data/A-outbox --to data/B-cap --from data/B-outbox --to data/A-cap
+
+## Keying: gale-key
+
+The core never keys the radio. greybeard-ale's gale-key does, and the core is
+the caller that asks it to key each burst in the outbox: on the operator's `y`
+in gale-web (`key_prepare`, then `key_confirm`), or by itself for routing,
+machine-mode answers and auto-QSL while the operator has turned that mode's
+standing grant on (`standing_prepare`, then `key_confirm`). It talks only to
+gale-key's socket:
+
+    appliance-core --station A ... --gale-key-socket /run/gale-key/key.sock
+
+That path is the default. With nothing answering on it, nothing is keyed:
+bursts stay `written`, and `status` says why under `keying`. A burst goes to
+gale-key only when it is a MARS item (never to an amateur station) and the
+channel it was written for is known: the one last set through
+`tuner_channel`. docs/api.md, "Keying: the core asks gale-key", has the calls.
 
 ## Waiting for an ALE link
 
