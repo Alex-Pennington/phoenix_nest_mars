@@ -192,6 +192,7 @@ private:
         int64_t created = 0;
     };
     void exec(const char* sql);
+    bool has_column(const char* table, const char* column);  // the check's statement finished on return
     std::string meta(const std::string& k);
     void set_meta(const std::string& k, const std::string& v);
     Settings load();  // caller holds mu_

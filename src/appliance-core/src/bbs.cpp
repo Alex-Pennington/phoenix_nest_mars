@@ -224,6 +224,17 @@ Engine::Engine(Core& core) : core_(core), clock_(system_now) {
         db_ = nullptr;
         throw std::runtime_error("bbs: cannot open " + core.db_path() + ": " + e);
     }
+    // A constructor that throws runs no destructor: the connection is closed here.
+    struct CloseOnThrow {
+        sqlite3*& db;
+        bool done = false;
+        ~CloseOnThrow() {
+            if (!done) {
+                sqlite3_close(db);
+                db = nullptr;
+            }
+        }
+    } guard{db_};
     sqlite3_busy_timeout(db_, 2000);
     exec("CREATE TABLE IF NOT EXISTS bbs_meta (k TEXT PRIMARY KEY, v TEXT NOT NULL)");
     exec("CREATE TABLE IF NOT EXISTS bbs_guard (item TEXT PRIMARY KEY, pos INTEGER NOT NULL)");
@@ -233,18 +244,12 @@ Engine::Engine(Core& core) : core_(core), clock_(system_now) {
          " sched TEXT NOT NULL DEFAULT '', compress INTEGER NOT NULL DEFAULT 0,"
          " mark_processed INTEGER NOT NULL DEFAULT 1)");
     // Ask 37: every rule carries its world, and only mars is ever routed.
-    {
-        Stmt c(db_, "SELECT COUNT(*) FROM pragma_table_info('bbs_rule') WHERE name = 'world'");
-        if (c.step() && c.i64(0) == 0) exec("ALTER TABLE bbs_rule ADD COLUMN world TEXT NOT NULL DEFAULT 'mars'");
-    }
+    if (!has_column("bbs_rule", "world")) exec("ALTER TABLE bbs_rule ADD COLUMN world TEXT NOT NULL DEFAULT 'mars'");
     exec("CREATE TABLE IF NOT EXISTS bbs_routed (msg_id TEXT PRIMARY KEY, rule INTEGER NOT NULL, state TEXT NOT NULL,"
          " out_id TEXT NOT NULL DEFAULT '', due INTEGER NOT NULL, processed INTEGER NOT NULL DEFAULT 0,"
          " why TEXT NOT NULL DEFAULT '', at INTEGER NOT NULL)");
-    {
-        // Audit A: which of the rule's ALE addresses a routed message is on.
-        Stmt c(db_, "SELECT COUNT(*) FROM pragma_table_info('bbs_routed') WHERE name = 'ale_pos'");
-        if (c.step() && c.i64(0) == 0) exec("ALTER TABLE bbs_routed ADD COLUMN ale_pos INTEGER NOT NULL DEFAULT 0");
-    }
+    // Audit A: which of the rule's ALE addresses a routed message is on.
+    if (!has_column("bbs_routed", "ale_pos")) exec("ALTER TABLE bbs_routed ADD COLUMN ale_pos INTEGER NOT NULL DEFAULT 0");
     exec("CREATE TABLE IF NOT EXISTS bbs_seen (msg_id TEXT PRIMARY KEY)");
     exec("CREATE TABLE IF NOT EXISTS bbs_qru (requester TEXT NOT NULL, line INTEGER NOT NULL, msg_id TEXT NOT NULL,"
          " PRIMARY KEY(requester, line))");
@@ -263,11 +268,23 @@ Engine::Engine(Core& core) : core_(core), clock_(system_now) {
         Stmt s(db_, "SELECT COALESCE(MAX(rowid), 0) FROM events");
         set_meta("scan_after", std::to_string(s.step() ? s.i64(0) : 0));
     }
+    guard.done = true;
 }
 
 Engine::~Engine() {
     stop();
     sqlite3_close(db_);
+}
+
+// The check's statement is finished before this returns. Left open after its
+// row, it keeps a read transaction on this connection, and an ALTER then has
+// to upgrade it to a write: SQLite never waits for that (no busy handler, so
+// no busy timeout), and fails at once with "database is locked" whenever the
+// core's store holds the write lock or has written since the read began.
+bool Engine::has_column(const char* table, const char* column) {
+    Stmt c(db_, "SELECT COUNT(*) FROM pragma_table_info(?) WHERE name = ?");
+    c.bind(1, std::string(table)).bind(2, std::string(column));
+    return c.step() && c.i64(0) > 0;
 }
 
 void Engine::exec(const char* sql) {
@@ -1438,7 +1455,8 @@ void stop(Core& core) {
     std::lock_guard<std::mutex> g(g_mu);
     auto it = engines().find(&core);
     if (it == engines().end()) return;
-    it->second->stop();
+    // An engine whose open threw leaves its slot empty.
+    if (it->second) it->second->stop();
     engines().erase(it);
 }
 
