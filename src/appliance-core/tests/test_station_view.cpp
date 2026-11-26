@@ -503,6 +503,9 @@ int main() {
         write(cap / "20991231T000002Z_net.wav", std::string(10, 'x'));
         write(cap / "20991231T000002Z_net.json", R"({"seconds":3,"trigger":"net","label":"NETB","khz":17532.975})");
         write(cap / "20991231T000003Z_open.wav", std::string(44, 'x'));
+        // Voice decodes derived from a capture are not recordings: not listed.
+        write(cap / "20991231T000001Z_data.m1.melpe2400.wav", std::string(20, 'x'));
+        write(cap / "20991231T000001Z_data.m11.melpe600.wav", std::string(20, 'x'));
         std::string r = api(*core, R"({"cmd":"captures_list"})");
         JsonValue v = parsed(r);
         CHECK(okv(v) && bl(v, "available") && nm(v, "total") == 3 && no_freq(r));

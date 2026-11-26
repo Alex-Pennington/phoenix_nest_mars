@@ -911,6 +911,24 @@ std::string station_health(Core& core) {
     return w.str();
 }
 
+// A voice decode derived from a capture, "<capture>.m<n>.melpe<rate>.wav"
+// (n 1-11): a decode, not a recording.
+bool voice_decode(const std::string& n) {
+    const std::string tail = ".wav";
+    if (n.size() <= tail.size() || n.compare(n.size() - tail.size(), tail.size(), tail) != 0) return false;
+    const std::string s = n.substr(0, n.size() - tail.size());
+    const size_t mel = s.rfind(".melpe");
+    if (mel == std::string::npos) return false;
+    const std::string rate = s.substr(mel + 6);
+    if (rate.empty() || rate.find_first_not_of("0123456789") != std::string::npos) return false;
+    const size_t m = s.rfind(".m", mel - 1);
+    if (m == std::string::npos || m == 0 || mel == 0) return false;
+    const std::string k = s.substr(m + 2, mel - m - 2);
+    if (k.empty() || k.size() > 2 || k.find_first_not_of("0123456789") != std::string::npos || k[0] == '0') return false;
+    const int v = std::atoi(k.c_str());
+    return v >= 1 && v <= 11;
+}
+
 std::string captures_list(Core& core, std::map<std::string, std::string>& req) {
     Paths p = paths();
     int limit = int_arg(req, "limit", 20, 1, 200);
@@ -938,7 +956,8 @@ std::string captures_list(Core& core, std::map<std::string, std::string>& req) {
         for (auto& e : fs::directory_iterator(*d, ec)) {
             std::string n = e.path().filename().string();
             here.insert(n);
-            if (n.size() > 4 && n.compare(n.size() - 4, 4, ".wav") == 0 && e.is_regular_file(ec)) wav_dir.emplace(n, *d);
+            if (n.size() > 4 && n.compare(n.size() - 4, 4, ".wav") == 0 && !voice_decode(n) && e.is_regular_file(ec))
+                wav_dir.emplace(n, *d);
         }
     }
     std::vector<std::string> wavs;

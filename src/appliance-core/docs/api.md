@@ -1110,7 +1110,9 @@ doesn't edit it.
 first: `{name, size, open, start?, seconds?, trigger?, channel?, window?,
 clock?, lost_s?, modems, payloads}`. `open`: no sidecar yet (being written, or
 cut off). `modems`: a modem verdict file is beside it; `payloads`: decoded
-payload files. Playback isn't ruled on and isn't offered.
+payload files. Playback isn't ruled on and isn't offered. A voice decode
+derived from a capture, `<capture>.m<n>.melpe<rate>.wav` (n 1-11), is a
+decode, not a recording: it is not listed and not counted in `total`.
 
 With `--captures-fallback` set, the fallback folder the engine writes to while
 the data store fails is listed too. A capture in both is listed once, from the
