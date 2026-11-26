@@ -54,6 +54,12 @@ struct Paths {
     std::string gale_dir;
     std::string words, scan_log, wwv_dir, gps, health, engine_status, lqa_db, favourites, own, scan_plan, radio,
         captures, captures_fallback, store_root;
+    // The amateur world's own addresses (greybeard-ale docs/amateur-world.md),
+    // never MARS's own_address.txt. Default amateur/own_address.txt.
+    std::string amateur_own;
+    // The amateur world's word log prefix (its words never land in MARS's);
+    // default amateur/words.
+    std::string amateur_words;
     // Each empty one filled with its default under gale_dir ("." when empty).
     Paths resolved() const;
 };
@@ -65,6 +71,7 @@ Paths paths();  // resolved
 struct Word {
     double unix = 0, khz = 0, sinad = 0;
     std::string type, chars, engine;
+    std::string world;  // mars or amateur; "" when the log doesn't say (older logs)
     bool gap = false;
     int window = 0;  // 0: not given
 };
@@ -82,6 +89,7 @@ struct Transmission {
     std::vector<std::string> called;
     std::string kind;              // sounding, call, call-partial, call-end, unknown
     std::vector<std::string> amd;  // AMD texts
+    std::string world;             // its words' world, else its channel's, else mars
 };
 std::vector<Transmission> group_words(const std::vector<Word>& words);
 
@@ -106,16 +114,24 @@ public:
     explicit ChannelNames(Core& core);
     std::string name(double khz) const;
     std::string name_hz(int64_t hz) const;
+    // The world of a channel in the plan's "chan" lines: mars, amateur, or ""
+    // when the plan doesn't say.
+    std::string world(double khz) const;
 
 private:
     Core& core_;
     std::map<int64_t, std::string> labels_;              // scanner plan labels, by Hz
+    std::map<int64_t, std::string> worlds_;              // chan line worlds, by Hz
     std::vector<std::vector<int64_t>> windows_;          // scanner plan dials, Hz
 };
 
 // Copies a scanner reply object with every frequency named or dropped: a
 // member whose key holds "khz" becomes the same key with "label" for "khz"
 // (numbers and arrays of numbers named), one holding "hz" or "freq" goes.
+// A status reply's channels come out the same from either scanner: from an
+// older one's channels_khz, or a newer one's channel_labels (a null label is
+// named W<window>C<n>), "channels" is the window's channel names,
+// "channel_labels" the labels, "channel_count" how many.
 std::string name_channels(const std::string& reply_json, const ChannelNames& names);
 
 // The calls: scanner_status, scanner_hold, scanner_release, scanner_record,

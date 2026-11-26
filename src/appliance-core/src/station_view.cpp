@@ -327,6 +327,7 @@ void write_tx(JsonWriter& w, const Transmission& t, const ChannelNames& names, d
         .field("start", rounded(t.start))
         .field("end", rounded(t.end))
         .field("channel", names.name(t.khz))
+        .field("world", t.world.empty() ? "mars" : t.world)
         .field("caller", t.caller)
         .begin_array("called");
     for (auto& c : t.called) w.field("", c);
@@ -341,16 +342,29 @@ void write_tx(JsonWriter& w, const Transmission& t, const ChannelNames& names, d
     w.end_array().end_object();
 }
 
+// Each transmission's world: its words', else its channel's in the plan, else mars.
+void set_worlds(std::vector<Transmission>& txs, const ChannelNames& names) {
+    for (auto& t : txs)
+        if (t.world.empty()) {
+            t.world = names.world(t.khz);
+            if (t.world.empty()) t.world = "mars";
+        }
+}
+
+// A call to one of our own addresses in that world: MARS's own_address.txt for
+// a MARS call, the amateur file for an amateur one (the worlds never mix).
 std::optional<Transmission> find_incoming(const std::vector<Transmission>& txs,
                                           const std::map<std::string, std::string>& own, double now,
-                                          double within) {
+                                          double within,
+                                          const std::map<std::string, std::string>& amateur_own = {}) {
     std::optional<Transmission> inc;
-    if (own.empty()) return inc;
+    if (own.empty() && amateur_own.empty()) return inc;
     for (auto& x : txs) {
         if (now - x.end > within || (x.kind != "call" && x.kind != "call-partial")) continue;
+        const auto& mine = x.world == "amateur" ? amateur_own : own;
         bool to_us = false;
         for (auto& c : x.called)
-            if (own.count(c)) to_us = true;
+            if (mine.count(c)) to_us = true;
         if (to_us && (!inc || x.end > inc->end)) inc = x;
     }
     return inc;
@@ -395,14 +409,27 @@ std::string scanner_status(Core& core) {
     {
         bool f = false;
         auto own = load_addresses(p.own, &f);
-        WordLog L = read_word_log(p);
-        if (L.available) {
-            auto inc = find_incoming(group_words(L.words), own, now_d(), 60);
+        auto aown = load_addresses(p.amateur_own, &f);
+        // Both worlds' logs: a call to us in either is incoming.
+        Paths pa = p;
+        pa.words = p.amateur_words;
+        WordLog L = read_word_log(p), LA = read_word_log(pa);
+        std::vector<Transmission> txs;
+        if (L.available) txs = group_words(L.words);
+        if (LA.available)
+            for (auto& t : group_words(LA.words)) {
+                if (t.world.empty()) t.world = "amateur";
+                txs.push_back(t);
+            }
+        if (!txs.empty()) {
+            set_worlds(txs, names);
+            auto inc = find_incoming(txs, own, now_d(), 60, aown);
             if (inc) {
                 view = "incoming";
                 w.begin_object("incoming")
                     .field("caller", inc->caller)
                     .field("channel", names.name(inc->khz))
+                    .field("world", inc->world)
                     .field("end", rounded(inc->end))
                     .end_object();
             }
@@ -468,10 +495,14 @@ std::string word_feed(Core& core, std::map<std::string, std::string>& req) {
     double within = int_arg(req, "incoming_s", 60, 1, 3600);
     double since = 0;
     if (req.count("since")) plain_decimal(req["since"], &since);
+    // world: which world's log (mars, the default, or amateur); they never mix.
+    std::string world = req.count("world") && !req["world"].empty() ? req["world"] : "mars";
+    if (world != "mars" && world != "amateur") return error_reply("world: mars or amateur");
+    if (world == "amateur") p.words = p.amateur_words;
     ChannelNames names(core);
     WordLog L = read_word_log(p);
     JsonWriter w;
-    w.begin_object().field("ok", true).field("available", L.available);
+    w.begin_object().field("ok", true).field("world", world).field("available", L.available);
     if (!L.available) {
         w.field("why", L.why).begin_array("transmissions").end_array().field_null("incoming").field_null("last_word");
         write_store(w, p);
@@ -479,9 +510,15 @@ std::string word_feed(Core& core, std::map<std::string, std::string>& req) {
         return w.str();
     }
     auto txs = group_words(L.words);
-    bool f = false;
+    for (auto& t : txs)
+        if (t.world.empty() && world == "amateur") t.world = "amateur";
+    set_worlds(txs, names);
+    bool f = false, af = false;
     auto own = load_addresses(p.own, &f);
-    w.field("source", fs::path(L.file).filename().string()).field("own_address_file", f);
+    auto aown = load_addresses(p.amateur_own, &af);
+    w.field("source", fs::path(L.file).filename().string())
+        .field("own_address_file", f)
+        .field("amateur_own_address_file", af);
     w.begin_array("transmissions");
     int n = 0;
     for (auto it = txs.rbegin(); it != txs.rend() && n < limit; ++it) {
@@ -490,10 +527,13 @@ std::string word_feed(Core& core, std::map<std::string, std::string>& req) {
         ++n;
     }
     w.end_array();
-    auto inc = find_incoming(txs, own, now, within);
+    auto inc = find_incoming(txs, own, now, within, aown);
     if (inc) {
-        w.begin_object("incoming").field("caller", inc->caller).field("channel", names.name(inc->khz)).field(
-            "end", rounded(inc->end));
+        w.begin_object("incoming")
+            .field("caller", inc->caller)
+            .field("channel", names.name(inc->khz))
+            .field("world", inc->world)
+            .field("end", rounded(inc->end));
         w.begin_array("called");
         for (auto& c : inc->called) w.field("", c);
         w.end_array().end_object();
@@ -507,6 +547,9 @@ std::string word_feed(Core& core, std::map<std::string, std::string>& req) {
         w.begin_object("last_word")
             .field("unix", rounded(lw.unix))
             .field("channel", names.name(lw.khz))
+            .field("world", !lw.world.empty() ? lw.world
+                            : world == "amateur" ? "amateur"
+                            : !names.world(lw.khz).empty() ? names.world(lw.khz) : "mars")
             .field("window", lw.window)
             .raw("sinad", one_decimal(lw.sinad))
             .field("engine", lw.engine)
@@ -962,6 +1005,8 @@ Paths Paths::resolved() const {
     def(r.lqa_db, "lqa.sqlite");
     def(r.favourites, "favourites.txt");
     def(r.own, "own_address.txt");
+    def(r.amateur_own, "amateur/own_address.txt");
+    def(r.amateur_words, "amateur/words");
     def(r.scan_plan, "plans/scan.plan");
     def(r.radio, "radio.json");
     def(r.captures, "captures");
@@ -996,6 +1041,8 @@ bool parse_word(const std::string& line, Word* w) {
     w->type = t->s;
     w->chars = c->s;
     w->engine = str(v, "engine");
+    w->world = str(v, "world");
+    if (w->world != "mars" && w->world != "amateur") w->world.clear();
     w->gap = is_true(v, "gap");
     const JsonValue* win = num(v, "window");
     w->window = win ? static_cast<int>(win->n) : 0;
@@ -1106,6 +1153,7 @@ std::vector<Transmission> group_words(const std::vector<Word>& words) {
         for (auto& w : ws) {
             t.sinad_sum += w.sinad;
             t.gaps += w.gap;
+            if (t.world.empty()) t.world = w.world;
         }
         analyse(t, ws);
         out.push_back(std::move(t));
@@ -1221,6 +1269,15 @@ ChannelNames::ChannelNames(Core& core) : core_(core) {
                 int64_t hz = std::atoll(tok.substr(0, c).c_str());
                 if (hz > 0) labels_[hz] = printable(tok.substr(c + 1));
             }
+        } else if (key == "chan") {
+            // chan DIAL_HZ LABEL WORLD [plus] [auto] (greybeard-ale docs/amateur-world.md)
+            double hz = 0;
+            std::string label, world;
+            s >> hz >> label >> world;
+            int64_t h = std::llround(hz);
+            if (h <= 0) continue;
+            if (!label.empty() && label != "-" && !labels_.count(h)) labels_[h] = printable(label);
+            if (world == "mars" || world == "amateur") worlds_[h] = world;
         } else if (key == "window") {
             double center = 0, d;
             s >> center;
@@ -1246,9 +1303,67 @@ std::string ChannelNames::name_hz(int64_t hz) const {
     return "unlisted";
 }
 
+std::string ChannelNames::world(double khz) const {
+    int64_t hz = std::llround(khz * 1000);
+    for (auto& [h, w] : worlds_)
+        if (std::llabs(h - hz) <= 1) return w;
+    return "";
+}
+
+namespace {
+
+// The channels of a status reply, the same from either scanner (ask 38):
+// "channels" the names, "channel_labels" the labels, "channel_count" how many.
+// An older scanner's channels_khz goes; a newer one's channel_labels stays.
+void same_channels(JsonValue& v, const ChannelNames& names) {
+    if (!v.is_object()) return;
+    auto lab = v.obj.find("channel_labels");
+    auto khz = v.obj.find("channels_khz");
+    JsonValue out, labels;
+    out.type = labels.type = JsonValue::Type::Array;
+    auto text = [](const std::string& s) {
+        JsonValue x;
+        x.type = JsonValue::Type::String;
+        x.s = s;
+        return x;
+    };
+    if (lab != v.obj.end() && lab->second.is_array()) {
+        const JsonValue* win = v.get("window");
+        long long w = win && win->type == JsonValue::Type::Number ? std::llround(win->n) : 0;
+        for (size_t i = 0; i < lab->second.arr.size(); ++i) {
+            const JsonValue& l = lab->second.arr[i];
+            if (l.type == JsonValue::Type::String && !l.s.empty()) {
+                out.arr.push_back(text(printable(l.s)));
+                labels.arr.push_back(text(printable(l.s)));
+            } else {
+                out.arr.push_back(text("W" + std::to_string(w) + "C" + std::to_string(i + 1)));
+                labels.arr.push_back(JsonValue{});
+            }
+        }
+    } else if (khz != v.obj.end() && khz->second.is_array()) {
+        for (auto& e : khz->second.arr) {
+            JsonValue x = e.type == JsonValue::Type::Number ? text(names.name(e.n)) : JsonValue{};
+            out.arr.push_back(x);
+            labels.arr.push_back(x);
+        }
+    } else {
+        return;
+    }
+    JsonValue count;
+    count.type = JsonValue::Type::Number;
+    count.n = static_cast<double>(out.arr.size());
+    v.obj.erase("channels_khz");
+    v.obj["channels"] = out;
+    v.obj["channel_labels"] = labels;
+    v.obj["channel_count"] = count;
+}
+
+}  // namespace
+
 std::string name_channels(const std::string& reply_json, const ChannelNames& names) {
     JsonValue v;
     if (!parse_json(reply_json, v)) return "null";
+    same_channels(v, names);
     std::string o;
     emit(v, names, o);
     return o;

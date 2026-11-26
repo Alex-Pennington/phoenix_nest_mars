@@ -654,17 +654,30 @@ is not the store.
 `{"cmd":"scanner_status"}` returns `{ok, source, reachable, polled_at,
 last_ok_at, error?, view, scanner, scanner_stale?, incoming?, store?}`.
 
-- `view`: `incoming` (a call to our own address heard in the last 60 s; then
-  `incoming {caller, channel, end}`), `scanning`, `hold`, `recording`, `wwv`,
+- `view`: `incoming` (a call to our own address in its world, MARS or
+  amateur, heard in the last 60 s; then `incoming {caller, channel, world,
+  end}`), `scanning`, `hold`, `recording`, `wwv`,
   `starting`, `stopping`, or `no scanner` (no `link-socket`, or it isn't
   answering).
 - `scanner`: the scanner's whole status reply (greybeard-ale
   `src/control_socket.h`), polled every `link-poll-ms`, with its channels
-  named: `state`, `plan`, `windows`, `window`, `channels` (names, for
-  `channels_khz`), `visit`, `visit_s`, `visits`, `stream_unix`, `hold`
-  (`{window, left_s, record_label}` or null), `order_pending`,
+  named: `state`, `plan`, `windows`, `window`, `channels`,
+  `channel_labels`, `channel_count`, `visit`, `visit_s`, `visits`,
+  `stream_unix`, `hold` (`{window, left_s, record_channel?, record_label}`
+  or null), `order_pending`,
   `plan_pending`, `engine`, `visit_remote`, `clock` (`wwv`|`host`),
   `clock_counter`, `wwv_blocks`, `last_wwv_unix`, `plan_switches`, `note`.
+  The window's channels come out the same from either scanner: `channels`
+  is their names in window order (a label, or `W<window>C<n>` for a channel
+  with none), `channel_labels` the labels (null for none) and
+  `channel_count` how many. A newer scanner (greybeard-ale
+  docs/amateur-world.md) sends `channel_labels` and a count; an older one
+  sent `channels_khz`, which is named here and dropped. That older form is
+  read for one more release only. The newer scanner's world fields pass
+  through as they are: `world` (`mars`, `amateur` or `both`),
+  `channel_worlds`, `cycle_s`, `cycle_long`, `amateur_channels`,
+  `amateur_auto_channels`, `trim_available`, `trim_channels`, and with an
+  identity file `own`, `listen_only`, `own_error`.
   Fields the scanner adds later pass through, named the same way. Null
   before the first good reply; when the scanner stops answering, the last
   one stays with `scanner_stale: true`.
@@ -693,20 +706,27 @@ empty or malformed channel or plan name, no `link-socket`.
 
 ### word_feed
 
-`{"cmd":"word_feed","limit":50,"since":UNIX,"incoming_s":60}` returns the
+`{"cmd":"word_feed","world":"mars","limit":50,"since":UNIX,"incoming_s":60}` returns the
 ALE transmissions in the newest word log, newest first, put back together as
 greybeard-ale's `lqa_db.py` does (per channel; a gap over 1.2 s starts a new
 one):
 
-- `transmissions[]`: `{start, end, channel, caller, called[], kind, words,
-  sinad, gaps, open, amd[]}`. `kind` is `sounding`, `call`, `call-partial`,
+- `world`: which world's log this is, `mars` (the default) or `amateur`.
+  The worlds keep separate logs (`words`, and `amateur-words`, default
+  GALE-DIR/amateur/words) and never mix in one reply.
+- `transmissions[]`: `{start, end, channel, world, caller, called[], kind, words,
+  sinad, gaps, open, amd[]}`. `world` is the words' own, else the channel's
+  `chan` line in the plan, else `mars`. `kind` is `sounding`, `call`, `call-partial`,
   `call-end` or `unknown`; `gaps` counts words decoded across lost samples;
   `open` is true while the channel may still be adding words (5 s); `amd` holds
   the short text messages sent in it.
-- `incoming`: the newest call to one of our own addresses (`own-address`
-  file) in the last `incoming_s` seconds, `{caller, called[], channel, end}`,
-  or null.
-- `last_word {unix, channel, window, sinad, engine}`, `last_hour {words, gaps,
+- `incoming`: the newest call to one of our own addresses in that world in
+  the last `incoming_s` seconds, `{caller, called[], channel, world, end}`,
+  or null. MARS calls are checked against the `own-address` file, amateur
+  ones against `amateur-own-address` (default
+  GALE-DIR/amateur/own_address.txt); `own_address_file` and
+  `amateur_own_address_file` say whether each was found.
+- `last_word {unix, channel, world, window, sinad, engine}`, `last_hour {words, gaps,
   local, station, remote, primary, partial}` (`partial`: the log read didn't
   reach an hour back). The counts go by each word's `engine`: `station` is the
   terminal's own engine and `remote` the overflow engine, both primary decodes

@@ -30,7 +30,8 @@ const std::vector<std::string>& config_keys() {
         "link-wait",   "expire-h",    "handling",      "raw-rx-log",  "parts-hold-h",
         "parts-resend-per-hour", "tuner-socket",
         "gale-dir",    "words",       "scan-log",      "wwv-dir",     "gps-status", "health-file",
-        "engine-status", "lqa-db",    "favourites",    "own-address", "scan-plan",  "radio-file", "store-root"};
+        "engine-status", "lqa-db",    "favourites",    "own-address", "scan-plan",  "radio-file", "store-root",
+        "amateur-own-address", "amateur-words"};
     return k;
 }
 

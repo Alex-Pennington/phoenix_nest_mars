@@ -142,6 +142,9 @@ void usage() {
         "  --engine-status FILE  engine_status.json   --lqa-db FILE   lqa.sqlite (read only)\n"
         "  --favourites FILE     favourites.txt       --own-address FILE  own_address.txt\n"
         "  --scan-plan FILE      plans/scan.plan (channel labels)\n"
+        "  --amateur-own-address FILE  amateur/own_address.txt (the amateur world's own\n"
+        "                        addresses; identity_set writes it)\n"
+        "  --amateur-words PREFIX  the amateur world's word log (default GALE-DIR/amateur/words)\n"
         "  --radio-file FILE     radio.json           (captures: --captures, else GALE-DIR/captures)\n"
         "  --store-root DIR      the data store's mount point: replies say whether it is\n"
         "                        mounted (default: not checked)\n";
@@ -390,6 +393,8 @@ int main(int argc, char** argv) {
             else if (a == "--lqa-db") g_view.lqa_db = next();
             else if (a == "--favourites") g_view.favourites = next();
             else if (a == "--own-address") g_view.own = next();
+            else if (a == "--amateur-own-address") g_view.amateur_own = next();
+            else if (a == "--amateur-words") g_view.amateur_words = next();
             else if (a == "--scan-plan") g_view.scan_plan = next();
             else if (a == "--radio-file") g_view.radio = next();
             else if (a == "--store-root") g_view.store_root = next();

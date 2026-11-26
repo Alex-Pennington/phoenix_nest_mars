@@ -338,6 +338,57 @@ int main() {
         write(gale / "own_address.txt", "CD2ZZ\n");
     }
 
+    // ---- worlds (ask 38): channel labels, chan lines, amateur words -----------
+    {
+        // A newer scanner's status: a count, labels (null: none) and worlds, no kHz.
+        sv::ChannelNames n(*core);
+        std::string named = sv::name_channels(
+            R"({"ok":true,"window":2,"channels":3,"channel_labels":["NETB",null,"07DALE"],)"
+            R"("channel_worlds":["mars","mars","amateur"],"world":"both","hold":{"window":2,"record_channel":1,"record_label":"NETB"}})",
+            n);
+        JsonValue v = parsed(named);
+        CHECK(no_freq(named));
+        JsonValue ch = sub(v, "channels"), lb = sub(v, "channel_labels");
+        CHECK(ch.is_array() && ch.arr.size() == 3 && ch.arr[0].s == "NETB" && ch.arr[1].s == "W2C2" && ch.arr[2].s == "07DALE");
+        CHECK(lb.is_array() && lb.arr.size() == 3 && lb.arr[1].type == JsonValue::Type::Null && lb.arr[2].s == "07DALE");
+        CHECK(nm(v, "channel_count") == 3 && str(v, "world") == "both" && sub(v, "channel_worlds").arr.size() == 3);
+        CHECK(nm(sub(v, "hold"), "record_channel") == 1 && str(sub(v, "hold"), "record_label") == "NETB");
+        // An older one's channels_khz comes out the same way.
+        v = parsed(sv::name_channels(R"({"ok":true,"window":1,"channels_khz":[13579.246,13582.468]})", n));
+        CHECK(sub(v, "channels").arr.size() == 2 && sub(v, "channel_labels").arr[0].s == "P1" && nm(v, "channel_count") == 2);
+        CHECK(!v.get("channels_khz"));
+
+        // chan lines name a channel and give its world.
+        write(gale / "plans/scan.plan", std::string(kPlan) + "chan 4864213 07DALE amateur plus auto\n");
+        sv::ChannelNames n2(*core);
+        CHECK(n2.name(4864.213) == "07DALE" && n2.world(4864.213) == "amateur" && n2.world(17532.975).empty());
+
+        // The amateur world's words: their own log and their own addresses.
+        fs::create_directories(gale / "amateur");
+        std::string aw;
+        for (auto& l : {word(now - 8, 4864.213, "TO", "N0C", 9.0, 1), word(now - 7.6, 4864.213, "DATA", "ALL", 9.0, 1),
+                        word(now - 7.4, 4864.213, "TIS", "K0T", 9.0, 1), word(now - 7.2, 4864.213, "DATA", "EST", 9.0, 1)})
+            aw += l + "\n";
+        write(gale / "amateur/words-20991231.jsonl", aw);
+        write(gale / "amateur/own_address.txt", "N0CALL\n");
+        v = parsed(api(*core, R"({"cmd":"word_feed","world":"amateur"})"));
+        CHECK(okv(v) && str(v, "world") == "amateur" && bl(v, "amateur_own_address_file"));
+        CHECK(sub(v, "transmissions").arr.size() == 1);
+        if (sub(v, "transmissions").arr.size() == 1) {
+            JsonValue t = sub(v, "transmissions").arr[0];
+            CHECK(str(t, "world") == "amateur" && str(t, "channel") == "07DALE" && str(t, "caller") == "K0TEST");
+        }
+        CHECK(str(sub(v, "incoming"), "caller") == "K0TEST" && str(sub(v, "incoming"), "world") == "amateur");
+        CHECK(str(sub(v, "last_word"), "world") == "amateur");
+        // MARS's log stays MARS's: its rows say mars, and the amateur address
+        // isn't ours there.
+        v = parsed(api(*core, R"({"cmd":"word_feed"})"));
+        CHECK(str(v, "world") == "mars" && str(sub(v, "transmissions").arr[0], "world") == "mars");
+        CHECK(!okv(parsed(api(*core, R"({"cmd":"word_feed","world":"hfn"})"))));
+        write(gale / "plans/scan.plan", kPlan);
+        fs::remove_all(gale / "amateur");
+    }
+
     // ---- heard stations: from the word log, then from the LQA database ------
     {
         std::string r = api(*core, R"({"cmd":"heard_stations"})");
