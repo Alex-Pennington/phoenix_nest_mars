@@ -145,6 +145,8 @@ void usage() {
         "                        /etc/greybeard-ale/services; greybeard-ale docs/services.md)\n"
         "  --services-unlocked   a test stand: the tables need not be root's (never on a\n"
         "                        station)\n"
+        "  --rx-service S        the service of traffic heard on a link that names no\n"
+        "                        channel (loopback, STANAG 5066, Appendix A; default none)\n"
         "  --rx-schedule-dir DIR  write gale-rx's net_schedule.txt and slot-channels.txt\n"
         "                        there from the net schedules, on every change (default:\n"
         "                        none written; docs/formats.md)\n"
@@ -199,6 +201,7 @@ std::string g_gale_key_socket = kControllerSocket;  // the controller's socket (
 int g_gale_key_timeout_ms = kControllerTimeoutMs;
 std::string g_services_dir = "/etc/greybeard-ale/services";
 bool g_services_unlocked = false;
+std::string g_rx_service;  // the service of a channel-less link's traffic
 std::shared_ptr<const Services> g_services;  // read once at start
 std::shared_ptr<GaleKey> g_gale_key;  // for the greybeard-ale station only: its bursts are in the outbox
 sv::Paths g_view;  // the radio side's files (station_view.h)
@@ -243,6 +246,7 @@ bool start_station(Station& s, CoreConfig cfg, std::unique_ptr<ModemDriver> mode
     std::string db = cfg.db_path;
     cfg.link_gate = g_link_gate;
     cfg.ack_timeout_s = g_ack_timeout;
+    cfg.rx_service = g_rx_service;
     cfg.ack_retries = g_ack_retries;
     cfg.tx_gap_s = g_tx_gap;
     cfg.link_wait_s = g_link_wait;
@@ -467,6 +471,7 @@ int main(int argc, char** argv) {
             else if (a == "--controller-socket" || a == "--gale-key-socket") g_gale_key_socket = next();
             else if (a == "--services-dir") g_services_dir = next();
             else if (a == "--services-unlocked") g_services_unlocked = true;
+            else if (a == "--rx-service") g_rx_service = next();
             else if (a == "--controller-timeout-ms" || a == "--gale-key-timeout-ms") {
                 g_gale_key_timeout_ms = std::stoi(next());
                 if (g_gale_key_timeout_ms < 100 || g_gale_key_timeout_ms > 60000) {
@@ -580,6 +585,10 @@ int main(int argc, char** argv) {
         for (const Service* x : g_services->all()) names += (names.empty() ? "" : ", ") + x->name;
         std::cerr << "services: " << (names.empty() ? std::string("none: every send is refused") : names) << " ("
                   << g_services_dir << ")\n";
+        if (!g_rx_service.empty() && !g_services->valid(g_rx_service)) {
+            std::cerr << "--rx-service: " << no_table(g_rx_service) << "\n";
+            return 2;
+        }
     }
     if (!link_socket.empty()) {
         g_link = std::make_shared<LinkMonitor>(link_socket, link_poll_ms < 200 ? 200 : link_poll_ms);

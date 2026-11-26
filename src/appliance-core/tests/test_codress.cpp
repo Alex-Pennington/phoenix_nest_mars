@@ -14,6 +14,7 @@
 #include "../src/ops.h"
 #include "../src/received.h"
 #include "check.h"
+#include "services_fixture.h"
 
 #include <atomic>
 #include <chrono>
@@ -170,7 +171,7 @@ static void unit() {
 }
 
 static JsonValue send_codress(Core& c, const std::string& key, const std::string& to, const std::string& text) {
-    return call(c, {{"cmd", "compose_send"},
+    return call(c, {{"cmd", "compose_send"}, {"service", "mars"},
                     {"template", "FREE_FORM"},
                     {"procedure", "ACP127_CODRESS"},
                     {"key", key},
@@ -198,7 +199,9 @@ static void stations(const fs::path& dir) {
     LoopbackModem::connect(*ma, *mb);
     std::string adb = (dir / "NCS-A.db").string(), bdb = (dir / "STA-B.db").string();
     Core a(CoreConfig{"NCS-A", adb, 3, 1, true}, std::move(ma));
+    a.set_services(test_services());
     Core b(CoreConfig{"STA-B", bdb, 3, 1, true}, std::move(mb));
+    b.set_services(test_services());
     auto ka = std::make_shared<keys::Keyring>((dir / "NCS-A.keys").string());
     auto kb = std::make_shared<keys::Keyring>((dir / "STA-B.keys").string());
     auto clock = [&] { return t.load(); };
@@ -286,7 +289,7 @@ static void stations(const fs::path& dir) {
     CHECK(ok(r) && yes(r, "deciphered") && str(r, "text").find("ROGER") != std::string::npos);
 
     // Plaindress traffic now carries a digest that the far end checks.
-    r = call(a, {{"cmd", "compose_send"},
+    r = call(a, {{"cmd", "compose_send"}, {"service", "mars"},
                  {"template", "FREE_FORM"},
                  {"procedure", "ACP127_PLAINDRESS"},
                  {"prec", "R"},
@@ -348,12 +351,14 @@ static void garbled(const fs::path& dir) {
     auto mb = std::make_unique<LoopbackModem>(0);
     LoopbackModem::connect(*ma, *mb);
     Core a(CoreConfig{"NCS-A", (dir / "g-a.db").string(), 3, 1, true}, std::move(ma));
+    a.set_services(test_services());
     Core b(CoreConfig{"STA-B", (dir / "g-b.db").string(), 3, 1, true}, std::move(mb));
+    b.set_services(test_services());
     a.start();
     b.start();
     std::string p = plaindress();
     p.replace(p.find("LINE THREE"), 10, "LINE THREX");  // changed after the digest was made
-    std::string err, id = a.submit("STA-B", 'P', p, &err);
+    std::string err, id = a.submit("STA-B", 'P', p, &err, SendOpts::in("mars"));
     CHECK(!id.empty());
     CHECK(wait_for([&] { return b.get(id).has_value(); }));
     JsonValue r = call(b, {{"cmd", "parse_traffic"}, {"id", id}});

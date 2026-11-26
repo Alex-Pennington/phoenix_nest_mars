@@ -220,7 +220,20 @@ std::optional<std::string> handle_forms(Core& core, const std::string& cmd, std:
     forms::Context ctx;
     ctx.choices = [&](const std::string& src) { return choices(core, lib, src); };
     ctx.prefill = [&](const std::string& kind, const std::string& key) { return prefill(core, lib, kind, key); };
-    ctx.run = [&](const std::string& line) { return ApiServer::handle_call(core, line); };
+    ctx.run = [&](const std::string& line) {
+        // A form's action carries the service the form was submitted with
+        // (docs/api.md, Services), unless the action names one itself.
+        std::map<std::string, std::string> a;
+        const std::string svc = req.count("service") ? req["service"] : std::string();
+        if (svc.empty() || !parse_flat_object(line, a) || a.count("service") || a.count("world"))
+            return ApiServer::handle_call(core, line);
+        a["service"] = svc;
+        JsonWriter w;
+        w.begin_object();
+        for (auto& [k, x] : a) w.field(k, x);
+        w.end_object();
+        return ApiServer::handle_call(core, w.str());
+    };
     // The station is set up: SETUP is done.
     std::vector<std::string> ids;
     for (auto& e : lib.list())

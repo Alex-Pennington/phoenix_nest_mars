@@ -25,6 +25,7 @@
 #include "../src/ops.h"
 #include "../src/station.h"
 #include "check.h"
+#include "services_fixture.h"
 
 #include <cctype>
 #include <chrono>
@@ -149,6 +150,7 @@ static Box open_box(const fs::path& dir, const std::string& call, std::unique_pt
     fs::create_directories(dir);
     std::string base = (dir / call).string();
     b.core = std::make_unique<Core>(CoreConfig{call, base + ".db", 3, 1, true}, std::move(modem));
+    b.core->set_services(test_services());
     b.keys = std::make_shared<keys::Keyring>(base + ".keys");
     b.keys->set_clock([] { return g_now; });
     std::string err;
@@ -322,7 +324,7 @@ static void three_empty_boxes(const fs::path& dir) {
     const std::string tag = str(r, "tag");
 
     // Over the air to B, as signed plain traffic.
-    r = call(*A.core, {{"cmd", "bundle_send"}, {"to", "STA-B"}});
+    r = call(*A.core, {{"cmd", "bundle_send"}, {"service", "mars"}, {"to", "STA-B"}});
     CHECK(ok(r) && num(r, "parts") == 1 && count(r, "failed") == 0);
     // A holds no card for B yet: B's copy carries no frequencies, and says to send the card.
     CHECK(str(item(r, "sent", 0), "frequencies") == "no_card");
@@ -340,7 +342,7 @@ static void three_empty_boxes(const fs::path& dir) {
     CHECK(B.ops->book_list().empty() && B.ops->sched_list().empty() && B.core->cards().empty());
 
     // B gets A's card on the air and reads the fingerprint back by voice.
-    r = call(*A.core, {{"cmd", "card_send"}, {"to", "STA-B"}});
+    r = call(*A.core, {{"cmd", "card_send"}, {"service", "mars"}, {"to", "STA-B"}});
     std::string cid = str(r, "id");
     CHECK(wait_for([&] { return B.core->get(cid).has_value(); }));
     CHECK(ok(call(*B.core, {{"cmd", "card_import"}, {"id", cid}})));
@@ -381,7 +383,7 @@ static void three_empty_boxes(const fs::path& dir) {
     CHECK(!ok(r) && str(r, "error").find("signature") != std::string::npos);
 
     // Now trust and keys, on each member's own choice. B's card to A by air.
-    r = call(*B.core, {{"cmd", "card_send"}, {"to", "NCS-A"}});
+    r = call(*B.core, {{"cmd", "card_send"}, {"service", "mars"}, {"to", "NCS-A"}});
     cid = str(r, "id");
     CHECK(ok(r) && !cid.empty());
     bool arrived = wait_for([&] { return A.core->get(cid).has_value(); }, 30000);
@@ -393,7 +395,7 @@ static void three_empty_boxes(const fs::path& dir) {
     CHECK(arrived);
     CHECK(ok(call(*A.core, {{"cmd", "card_import"}, {"id", cid}})));
     CHECK(ok(call(*A.core, {{"cmd", "card_check"}, {"station", "STA-B"}, {"fingerprint", B.fp}})));
-    r = call(*A.core, {{"cmd", "net_tape"}, {"net", "Practice Net"}, {"days", "7"}, {"members", "STA-B STA-C"}, {"handouts", "Y"}});
+    r = call(*A.core, {{"cmd", "net_tape"}, {"service", "mars"}, {"net", "Practice Net"}, {"days", "7"}, {"members", "STA-B STA-C"}, {"handouts", "Y"}});
     CHECK(ok(r));
     std::string hand_b, hand_c;
     for (auto& h : r.get("handouts")->arr) {
@@ -418,7 +420,7 @@ static void three_empty_boxes(const fs::path& dir) {
     r = call(*B.core, {{"cmd", "keymaster_list"}});
     CHECK(ok(r) && count(r, "refused") == 1 && count(r, "accepted") == 0);
     // Signed plain traffic still works with a refused keymaster.
-    r = call(*A.core, {{"cmd", "compose_send"},
+    r = call(*A.core, {{"cmd", "compose_send"}, {"service", "mars"},
                        {"template", "FREE_FORM"},
                        {"procedure", "ACP127_PLAINDRESS"},
                        {"prec", "R"},
@@ -482,7 +484,7 @@ static void sealed_frequencies(const fs::path& dir) {
     CHECK(ok(call(*B.core, {{"cmd", "card_check"}, {"station", "NCS-A"}, {"fingerprint", A.fp}})));
 
     std::string raw;
-    JsonValue r = call(*A.core, {{"cmd", "bundle_send"}, {"to", "STA-B STA-C STA-D"}}, &raw);
+    JsonValue r = call(*A.core, {{"cmd", "bundle_send"}, {"service", "mars"}, {"to", "STA-B STA-C STA-D"}}, &raw);
     CHECK(ok(r) && count(r, "sent") == 3);
     CHECK(str(item(r, "sent", 0), "frequencies") == "sealed");
     CHECK(str(item(r, "sent", 1), "frequencies") == "card_not_checked");
@@ -573,7 +575,7 @@ static void stale_box(const fs::path& dir) {
         import_documents(K);
         CHECK(ok(call(*K.core, {{"cmd", "card_import"}, {"text", card_of(B)}})));
         CHECK(ok(call(*K.core, {{"cmd", "card_check"}, {"station", "STA-B"}, {"fingerprint", B.fp}})));
-        JsonValue r = call(*K.core, {{"cmd", "net_tape"},
+        JsonValue r = call(*K.core, {{"cmd", "net_tape"}, {"service", "mars"},
                                      {"net", "Practice Net"},
                                      {"days", "31"},
                                      {"start", day_of(sealed)},
@@ -617,7 +619,7 @@ static void stale_box(const fs::path& dir) {
     Box N = open_box(dir / "new-k", "NEW-K", std::move(mn));
 
     // 1. Signed plain traffic first. B's card goes out over the air.
-    r = call(*B.core, {{"cmd", "card_send"}, {"to", "NEW-K"}});
+    r = call(*B.core, {{"cmd", "card_send"}, {"service", "mars"}, {"to", "NEW-K"}});
     std::string cid = str(r, "id");
     CHECK(wait_for([&] { return N.core->get(cid).has_value(); }));
     r = call(*N.core, {{"cmd", "parse_traffic"}, {"id", cid}});
@@ -626,7 +628,7 @@ static void stale_box(const fs::path& dir) {
     r = call(*N.core, {{"cmd", "parse_traffic"}, {"id", cid}});
     CHECK(ok(r) && str(r, "signature") == "good" && !yes(r, "signer_checked"));
     CHECK(ok(call(*N.core, {{"cmd", "card_check"}, {"station", "STA-B"}, {"fingerprint", B.fp}})));
-    r = call(*N.core, {{"cmd", "card_send"}, {"to", "STA-B"}});
+    r = call(*N.core, {{"cmd", "card_send"}, {"service", "mars"}, {"to", "STA-B"}});
     cid = str(r, "id");
     CHECK(wait_for([&] { return B.core->get(cid).has_value(); }));
     CHECK(ok(call(*B.core, {{"cmd", "card_import"}, {"id", cid}})));
@@ -634,7 +636,7 @@ static void stale_box(const fs::path& dir) {
     CHECK(ok(r) && str(r, "signature") == "good" && !yes(r, "signer_checked"));
 
     // 2. NEW-K sends a tape before B has chosen it: not taken.
-    r = call(*N.core, {{"cmd", "net_tape"}, {"net", "Practice Net"}, {"days", "7"}, {"members", "STA-B"}, {"send", "Y"}});
+    r = call(*N.core, {{"cmd", "net_tape"}, {"service", "mars"}, {"net", "Practice Net"}, {"days", "7"}, {"members", "STA-B"}, {"send", "Y"}});
     CHECK(ok(r));
     std::string tid = str(item(r, "sealed", 0), "id");
     CHECK(wait_for([&] { return !tid.empty() && B.core->get(tid).has_value(); }));
@@ -646,7 +648,7 @@ static void stale_box(const fs::path& dir) {
     Box X = open_box(dir / "stranger", "ROGUE-X", std::make_unique<LoopbackModem>(0));
     CHECK(ok(call(*X.core, {{"cmd", "card_import"}, {"text", card_of(B)}})));
     CHECK(ok(call(*X.core, {{"cmd", "card_check"}, {"station", "STA-B"}, {"fingerprint", B.fp}})));
-    r = call(*X.core, {{"cmd", "net_tape"}, {"net", "Practice Net"}, {"days", "31"}, {"members", "STA-B"}, {"handouts", "Y"}});
+    r = call(*X.core, {{"cmd", "net_tape"}, {"service", "mars"}, {"net", "Practice Net"}, {"days", "31"}, {"members", "STA-B"}, {"handouts", "Y"}});
     std::string rogue = str(item(r, "handouts", 0), "text");
     r = call(*B.core, {{"cmd", "handout_import"}, {"text", rogue}});
     CHECK(ok(r) && yes(r, "waiting_on_member") && !yes(r, "tape_opened"));
@@ -666,7 +668,7 @@ static void stale_box(const fs::path& dir) {
 
     // 4. Codress works again.
     std::string key = B.keys->for_sending().at(0).indicator;
-    r = call(*N.core, {{"cmd", "compose_send"},
+    r = call(*N.core, {{"cmd", "compose_send"}, {"service", "mars"},
                        {"template", "FREE_FORM"},
                        {"procedure", "ACP127_CODRESS"},
                        {"key", key},
@@ -685,7 +687,7 @@ static void stale_box(const fs::path& dir) {
 
     // 5. B hands the net's startup data to the new keymaster: its old book
     //    and schedules, re-signed by B, over the air.
-    r = call(*B.core, {{"cmd", "bundle_send"}, {"to", "NEW-K"}, {"label", "Practice Region"}});
+    r = call(*B.core, {{"cmd", "bundle_send"}, {"service", "mars"}, {"to", "NEW-K"}, {"label", "Practice Region"}});
     CHECK(ok(r) && str(r, "by") == "STA-B");
     auto sent = ids(r, "NEW-K");
     CHECK(wait_for([&] { return !sent.empty() && N.core->get(sent.back()).has_value(); }));

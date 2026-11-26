@@ -75,6 +75,11 @@ struct CoreConfig {
     // A station that asks again for a part it has been sent again this many
     // times is flagged for the operator instead of being sent it once more.
     int parts_flag_after = 2;
+    // The service of traffic heard on a link that names no channel (the
+    // loopback, STANAG 5066 and Appendix A links): the one network that link
+    // belongs to. "" leaves such traffic with no service. Traffic from the
+    // greybeard modem takes its capture's channel's service instead.
+    std::string rx_service{};
 };
 
 // How submit queues a message (docs/api.md, "Services").

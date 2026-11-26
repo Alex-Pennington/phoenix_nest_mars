@@ -9,6 +9,7 @@
 #include "../src/loopback_modem.h"
 #include "../src/received.h"
 #include "check.h"
+#include "services_fixture.h"
 
 #include <chrono>
 #include <filesystem>
@@ -289,11 +290,13 @@ int main() {
             auto mb = std::make_unique<LoopbackModem>(0);
             LoopbackModem::connect(*ma, *mb);
             Core a(CoreConfig{"A", (dir / "a.db").string(), 3, 1, true}, std::move(ma));
+            a.set_services(test_services());
             Core b(CoreConfig{"B", (dir / "b.db").string(), 3, 1, true}, std::move(mb));
+            b.set_services(test_services());
             a.start();
             b.start();
             std::string reply = ApiServer::handle(
-                a, R"({"cmd":"send_acp126","to_station":"B","calls":"NET","station":"AAR4XX","unclas":"false",)"
+                a, R"({"cmd":"send_acp126","service":"mars","to_station":"B","calls":"NET","station":"AAR4XX","unclas":"false",)"
                    R"("text":"AAR4XX-NCS\nAAR4YY"})");
             std::string id = field(reply, "id");
             CHECK(!id.empty() && field(reply, "source") == acp126::kSource);
@@ -302,22 +305,22 @@ int main() {
             CHECK(field(r, "form") == "acp126" && field(r, "routing") == "NET" && field(r, "serial") == "001");
             CHECK(field(r, "text") == "AAR4XX-NCS\nAAR4YY" && field(r, "warnings") == "no UNCLAS line");
             std::string again = ApiServer::handle(
-                a, R"({"cmd":"send_acp126","to_station":"B","calls":"NET","station":"AAR4XX","text":"X"})");
+                a, R"({"cmd":"send_acp126","service":"mars","to_station":"B","calls":"NET","station":"AAR4XX","text":"X"})");
             CHECK(field(again, "message").find("NET DE AAR4XX NR 002") != std::string::npos);
             CHECK(field(r, "procedure") == "ACP126_SIMPLE" && field(again, "procedure") == "ACP126_SIMPLE");
-            CHECK(field(ApiServer::handle(a, R"({"cmd":"send_acp126","to_station":"B","calls":"NET","station":"AAR4XX",)"
+            CHECK(field(ApiServer::handle(a, R"({"cmd":"send_acp126","service":"mars","to_station":"B","calls":"NET","station":"AAR4XX",)"
                                              R"("procedure":"plaindress","from":"TEST ONE","text":"X"})"),
                         "error").find("PLAINDRESS") != std::string::npos);
 
             // A chat line out and back.
             std::string chat = ApiServer::handle(
-                a, R"({"cmd":"send_chat","to_station":"B","call":"KAPPA71-CM","station":"AAR4XX","text":"QRU U,A"})");
+                a, R"({"cmd":"send_chat","service":"mars","to_station":"B","call":"KAPPA71-CM","station":"AAR4XX","text":"QRU U,A"})");
             std::string cid = field(chat, "id");
             CHECK(!cid.empty() && field(chat, "message").rfind("KAPPA71-CM DE AAR4XX // QRU U,A // ", 0) == 0);
             CHECK(wait_for([&] { auto m = a.get(cid); return m && m->state == "acked"; }));
             std::string cr = ApiServer::handle(b, R"({"cmd":"parse_traffic","id":")" + cid + R"("})");
             CHECK(field(cr, "form") == "acp201-chat" && field(cr, "kind") == "qru" && field(cr, "from") == "AAR4XX");
-            CHECK(field(ApiServer::handle(a, R"({"cmd":"send_acp126","to_station":"B","calls":"","station":"AAR4XX","text":"X"})"),
+            CHECK(field(ApiServer::handle(a, R"({"cmd":"send_acp126","service":"mars","to_station":"B","calls":"","station":"AAR4XX","text":"X"})"),
                         "error").find("called station") != std::string::npos);
             a.stop();
             b.stop();

@@ -10,6 +10,7 @@
 #include "../src/loopback_modem.h"
 #include "../src/store.h"
 #include "check.h"
+#include "services_fixture.h"
 
 #include <chrono>
 #include <filesystem>
@@ -265,12 +266,14 @@ int main() {
         LoopbackModem* pa = ma.get();
         LoopbackModem::connect(*ma, *mb);
         Core a(CoreConfig{"A", (dir / "a.db").string(), 3, 1, true}, std::move(ma));
+        a.set_services(test_services());
         Core b(CoreConfig{"B", (dir / "b.db").string(), 3, 1, true}, std::move(mb));
+        b.set_services(test_services());
         a.start();
         b.start();
 
         auto send = [&](char prec, const std::string& text) {
-            std::string req = std::string(R"({"cmd":"send_acp127","to_station":"B","prec":")") + prec +
+            std::string req = std::string(R"({"cmd":"send_acp127","service":"mars","to_station":"B","prec":")") + prec +
                               R"(","channel":"QXA","routing":"RXAAAA","originator_ri":"RXCCCC",)"
                               R"("from":"RXCCCC/TEST STATION ONE","to":"RXAAAA/TEST STATION TWO\nTEST STATION THREE",)"
                               R"("text":")" + text + R"("})";
@@ -319,7 +322,7 @@ int main() {
         CHECK(field(parsed, "precedence") == "IMMEDIATE" && field(parsed, "text") == "IMMEDIATE ONE");
         CHECK(field(parsed, "to") == "RXAAAA/TEST STATION TWO\nTEST STATION THREE");
         // A plain message is not taken for ACP 127.
-        std::string plain = a.submit("B", 'R', "NOT ACP 127", &err);
+        std::string plain = a.submit("B", 'R', "NOT ACP 127", &err, SendOpts::in("mars"));
         CHECK(wait_for([&] { return b.get(plain).has_value(); }));
         CHECK(field(ApiServer::handle(b, R"({"cmd":"parse_acp127","id":")" + plain + R"("})"), "error")
                   .find("not an ACP 127 message") != std::string::npos);

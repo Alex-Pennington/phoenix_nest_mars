@@ -9,6 +9,7 @@
 #include "../src/ops.h"
 #include "../src/station_view.h"
 #include "check.h"
+#include "services_fixture.h"
 
 #include <sqlite3.h>
 #include <sys/socket.h>
@@ -232,6 +233,7 @@ int main() {
     fs::create_directories(gale);
     auto core = std::make_unique<Core>(CoreConfig{"STA-A", (dir / "STA-A.db").string(), 3, 1, true},
                                        std::make_unique<LoopbackModem>(0));
+    core->set_services(test_services());
     auto ops = std::make_shared<Ops>("STA-A", (dir / "STA-A.db").string());
     core->set_ops(ops);
     {

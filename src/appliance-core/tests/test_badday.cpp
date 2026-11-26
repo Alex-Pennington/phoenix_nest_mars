@@ -10,6 +10,7 @@
 #include "../src/loopback_modem.h"
 #include "../src/station.h"
 #include "check.h"
+#include "services_fixture.h"
 
 #include <chrono>
 #include <ctime>
@@ -91,6 +92,7 @@ static Box make_box(const fs::path& dir, const std::string& call, std::unique_pt
     fs::create_directories(dir);
     std::string base = (dir / call).string();
     b.core = std::make_unique<Core>(CoreConfig{call, base + ".db", 3, 1, true}, std::move(modem));
+    b.core->set_services(test_services());
     b.keys = std::make_shared<keys::Keyring>(base + ".keys");
     b.keys->set_clock([] { return g_now; });
     std::string err;
@@ -159,7 +161,7 @@ int main() {
         CHECK(!ok(r) && str(r, "error").find("voice") != std::string::npos);
 
         // The keymaster issues the tape and a handout per member; ALT-K is the alternate.
-        r = call(*A.core, {{"cmd", "net_tape"},
+        r = call(*A.core, {{"cmd", "net_tape"}, {"service", "mars"},
                            {"net", "Practice Net"},
                            {"days", "31"},
                            {"start", day_of(t0)},
@@ -265,7 +267,7 @@ int main() {
         CHECK(C.keys->for_sending().empty());
 
         // Signed plain traffic needs no tape: B's card goes over the air and checks good.
-        r = call(*B.core, {{"cmd", "card_send"}, {"to", "NCS-A"}});
+        r = call(*B.core, {{"cmd", "card_send"}, {"service", "mars"}, {"to", "NCS-A"}});
         CHECK(ok(r));
         std::string bid = str(r, "id");
         CHECK(wait_for([&] { return A.core->get(bid).has_value(); }));
@@ -280,7 +282,7 @@ int main() {
         CHECK(ok(call(*A.core, {{"cmd", "card_check"}, {"station", "STA-C"}, {"fingerprint", C.fp}})));
 
         // A new tape: B opens its copy from the air, C loads its new handout.
-        r = call(*A.core, {{"cmd", "net_tape"},
+        r = call(*A.core, {{"cmd", "net_tape"}, {"service", "mars"},
                            {"net", "Practice Net"},
                            {"days", "7"},
                            {"members", "STA-B STA-C"},
@@ -302,7 +304,7 @@ int main() {
         CHECK(C.keys->for_sending().at(0).indicator == today);
 
         // Codress works again, A to B.
-        r = call(*A.core, {{"cmd", "compose_send"},
+        r = call(*A.core, {{"cmd", "compose_send"}, {"service", "mars"},
                            {"template", "FREE_FORM"},
                            {"procedure", "ACP127_CODRESS"},
                            {"key", today},
@@ -342,7 +344,7 @@ int main() {
         CHECK(ok(call(*K.core, {{"cmd", "card_import"}, {"text", card_of(C)}, {"replace", "Y"}})));
         CHECK(ok(call(*K.core, {{"cmd", "card_check"}, {"station", "STA-C"}, {"fingerprint", C.fp}})));
 
-        r = call(*K.core, {{"cmd", "net_tape"},
+        r = call(*K.core, {{"cmd", "net_tape"}, {"service", "mars"},
                            {"net", "Practice Net"},
                            {"days", "7"},
                            {"members", "STA-B STA-C"},
@@ -350,7 +352,7 @@ int main() {
         CHECK(ok(r) && r.get("no_card")->arr.empty());
         r = call(*B.core, {{"cmd", "handout_import"}, {"text", handout_for(r, "STA-B")}});
         CHECK(ok(r) && yes(r, "tape_opened") && num(r, "added") == 7 && str(r, "by") == "ALT-K");
-        r = call(*K.core, {{"cmd", "net_tape"},
+        r = call(*K.core, {{"cmd", "net_tape"}, {"service", "mars"},
                            {"net", "Practice Net"},
                            {"days", "7"},
                            {"members", "STA-C"},
@@ -367,7 +369,7 @@ int main() {
         CHECK(ok(call(*K.core, {{"cmd", "card_import"}, {"text", card_of(D)}})));
         CHECK(ok(call(*K.core, {{"cmd", "card_check"}, {"station", "STA-D"}, {"fingerprint", D.fp}})));
         CHECK(ok(call(*D.core, {{"cmd", "card_import"}, {"text", card_of(K)}})));
-        r = call(*K.core, {{"cmd", "net_tape"}, {"net", "Practice Net"}, {"days", "7"}, {"members", "STA-D"}});
+        r = call(*K.core, {{"cmd", "net_tape"}, {"service", "mars"}, {"net", "Practice Net"}, {"days", "7"}, {"members", "STA-D"}});
         std::string d_text;
         for (auto& s : r.get("sealed")->arr) d_text = str(s, "text");
         r = call(*D.core, {{"cmd", "key_open"}, {"text", d_text}});

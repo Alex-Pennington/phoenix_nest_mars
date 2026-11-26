@@ -14,6 +14,7 @@
 #include "../src/core.h"
 #include "../src/loopback_modem.h"
 #include "check.h"
+#include "services_fixture.h"
 
 #include <arpa/inet.h>
 #include <fcntl.h>
@@ -117,6 +118,7 @@ static void migrate_under_a_writer(const fs::path& dir) {
     fs::create_directories(dir);
     const fs::path db = dir / "TSTA.db";
     Core core(CoreConfig{"TSTA", db.string(), 3, 10, true}, std::make_unique<LoopbackModem>());
+    core.set_services(test_services());
     old_bbs_tables(db);
     CHECK(!has_column(db, "bbs_rule", "world") && !has_column(db, "bbs_routed", "ale_pos"));
 

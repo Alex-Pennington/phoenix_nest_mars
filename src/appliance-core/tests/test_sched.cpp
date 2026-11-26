@@ -8,6 +8,7 @@
 #include "../src/loopback_modem.h"
 #include "../src/ops.h"
 #include "check.h"
+#include "services_fixture.h"
 
 #include <atomic>
 #include <chrono>
@@ -211,7 +212,9 @@ static void test_api(const fs::path& dir) {
     LoopbackModem::connect(*ma, *mb);
     std::string adb = (dir / "a.db").string(), bdb = (dir / "b.db").string();
     Core a(CoreConfig{"NCS-A", adb, 3, 1, true}, std::move(ma));
+    a.set_services(test_services());
     Core b(CoreConfig{"STA-B", bdb, 3, 1, true}, std::move(mb));
+    b.set_services(test_services());
     auto opsa = std::make_shared<Ops>("NCS-A", adb);
     a.set_ops(opsa);
     b.set_ops(std::make_shared<Ops>("STA-B", bdb));
@@ -244,7 +247,7 @@ static void test_api(const fs::path& dir) {
     CHECK(strs(nj, "roster") == (std::vector<std::string>{"STA-B", "STA-C", "STA-Z"}));
 
     // Call-up of the stations not yet in, to ALL: B takes it and nobody acks it.
-    r = call(a, {{"cmd", "net_callup"}});
+    r = call(a, {{"cmd", "net_callup"}, {"service", "mars"}});
     CHECK(ok(r) && str(r, "to_station") == "ALL");
     CHECK(strs(r, "called") == (std::vector<std::string>{"STA-B", "STA-C", "STA-Z"}));
     std::string msg = str(r, "message"), cid = str(r, "id");
@@ -263,23 +266,23 @@ static void test_api(const fs::path& dir) {
 
     // B answers, so A hears it and checks it in; then only STA-C is called.
     std::string err;
-    CHECK(!b.submit("NCS-A", 'R', "QNI", &err).empty());
+    CHECK(!b.submit("NCS-A", 'R', "QNI", &err, SendOpts::in("mars")).empty());
     CHECK(wait_for([&] {
         auto n = opsa->net_get(net);
         return n && n->missing() == std::vector<std::string>{"STA-C", "STA-Z"};
     }));
-    r = call(a, {{"cmd", "net_callup"}, {"text", "Traffic list follows"}});
+    r = call(a, {{"cmd", "net_callup"}, {"service", "mars"}, {"text", "Traffic list follows"}});
     CHECK(ok(r) && strs(r, "called") == (std::vector<std::string>{"STA-C", "STA-Z"}));
     CHECK(str(r, "message").find("STA-C STA-Z DE NCS-A NR 002") != std::string::npos);
     CHECK(str(r, "message").find("TRAFFIC LIST FOLLOWS") != std::string::npos);
-    r = call(a, {{"cmd", "net_callup"}, {"who", "all"}, {"unclas", "true"}});
+    r = call(a, {{"cmd", "net_callup"}, {"service", "mars"}, {"who", "all"}, {"unclas", "true"}});
     CHECK(ok(r) && strs(r, "called").size() == 3 && str(r, "message").find("UNCLAS") != std::string::npos);
     CHECK(str(r, "message").find("NOT YET CHECKED IN") == std::string::npos);
     CHECK(ok(call(a, {{"cmd", "net_checkin"}, {"station", "STA-C"}})));
     CHECK(ok(call(a, {{"cmd", "net_checkin"}, {"station", "STA-Z"}})));
-    r = call(a, {{"cmd", "net_callup"}});
+    r = call(a, {{"cmd", "net_callup"}, {"service", "mars"}});
     CHECK(!ok(r) && str(r, "error") == "every station on the roster has checked in");
-    CHECK(!ok(call(a, {{"cmd", "net_callup"}, {"who", "some"}})));
+    CHECK(!ok(call(a, {{"cmd", "net_callup"}, {"service", "mars"}, {"who", "some"}})));
 
     // A long roster doesn't fit the call line: it calls the NET instead.
     std::string many;
@@ -287,7 +290,7 @@ static void test_api(const fs::path& dir) {
     r = call(a, {{"cmd", "net_open"}, {"name", "BIG NET"}, {"roster", many}, {"exercise", "true"}});
     CHECK(ok(r));
     std::string big = str(r, "id");
-    r = call(a, {{"cmd", "net_callup"}, {"net", big}});
+    r = call(a, {{"cmd", "net_callup"}, {"service", "mars"}, {"net", big}});
     CHECK(ok(r) && strs(r, "called").size() == 12);
     msg = str(r, "message");
     CHECK(msg.find("NET DE NCS-A NR") != std::string::npos && msg.find("EXERCISE EXERCISE EXERCISE") != std::string::npos);
@@ -312,7 +315,7 @@ static void test_api(const fs::path& dir) {
     CHECK(ok(r) && strs(r, "to_targets") == std::vector<std::string>{"ALL"});
     // A collective as the station to send to fans out, one copy each; a plain
     // name on the TO line gets its RI from the book.
-    r = call(a, {{"cmd", "compose_send"}, {"template", "GENADMIN_SIMPLE"}, {"procedure", "ACP127_PLAINDRESS"},
+    r = call(a, {{"cmd", "compose_send"}, {"service", "mars"}, {"template", "GENADMIN_SIMPLE"}, {"procedure", "ACP127_PLAINDRESS"},
                  {"to_station", "practice roster"}, {"routing", "RXXXB RXXXC"}, {"to", "IRONSIDE\nSTA-C"},
                  {"subj", "TEST"}, {"remarks", "Book test"}});
     CHECK(ok(r) && strs(r, "ids").size() == 3 &&

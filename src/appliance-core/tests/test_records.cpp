@@ -21,6 +21,7 @@
 #include "../src/records.h"
 #include "../src/settings.h"
 #include "check.h"
+#include "services_fixture.h"
 
 #include <sys/stat.h>
 #include <unistd.h>
@@ -129,6 +130,7 @@ Box open_box(const fs::path& dir, const std::string& call) {
     fs::create_directories(dir);
     std::string base = (dir / call).string();
     b.core = std::make_unique<Core>(CoreConfig{call, base + ".db", 3, 1, true}, std::make_unique<LoopbackModem>(0));
+    b.core->set_services(test_services());
     b.ops = std::make_shared<Ops>(call, base + ".db");
     b.core->set_ops(b.ops);
     b.core->start();
@@ -236,9 +238,9 @@ void channels(const fs::path& dir) {
     // A call-up names ACP 126's three-letter channel.
     CHECK(ok(api(c, {{"cmd", "channel_put"}, {"name", "AMX"}, {"frequency", "15000"}, {"world", "amateur"}})));
     CHECK(ok(api(c, {{"cmd", "channel_put"}, {"name", "QXA"}, {"frequency", "5000"}})));
-    r = api(c, {{"cmd", "net_callup"}, {"channel", "AMX"}});
+    r = api(c, {{"cmd", "net_callup"}, {"service", "mars"}, {"channel", "AMX"}});
     CHECK(!ok(r) && str(r, "error").find("amateur channel") != std::string::npos);
-    CHECK(ok(api(c, {{"cmd", "net_callup"}, {"channel", "QXA"}})));
+    CHECK(ok(api(c, {{"cmd", "net_callup"}, {"service", "mars"}, {"channel", "QXA"}})));
     A.core->stop();
 }
 
@@ -419,13 +421,15 @@ void add_heard(const fs::path& dir) {
     auto mb = std::make_unique<LoopbackModem>(0);
     LoopbackModem::connect(*ma, *mb);
     Core a(CoreConfig{"STA-A", (dir / "heard" / "a.db").string(), 3, 1, true}, std::move(ma));
+    a.set_services(test_services());
     Core b(CoreConfig{"STA-B", (dir / "heard" / "b.db").string(), 3, 1, true}, std::move(mb));
+    b.set_services(test_services());
     auto ob = std::make_shared<Ops>("STA-B", (dir / "heard" / "b.db").string());
     b.set_ops(ob);
     a.start();
     b.start();
     auto send = [&](const std::string& text) {
-        std::string err, id = a.submit("STA-B", 'R', text, &err);
+        std::string err, id = a.submit("STA-B", 'R', text, &err, SendOpts::in("mars"));
         CHECK(!id.empty());
         CHECK(wait_for([&] { return a.get(id) && a.get(id)->state == "acked"; }));
     };

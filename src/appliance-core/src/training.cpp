@@ -176,7 +176,17 @@ bool Training::fill(std::string* error) {
 
     // A practice key tape, sealed to this station and sent over the practice
     // channel, so enciphered traffic opens.
-    const std::string made = call_api(*ncs_, {{"cmd", "net_tape"}, {"net", "TRAINING NET"}, {"members", call_}, {"days", "31"}, {"send", "Y"}});
+    // The practice net's traffic is ACP 127: it goes in the first service whose
+    // table offers that format (docs/api.md, Services), never a name in code.
+    std::string svc;
+    if (services_)
+        for (const Service* x : services_->all())
+            if (x->offers("ACP127_PLAINDRESS")) {
+                svc = x->name;
+                break;
+            }
+    if (svc.empty()) return fail(error, "no service table offers ACP 127 plaindress: the practice net can't send");
+    const std::string made = call_api(*ncs_, {{"cmd", "net_tape"}, {"net", "TRAINING NET"}, {"members", call_}, {"days", "31"}, {"send", "Y"}, {"service", svc}});
     if (!reply_ok(made)) return fail(error, "practice key tape not made");
     std::string opened;
     wait_until(
@@ -206,6 +216,7 @@ bool Training::fill(std::string* error) {
     // Three messages to this station: two in the clear, one enciphered.
     auto send = [&](const char* prec, const std::string& text, const std::string& key) {
         std::map<std::string, std::string> r = {{"cmd", "compose_send"},
+                                                {"service", svc},
                                                 {"template", "FREE_FORM"},
                                                 {"procedure", key.empty() ? "ACP127_PLAINDRESS" : "ACP127_CODRESS"},
                                                 {"prec", prec},

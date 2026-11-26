@@ -728,9 +728,10 @@ std::string parse_acp127(Core& core, std::map<std::string, std::string>& req) {
 
 // Sends a block of text (a card, a sealed tape) to one station as ACP 127
 // plaindress, signed. Returns the message id, or "" with *error.
+// service: the message's (the request's, or its source's); "" takes the book's.
 std::string send_block(Core& core, const std::string& to, const std::string& text, std::string* error,
-                       bool held = false) {
-    std::map<std::string, std::string> req = {{"hold", held ? "Y" : "N"},{"template", "FREE_FORM"},
+                       bool held = false, const std::string& service = "") {
+    std::map<std::string, std::string> req = {{"hold", held ? "Y" : "N"},{"service", service},{"template", "FREE_FORM"},
                                               {"procedure", "ACP127_PLAINDRESS"},
                                               {"prec", "R"},
                                               {"routing", to},
@@ -1260,7 +1261,7 @@ std::string incomplete_reply(Core& core, const PartSet& ps, const std::string& w
 // empty with *error.
 std::vector<std::string> send_in_parts(Core& core, const std::string& to, const std::string& kind,
                                        const std::string& tag, const std::string& text, std::string* error,
-                                       int* parts_n = nullptr) {
+                                       int* parts_n = nullptr, const std::string& service = "") {
     std::vector<std::string> ids;
     std::vector<std::string> pieces;
     if (text.size() <= kBundlePart && kind == "TAPE")
@@ -1273,7 +1274,7 @@ std::vector<std::string> send_in_parts(Core& core, const std::string& to, const 
         return {};
     }
     for (auto& p : pieces) {
-        std::string id = send_block(core, to, p, error);
+        std::string id = send_block(core, to, p, error, false, service);
         if (id.empty()) return {};
         ids.push_back(id);
     }
@@ -1666,7 +1667,7 @@ std::optional<std::string> parts_cmd(Core& core, const station::Identity& me, co
             std::string text;
             for (auto& st : g.stations)
                 if (text.empty()) text = part_text_sent(core, st, g.tag, g.part, msgs);
-            std::string err, id = text.empty() ? std::string() : send_block(core, g.to(), text, &err, held);
+            std::string err, id = text.empty() ? std::string() : send_block(core, g.to(), text, &err, held, req["service"]);
             if (id.empty()) {
                 failed.push_back(g.tag + " part " + std::to_string(g.part) + ": " + (text.empty() ? "not found" : err));
                 left.push_back(g);
@@ -1702,7 +1703,8 @@ std::optional<std::string> parts_cmd(Core& core, const station::Identity& me, co
         if (ps->complete) return error_reply("every part is here: open it (key_open or bundle_load)");
         std::vector<int> missing = ps->missing;
         std::string err;
-        std::string id = send_block(core, ps->from, parts::request_text(ps->h.kind, ps->h.tag, missing), &err);
+        std::string id = send_block(core, ps->from, parts::request_text(ps->h.kind, ps->h.tag, missing), &err, false,
+                                    m->world.empty() ? req["service"] : m->world);
         if (id.empty()) return error_reply("the request wasn't sent: " + err);
         core.note("asked " + ps->from + " for parts of " + ps->h.kind + " " + ps->h.tag);
         JsonWriter w;
@@ -1754,7 +1756,7 @@ std::optional<std::string> parts_cmd(Core& core, const station::Identity& me, co
             not_found.push_back(n);
             continue;
         }
-        std::string err, id = send_block(core, to, it->second, &err);
+        std::string err, id = send_block(core, to, it->second, &err, false, req["service"]);
         if (id.empty()) {
             failed.push_back(std::to_string(n) + ": " + err);
             continue;
@@ -1903,7 +1905,7 @@ std::string bundle_cmd(Core& core, const station::Identity& me, const std::strin
                 .field("frequencies", freqs);
             w.begin_array("ids");
             for (auto& p : parts) {
-                std::string id = send_block(core, st, p, &err);
+                std::string id = send_block(core, st, p, &err, false, req["service"]);
                 if (id.empty()) {
                     failed.push_back(st + ": " + err);
                     break;
@@ -2344,7 +2346,7 @@ std::optional<std::string> station_cmd(Core& core, const std::string& cmd, std::
         return keymaster_cmd(core, *me, cmd, req);
     if (cmd == "rally_status") return rally_status(core, *me);
     if (cmd == "card_send") {
-        std::string id = send_block(core, req["to"], station::format_card(*me), &err);
+        std::string id = send_block(core, req["to"], station::format_card(*me), &err, false, req["service"]);
         if (id.empty()) return error_reply(err);
         JsonWriter w;
         w.begin_object().field("ok", true).field("id", id).end_object();
@@ -2447,7 +2449,7 @@ std::optional<std::string> station_cmd(Core& core, const std::string& cmd, std::
             // A long tape (a month or more) goes in numbered parts.
             std::string e;
             int n_parts = 0;
-            auto ids = send_in_parts(core, m, "TAPE", parts::tag_of(sealed), sealed, &e, &n_parts);
+            auto ids = send_in_parts(core, m, "TAPE", parts::tag_of(sealed), sealed, &e, &n_parts, req["service"]);
             w.field("id", ids.empty() ? std::string() : ids.front()).field("parts", n_parts);
             w.begin_array("ids");
             for (auto& x : ids) w.field("", x);

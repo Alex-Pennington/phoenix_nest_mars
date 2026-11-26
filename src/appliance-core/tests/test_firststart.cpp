@@ -20,6 +20,7 @@
 #include "../src/ops.h"
 #include "../src/station.h"
 #include "check.h"
+#include "services_fixture.h"
 
 #include <arpa/inet.h>
 #include <fcntl.h>
@@ -162,7 +163,7 @@ static void setup_calls(const fs::path& dir) {
     std::string call;
     JsonValue r = parse(first_start::handle(d.string(), now, R"({"cmd":"setup_status"})", &call));
     CHECK(ok(r) && yes(r, "setup_needed") && str(r, "next").find("setup_station") != std::string::npos);
-    r = parse(first_start::handle(d.string(), now, R"({"cmd":"send","to":"X","text":"HI"})", &call));
+    r = parse(first_start::handle(d.string(), now, R"({"cmd":"send","service":"mars","to":"X","text":"HI"})", &call));
     CHECK(!ok(r) && str(r, "error").find("setup_station") != std::string::npos);
     for (auto* bad : {"", "ALL", "STA B", "A_B", "WAY-TOO-LONG-A-CALL"}) {
         r = parse(first_start::handle(d.string(), now, std::string(R"({"cmd":"setup_station","call":")") + bad + "\"}", &call));
@@ -286,6 +287,7 @@ static Box open_box(const fs::path& dir, const std::string& call) {
     fs::create_directories(dir);
     std::string base = (dir / call).string();
     b.core = std::make_unique<Core>(CoreConfig{call, base + ".db", 3, 1, true}, std::make_unique<LoopbackModem>(0));
+    b.core->set_services(test_services());
     auto keys = std::make_shared<keys::Keyring>(base + ".keys");
     keys->set_clock([] { return g_now; });
     b.core->set_keyring(keys);

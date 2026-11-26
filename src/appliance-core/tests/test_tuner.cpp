@@ -19,6 +19,7 @@
 #include "../src/ops.h"
 #include "../src/tuner.h"
 #include "check.h"
+#include "services_fixture.h"
 
 #include <algorithm>
 #include <atomic>
@@ -247,6 +248,7 @@ static void channel_form(const fs::path& dir) {
 
     auto core = std::make_unique<Core>(CoreConfig{"STA-A", (dir / "STA-A.db").string(), 3, 1, true},
                                        std::make_unique<LoopbackModem>(0));
+    core->set_services(test_services());
     auto ops = std::make_shared<Ops>("STA-A", (dir / "STA-A.db").string());
     core->set_ops(ops);
 
@@ -599,6 +601,7 @@ static void socket_framing(const fs::path& dir) {
 static void status_and_guide(const fs::path& dir) {
     auto core = std::make_unique<Core>(CoreConfig{"STA-B", (dir / "STA-B.db").string(), 3, 1, true},
                                        std::make_unique<LoopbackModem>(0));
+    core->set_services(test_services());
     core->set_ops(std::make_shared<Ops>("STA-B", (dir / "STA-B.db").string()));
 
     // No tuner set up: status carries no tuner section.

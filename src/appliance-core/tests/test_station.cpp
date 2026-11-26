@@ -13,6 +13,7 @@
 #include "../src/loopback_modem.h"
 #include "../src/station.h"
 #include "check.h"
+#include "services_fixture.h"
 
 #include <chrono>
 #include <ctime>
@@ -286,6 +287,7 @@ static Box make_box(const fs::path& dir, const std::string& call, std::unique_pt
     Box b;
     std::string base = (dir / call).string();
     b.core = std::make_unique<Core>(CoreConfig{call, base + ".db", 3, 1, true}, std::move(modem));
+    b.core->set_services(test_services());
     b.keys = std::make_shared<keys::Keyring>(base + ".keys");
     std::string err;
     b.keys->load(&err);
@@ -321,7 +323,7 @@ static Round bootstrap(const fs::path& dir) {
     CHECK(out.fingerprints.size() == 3);
 
     // 1. Cards. B sends its card over the air; C hands its card over on a stick.
-    JsonValue r = call(*B.core, {{"cmd", "card_send"}, {"to", "NCS-A"}});
+    JsonValue r = call(*B.core, {{"cmd", "card_send"}, {"service", "mars"}, {"to", "NCS-A"}});
     CHECK(ok(r));
     std::string bcard_id = str(r, "id");
     CHECK(wait_for([&] { return A.core->get(bcard_id).has_value(); }));
@@ -340,7 +342,7 @@ static Round bootstrap(const fs::path& dir) {
     r = call(*A.core, {{"cmd", "card_import"}, {"text", ccard}, {"source", "USB stick"}});
     CHECK(ok(r) && str(r, "fingerprint") == C.fp);
     // A's card to B over the air, and to C on a stick.
-    r = call(*A.core, {{"cmd", "card_send"}, {"to", "STA-B"}});
+    r = call(*A.core, {{"cmd", "card_send"}, {"service", "mars"}, {"to", "STA-B"}});
     CHECK(ok(r));
     std::string acard_id = str(r, "id");
     CHECK(wait_for([&] { return B.core->get(acard_id).has_value(); }));
@@ -370,7 +372,7 @@ static Round bootstrap(const fs::path& dir) {
     fake.wipe();
 
     // 3. The net and its first tape, sealed to both members.
-    r = call(*A.core, {{"cmd", "net_tape"},
+    r = call(*A.core, {{"cmd", "net_tape"}, {"service", "mars"},
                        {"net", "Practice Net"},
                        {"days", "7"},
                        {"members", "STA-B STA-C STA-D"},
@@ -412,7 +414,7 @@ static Round bootstrap(const fs::path& dir) {
 
     // 5. The net works: A sends codress to B, signed inside; C reads the same groups.
     std::string today = B.keys->for_sending().at(0).indicator;
-    r = call(*A.core, {{"cmd", "compose_send"},
+    r = call(*A.core, {{"cmd", "compose_send"}, {"service", "mars"},
                        {"template", "FREE_FORM"},
                        {"procedure", "ACP127_CODRESS"},
                        {"key", today},
@@ -435,7 +437,7 @@ static Round bootstrap(const fs::path& dir) {
     CHECK(plain.find("PRACTICE NET IS UP") != std::string::npos);
     crypto::wipe(ckey);
     // B answers in plain text, signed; A checks it.
-    r = call(*B.core, {{"cmd", "compose_send"},
+    r = call(*B.core, {{"cmd", "compose_send"}, {"service", "mars"},
                        {"template", "FREE_FORM"},
                        {"procedure", "ACP127_PLAINDRESS"},
                        {"routing", "UHAAAA"},
@@ -450,7 +452,7 @@ static Round bootstrap(const fs::path& dir) {
     r = call(*A.core, {{"cmd", "parse_traffic"}, {"id", id2}});
     CHECK(ok(r) && str(r, "signature") == "good" && yes(r, "signer_checked") && str(r, "digest") == "pass");
     // sign=N sends it unsigned.
-    r = call(*B.core, {{"cmd", "compose_send"},
+    r = call(*B.core, {{"cmd", "compose_send"}, {"service", "mars"},
                        {"template", "FREE_FORM"},
                        {"procedure", "ACP127_PLAINDRESS"},
                        {"routing", "UHAAAA"},
@@ -490,6 +492,7 @@ int main() {
         // Round two's STA-C, rebuilt, can't open round one's sealed tape.
         auto ma = std::make_unique<LoopbackModem>(0);
         Core c2(CoreConfig{"STA-C", (dir / "two" / "STA-C.db").string(), 3, 1, true}, std::move(ma));
+        c2.set_services(test_services());
         auto id = std::make_shared<station::Identity>();
         bool exists = false;
         std::string err;

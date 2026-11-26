@@ -8,6 +8,7 @@
 #include "../src/run_program.h"
 #include "../src/sha256.h"
 #include "check.h"
+#include "services_fixture.h"
 
 #include <cctype>
 #include <chrono>
@@ -258,8 +259,10 @@ int main() {
         std::string capA = (dir / "A-cap").string(), capB = (dir / "B-cap").string();
         Core a(CoreConfig{"A", (dir / "A.db").string(), 3, 1, true},
                std::make_unique<GreybeardModem>(cfg("A", "", capA)));
+        a.set_services(test_services());
         Core b(CoreConfig{"B", (dir / "B.db").string(), 3, 1, true},
                std::make_unique<GreybeardModem>(cfg("B", "", capB)));
+        b.set_services(test_services());
         a.start();
         b.start();
         std::atomic<bool> run{true};
@@ -273,7 +276,7 @@ int main() {
             }
         });
         std::string err;
-        std::string id = a.submit("B", 'P', "HELLO B THROUGH GREYBEARD\r\nLINE 2", &err);
+        std::string id = a.submit("B", 'P', "HELLO B THROUGH GREYBEARD\r\nLINE 2", &err, SendOpts::in("mars"));
         CHECK(!id.empty());
         CHECK(wait_for([&] { auto m = a.get(id); return m && m->state == "acked"; }, 20000));
         // The channel played gale-key's part: each burst's key result came back.
@@ -284,7 +287,7 @@ int main() {
         }, 5000));
         auto rx = b.get(id);
         CHECK(rx && rx->body == "HELLO B THROUGH GREYBEARD\r\nLINE 2" && rx->src == "A");
-        std::string back = b.submit("A", 'Z', "ROGER", &err);
+        std::string back = b.submit("A", 'Z', "ROGER", &err, SendOpts::in("mars"));
         CHECK(wait_for([&] { auto m = b.get(back); return m && m->state == "acked"; }, 20000));
         CHECK(a.get(back) && a.get(back)->prec == 'Z');
         run = false;
@@ -309,6 +312,7 @@ int main() {
         CoreConfig cc{"K", (dir / "K.db").string(), 3, 1, true};
         cc.ack_timeout_s = 600;
         Core k(cc, std::make_unique<GreybeardModem>(c));
+        k.set_services(test_services());
         k.start();
         auto burst_of = [&](const std::string& id) {
             for (auto& e : k.events(0, 500))
@@ -323,7 +327,7 @@ int main() {
             return m ? m->state : std::string();
         };
         std::string err;
-        const std::string one = k.submit("FAR", 'R', "KEY ME", &err), two = k.submit("FAR", 'R', "REFUSE ME", &err);
+        const std::string one = k.submit("FAR", 'R', "KEY ME", &err, SendOpts::in("mars")), two = k.submit("FAR", 'R', "REFUSE ME", &err, SendOpts::in("mars"));
         CHECK(wait_for([&] { return state(one) == "written" && state(two) == "written"; }, 10000));
         const std::string b1 = burst_of(one), b2 = burst_of(two);
         CHECK(!b1.empty() && fs::exists(fs::path(c.outbox_dir) / b1) && !b2.empty());
@@ -367,6 +371,7 @@ int main() {
         c.state_file = (dir / "U-seen.txt").string();
         c.poll_ms = 50;
         Core u(CoreConfig{"U", (dir / "U.db").string(), 3, 1, true}, std::make_unique<GreybeardModem>(c));
+        u.set_services(test_services());
         u.start();
         const std::string raw = std::string("NOISE A\\B\x00\x7f\xff\tT\rR\nLINE 2", 23);
         write(fs::path(cap) / "u.m110a.0.bin", raw);
@@ -403,6 +408,7 @@ int main() {
         c.settle_ms = 300;
         const std::string db = (dir / "K.db").string();
         Core k(CoreConfig{"K", db, 3, 1, true}, std::make_unique<GreybeardModem>(c));
+        k.set_services(test_services());
         k.set_ops(std::make_shared<Ops>("K", db));
         CHECK(ApiServer::handle(k, R"({"cmd":"channel_put","name":"P1","frequency":"13579"})").find("\"ok\":true") !=
               std::string::npos);

@@ -158,7 +158,7 @@ std::vector<Row> make_table() {
         t.push_back(locked(k, "Paths", k));
     for (auto k : {"api-port", "web-port", "s5066-port", "appa-port"}) t.push_back(locked(k, "Ports", k, "int"));
     for (auto k : {"link", "link-socket", "link-poll-ms", "tuner-socket", "controller-socket", "controller-timeout-ms",
-                   "gale-key-socket", "gale-key-timeout-ms",
+                   "gale-key-socket", "gale-key-timeout-ms", "rx-service",
                    "s5066-peers", "s5066-sap", "s5066-ttl",
                    "s5066-confirm", "s5066-broadcast", "loopback-pair", "loopback-bps"})
         t.push_back(locked(k, "Link", k));

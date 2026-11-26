@@ -30,6 +30,7 @@ namespace pna {
 Core::Core(CoreConfig cfg, std::unique_ptr<ModemDriver> modem)
     : cfg_(std::move(cfg)), modem_(std::move(modem)), store_(cfg_.db_path) {
     emcon_ = store_.flag("emcon");
+    rx_service_ = cfg_.rx_service;
 }
 
 bool valid_link_format(const std::string& f) { return f == "pna1" || f == "plain"; }
@@ -1028,6 +1029,7 @@ void Core::decode_in(const ModemDecode& d) {
     // plan's channel on the dial its capture's name carries. The messages the
     // same bytes hold (handle_rx, next) take it too.
     rx_service_ = heard_service(d.source);
+    if (rx_service_.empty()) rx_service_ = cfg_.rx_service;
     if (store_.exists(id)) {
         log(id, "the same modem decode came again (" + d.source + "), not stored twice");
         return;
