@@ -26,7 +26,8 @@ public:
     // the store the call was answered from. A request may send
     // "expect_store" ("real" or "training"): when training has been turned on
     // or off since that front end last looked, the call is refused, with the
-    // store in force, and nothing is done (phoenix_nest_mars#3).
+    // store in force, and nothing is done (phoenix_nest_mars#3). The field is
+    // taken off the request before the call runs, so no handler sees it.
     static std::string handle(Core& core, const std::string& line);
     // The same call without that check and field: for calls the core makes
     // to itself (forms, the guide, training's own set-up).

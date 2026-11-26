@@ -141,6 +141,48 @@ static void store_mode(Station& s) {
     CHECK(!ok(r) && str(r, "store_mode") == "real");
 }
 
+static long long num(const JsonValue& v, const char* k) {
+    const JsonValue* x = v.get(k);
+    return x && x->type == JsonValue::Type::Number ? static_cast<long long>(x->n) : -1;
+}
+
+// The expect_store stamp is checked and then taken off the request: handlers
+// that take every field they're sent never see it (phoenix_nest_mars#3, the
+// defect gale-web's real-core run found at 80f5721).
+static void stamp_not_passed_on(Station& s) {
+    Core& core = *s.core;
+    // bbs_set treats every field but cmd and suffix as a setting.
+    JsonValue r = call(core, {{"cmd", "bbs_set"}, {"purge_days", "45"}, {"expect_store", "real"}});
+    CHECK(ok(r) && str(r, "store_mode") == "real");
+    CHECK(num(call(core, {{"cmd", "bbs_get"}}), "purge_days") == 45);
+    // A stamp for the other store is still refused, and nothing changes.
+    r = call(core, {{"cmd", "bbs_set"}, {"purge_days", "46"}, {"expect_store", "training"}});
+    CHECK(!ok(r) && r.get("store_mismatch") && r.get("store_mismatch")->b);
+    CHECK(num(call(core, {{"cmd", "bbs_get"}}), "purge_days") == 45);
+    // A bad stamp is refused as before.
+    r = call(core, {{"cmd", "bbs_set"}, {"purge_days", "46"}, {"expect_store", "sideways"}});
+    CHECK(!ok(r) && num(call(core, {{"cmd", "bbs_get"}}), "purge_days") == 45);
+    // An empty stamp is no stamp: the call runs, and doesn't see the field.
+    CHECK(ok(call(core, {{"cmd", "bbs_set"}, {"purge_days", "44"}, {"expect_store", ""}})));
+    CHECK(num(call(core, {{"cmd", "bbs_get"}}), "purge_days") == 44);
+    // Stamped for training while training is on: the practice station takes it,
+    // and the real settings stay as they were.
+    CHECK(ok(call(core, {{"cmd", "training"}, {"on", "Y"}})));
+    r = call(core, {{"cmd", "bbs_set"}, {"purge_days", "47"}, {"expect_store", "training"}});
+    CHECK(ok(r) && str(r, "store_mode") == "training");
+    CHECK(num(call(core, {{"cmd", "bbs_get"}, {"expect_store", "training"}}), "purge_days") == 47);
+    CHECK(ok(call(core, {{"cmd", "training"}, {"on", "N"}})));
+    CHECK(num(call(core, {{"cmd", "bbs_get"}}), "purge_days") == 44);
+    // A compose draft takes every field it's sent: the stamp isn't one of them.
+    r = call(core, {{"cmd", "compose_check"}, {"template", "FREE_FORM"}, {"procedure", "ACP127_PLAINDRESS"},
+                    {"prec", "R"}, {"to", "STA-X"}, {"text", "TEST"}, {"expect_store", "real"}});
+    CHECK(ok(r));
+    bool warned = false;
+    if (const JsonValue* a = r.get("issues"))
+        for (auto& i : a->arr) warned |= str(i, "field") == "expect_store";
+    CHECK(!warned);
+}
+
 // Resend while training is on reaches the training store only: the real
 // radio's far end hears nothing and the real store doesn't change
 // (phoenix_nest_mars#3).
@@ -190,6 +232,7 @@ int main() {
         make_station(dir, s);
         toggle_with_others_open(s);
         store_mode(s);
+        stamp_not_passed_on(s);
         resend_in_training(s);
         s.core->stop();
         s.far->stop();

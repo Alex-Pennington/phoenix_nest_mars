@@ -2649,7 +2649,21 @@ std::string ApiServer::handle(Core& core, const std::string& line) {
             return with_store_mode(w.str(), mode);
         }
     }
-    std::string reply = handle_call(core, line);
+    // The stamp is for this check only: no call sees it. Handlers that take
+    // every field they're sent (bbs_set's settings, a compose draft's fields)
+    // would otherwise refuse it or warn about it (phoenix_nest_mars#3). Every
+    // value reaches handle_call as a string either way (parse_flat_object),
+    // so writing the rest back out changes nothing else.
+    std::string call_line = line;
+    if (it != req.end()) {
+        req.erase(it);
+        JsonWriter w;
+        w.begin_object();
+        for (auto& kv : req) w.field(kv.first, kv.second);
+        w.end_object();
+        call_line = w.str();
+    }
+    std::string reply = handle_call(core, call_line);
     // Where it was answered: a call the practice station answered is marked
     // so (mark_training), even if training changed while it ran. The
     // toggle's own reply names the store now in force.

@@ -11,7 +11,9 @@ practice station answered it. Any request may carry `"expect_store"`
 (`real` or `training`): when the store in force is the other one (another
 screen turned training on or off), the call does nothing and is refused with
 `store_mismatch: true`, `expected`, and `store_mode` naming the store in
-force. `training` and `training_status` aren't held to it.
+force. `training` and `training_status` aren't held to it. The field is
+taken off the request once it is checked, so no call sees it as one of its
+own fields or settings.
 
 ## What the Messages panel calls
 
