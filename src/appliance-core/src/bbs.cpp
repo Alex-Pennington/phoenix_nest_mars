@@ -400,6 +400,11 @@ bool Engine::set(const std::map<std::string, std::string>& kv, std::string* erro
     if (after.routing != before.routing)
         core_.note(after.routing ? "BBS routing ON: matching traffic is sent on by the rules (needs machine mode on)"
                                  : "BBS routing OFF: rules kept, nothing routed");
+    // A mode turned off takes its standing grant with it (gale_key.h). Turning
+    // one on grants nothing: that is the operator's y (standing_prepare).
+    if (before.machine_mode && !after.machine_mode) core_.standing_off("machine", "BBS machine mode turned off");
+    if (before.routing && !after.routing) core_.standing_off("routing", "BBS routing turned off");
+    if (before.ack == "auto" && after.ack != "auto") core_.standing_off("auto_qsl", "BBS auto QSL turned off");
     return true;
 }
 
@@ -710,6 +715,10 @@ void Engine::count_auto(const std::string& kind, const std::string& id) {
     Stmt d(db_, "DELETE FROM bbs_auto WHERE at < ?");
     d.bind(1, clock_() - 7 * 86400);
     d.step();
+    // Its standing mode (gale_key.h): its burst is keyed under that grant,
+    // only while the mode is on. Routed traffic is routing, a receipt is
+    // auto_qsl, every other answer is machine mode's.
+    core_.set_key_mode(id, kind == "route" ? "routing" : kind.compare(0, 4, "QSL ") == 0 ? "auto_qsl" : "machine");
 }
 
 // Queues one automatic answer if the gate allows. Returns its id, or "".

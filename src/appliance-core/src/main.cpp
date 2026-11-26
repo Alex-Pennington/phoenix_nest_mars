@@ -17,6 +17,7 @@
 #include "greybeard_modem.h"
 #include "link_monitor.h"
 #include "tuner.h"
+#include "gale_key.h"
 #include "station_view.h"
 #include "ops.h"
 #include "loopback_modem.h"
@@ -131,7 +132,12 @@ void usage() {
         "                        its station (needs --link-socket)\n"
         "  --tuner-socket PATH   greybeard-ale's LDG tuner daemon (ldg-tuner/1); the\n"
         "                        tuner_* calls go there, and each channel's antenna\n"
-        "                        ports with them (default: no tuner)\n\n"
+        "                        ports with them (default: no tuner)\n"
+        "  --gale-key-socket PATH  greybeard-ale's gale-key: the core asks it to key\n"
+        "                        each burst in the outbox (the operator's y, or a\n"
+        "                        standing mode), never the radio itself (default\n"
+        "                        /run/gale-key/key.sock; none: nothing is keyed)\n"
+        "  --gale-key-timeout-ms N  how long to wait for gale-key's reply (default 5000)\n\n"
         "The radio side, read for gale-web (station_view.h; channels go by name, never\n"
         "by frequency). Each defaults to GALE-DIR/its usual name; a file that isn't\n"
         "there (the store not mounted) is reported, never an error:\n"
@@ -159,6 +165,9 @@ struct Station {
 
 std::shared_ptr<LinkMonitor> g_link;
 std::string g_tuner_socket;
+std::string g_gale_key_socket = kGaleKeySocket;
+int g_gale_key_timeout_ms = kGaleKeyTimeoutMs;
+std::shared_ptr<GaleKey> g_gale_key;  // for the greybeard-ale station only: its bursts are in the outbox
 sv::Paths g_view;  // the radio side's files (station_view.h)
 bool g_link_gate = false;
 int g_ack_timeout = 120, g_ack_retries = 2, g_tx_gap = 6;
@@ -254,6 +263,7 @@ bool start_station(Station& s, CoreConfig cfg, std::unique_ptr<ModemDriver> mode
         if (!id->station.empty() && id->station == name) s.core->set_identity(id, ip);
     }
     s.core->on_log([name](const std::string& t) { log_line(name, t); });
+    if (g_gale_key) s.core->set_gale_key(g_gale_key);
     s.core->start();
     bbs::start(*s.core);  // machine mode and routing (bbs.h); off until the operator turns them on
     s.api = std::make_unique<ApiServer>(*s.core, port);
@@ -415,6 +425,14 @@ int main(int argc, char** argv) {
             else if (a == "--advisor-arg") advisor_args.push_back(next());
             else if (a == "--link-socket") link_socket = next();
             else if (a == "--tuner-socket") g_tuner_socket = next();
+            else if (a == "--gale-key-socket") g_gale_key_socket = next();
+            else if (a == "--gale-key-timeout-ms") {
+                g_gale_key_timeout_ms = std::stoi(next());
+                if (g_gale_key_timeout_ms < 100 || g_gale_key_timeout_ms > 60000) {
+                    std::cerr << "--gale-key-timeout-ms: 100 to 60000\n";
+                    return 2;
+                }
+            }
             else if (a == "--gale-dir") g_view.gale_dir = next();
             else if (a == "--words") g_view.words = next();
             else if (a == "--scan-log") g_view.scan_log = next();
@@ -629,6 +647,13 @@ int main(int argc, char** argv) {
         } else {
             std::cout << "  tuner          none (no tuner-socket)\n";
         }
+        if (g_gale_key_socket.empty() || g_gale_key_socket == "none") {
+            std::cout << "  gale-key       none: bursts are written and never keyed\n";
+        } else {
+            std::cout << "  gale-key       " << g_gale_key_socket << " (asked to key each burst; the core never keys)\n";
+            if (!fs::exists(g_gale_key_socket, ec))
+                notes.push_back("gale-key's socket isn't there: until greybeard-ale's gale-key runs, bursts stay written");
+        }
         if (!advisor_prog.empty()) {
             std::string adv = find_program(advisor_prog);
             std::cout << "  advisor        " << (adv.empty() ? advisor_prog + " (not found)" : adv) << "\n";
@@ -733,6 +758,10 @@ int main(int argc, char** argv) {
                 g.outbox_dir = outbox.empty() ? db_dir + "/" + station + "-outbox" : outbox;
                 g.state_file = db_dir + "/" + station + "-captures-seen.txt";
                 modem = std::make_unique<GreybeardModem>(g);
+                // gale-key keys the outbox's bursts when asked (gale_key.h).
+                if (!g_gale_key_socket.empty() && g_gale_key_socket != "none")
+                    g_gale_key = std::make_shared<GaleKey>(
+                        std::make_shared<GaleKeySocket>(g_gale_key_socket, g_gale_key_timeout_ms), g.outbox_dir);
             }
             if (!start_station(stations[0], c, std::move(modem), api_port, static_cast<uint16_t>(g_web_port))) return 1;
         } else {

@@ -66,6 +66,17 @@ hover = help line). The keyboard stays complete; nothing is mouse-only.
   physical keyboard `y`. A click on Yes, a touch, or a synthetic key event does nothing but flash "press y".
   Implementation: accept only `KeyboardEvent` with `isTrusted === true`, key `y`, while the confirm panel has focus.
 - The confirm panel states the act in words: "This will key the radio on <route>." plus route, recipient, key name.
+- Keying goes through gale-key, and the core is its caller (docs/api.md, "Keying: the core asks gale-key"). When the
+  confirm panel for a written burst opens, gale-web calls `key_prepare {msg_id}` and shows the `confirm` summary it
+  returns (world, channel label, control, ID, PTT method). On the trusted `y` it calls
+  `key_confirm {prepare_id, confirm:"Y"}`; on No, leaving the panel or `Esc` it calls `key_cancel {prepare_id}`. The
+  prepare lasts at most `expires_s` (120 s): past it the panel closes and must be opened again. A refused prepare shows
+  its `error` in the panel and offers no `y`. The token stays in the core: gale-web never sees it.
+- Turning Machine mode, routing or auto-QSL on also needs gale-key's standing grant: the confirm panel calls
+  `standing_prepare {mode}` (`machine`, `routing`, `auto_qsl`), shows its summary, and the `y` calls `key_confirm`.
+  Turning one off calls `standing_off {mode}`. Until the grant is made, that mode's automatic sends stay written.
+- A sent message is marked sent only when gale-key's result says it keyed; the reply to `key_confirm` is shown, not
+  taken as the result. The status strip shows `status.keying.why` when gale-key isn't answering.
 - Nothing on screen ever shows key material, passphrases or secrets; key names only.
 - Transmit stays on the pinned route the core reports; the screen never picks a route the core did not offer.
 
@@ -79,7 +90,8 @@ hover = help line). The keyboard stays complete; nothing is mouse-only.
   (`list`, `pending`, `mark`, `mark_all`, `get`, `qsl`, `export`, `retransmit`, `tag`, `correct`, `search`, `log`,
   `activity_counters`, `report`, `bbs_get`, `bbs_set`, `guard_list`, `guard_set`, `alias_list`, `alias_set`,
   `alias_del`, `route_list`, `route_set`, `route_del`, `route_move`, `route_rerun`, `parts_queue`,
-  `parts_queue_send`, `parts_queue_drop`, `status`, plus compose/outbox calls gale-term already uses).
+  `parts_queue_send`, `parts_queue_drop`, `status`, `key_prepare`, `key_confirm`, `key_cancel`, `standing_prepare`,
+  `standing_off`, `key_status`, plus compose/outbox calls gale-term already uses).
   Same names, same fields as the text spec. A stub (`src/core/stub.ts`) answers all of them from fixtures for
   dev and Playwright; `?stub=1` selects it in dev builds only.
 - Polling: `status` every 1 s; activity tails every 2 s with `after`; lists refresh after any action that changes them.

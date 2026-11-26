@@ -10,6 +10,7 @@
 #include "ops.h"
 #include "station_view.h"
 
+#include <algorithm>
 #include <cctype>
 #include <ctime>
 #include <filesystem>
@@ -67,6 +68,7 @@ void Core::start() {
 }
 
 void Core::stop() {
+    if (gk_) gk_->halt();
     if (!running_.exchange(false)) return;
     if (thread_.joinable()) thread_.join();
     modem_->stop();
@@ -478,6 +480,8 @@ void Core::tick() {
             no_ack(m, "no ack from " + m.dst + " after " + std::to_string(cfg_.ack_timeout_s) + " s");
     // Resends held for a net slot go to the queue at its start.
     release_due_parts();
+    // Automatic sends already written: gale-key is asked under their standing mode.
+    key_automatic();
     // Handling times, expiry.
     age_queue();
     // Bare text that stopped part-way is taken as it stands.
@@ -600,7 +604,9 @@ void Core::handle_tx_done(bool ok, const std::string& err) {
         if (!burst.empty()) {
             // The write-back: a file in the outbox is not on the air. It is
             // sent only when gale-key says it keyed it (handle_key_result).
-            store_.mark_written(f.id, burst);
+            // Its channel is the one the radio was last set to through the
+            // tuner calls (as a net's is, heard()): gale-key keys it there.
+            store_.mark_written(f.id, burst, tuner_ ? tuner_->current_channel() : std::string());
             log(f.id, "written to the outbox as " + burst + "; not on the air until gale-key keys it");
             return;
         }
@@ -622,6 +628,131 @@ void Core::handle_tx_done(bool ok, const std::string& err) {
         int delay = cfg_.retry_delay_s << (attempts - 1);
         store_.schedule_retry(f.id, now_utc() + delay, err);
         log(f.id, "send failed (" + err + "), retry in " + std::to_string(delay) + " s");
+    }
+}
+
+// ---- gale-key's caller (gale_key.h) ----
+
+void Core::set_gale_key(std::shared_ptr<GaleKey> g) {
+    gk_ = std::move(g);
+    if (gk_)
+        gk_->set_log([this](const std::string& id, const std::string& text) {
+            std::lock_guard<std::mutex> lk(mu_);
+            log(id, text);
+        });
+}
+
+bool Core::key_checks(const Store::KeyRow& r, std::string* error) {
+    auto fail = [&](const std::string& why) {
+        if (error) *error = why;
+        return false;
+    };
+    if (r.state != "written" || r.burst.empty())
+        return fail(r.id + " is " + r.state + ", not a burst written to the outbox waiting for its key");
+    if (r.asked) return fail("gale-key was already asked to key " + r.burst + "; its BURST.key.json decides");
+    if (r.world.empty()) return fail(r.burst + " has no world: never sent to gale-key");
+    if (r.world != "mars")
+        return fail(r.burst + " is an item of the " + r.world +
+                    " world: the MARS message center never asks gale-key to key it (ask 40)");
+    if (std::string why = world_refusal(r.dst); !why.empty())
+        return fail("not keyed to " + r.dst + ": " + why + " (ask 40)");
+    if (r.channel.empty())
+        return fail(r.burst + " has no channel (no channel was set through tuner_channel when it was written): "
+                              "never sent to gale-key; requeue it once a channel is set");
+    if (emcon_) return fail("EMCON is on: nothing is asked of gale-key until it is off");
+    return true;
+}
+
+bool Core::key_item(const std::string& msg_id, const std::string& burst, KeyItem& it, std::string* error) {
+    std::lock_guard<std::mutex> g(mu_);
+    std::optional<std::string> id = msg_id.empty() ? store_.id_by_burst(burst) : std::optional<std::string>(msg_id);
+    auto r = id ? store_.key_row(*id) : std::nullopt;
+    if (!r) {
+        if (error)
+            *error = msg_id.empty() ? (burst.empty() ? std::string("name a msg_id or a burst: a prepare is only for a "
+                                                                   "burst already written to the outbox")
+                                                     : burst + " is no burst of a message of ours: never sent to gale-key")
+                                    : "no outgoing message " + msg_id;
+        return false;
+    }
+    if (!burst.empty() && r->burst != burst) {
+        if (error) *error = burst + " is not " + r->id + "'s burst now";
+        return false;
+    }
+    if (!key_checks(*r, error)) return false;
+    it = KeyItem{r->id, r->burst, r->world, r->channel};
+    return true;
+}
+
+bool Core::claim_key(const KeyItem& it, std::string* error) {
+    std::lock_guard<std::mutex> g(mu_);
+    auto r = store_.key_row(it.msg_id);
+    if (!r) {
+        if (error) *error = "no outgoing message " + it.msg_id;
+        return false;
+    }
+    if (r->burst != it.burst || r->channel != it.channel || r->world != it.world) {
+        if (error) *error = it.msg_id + "'s burst changed since the y dialog opened: open it again";
+        return false;
+    }
+    if (!key_checks(*r, error)) return false;
+    if (!store_.claim_key(it.msg_id, it.burst)) {
+        if (error) *error = "gale-key was already asked to key " + it.burst;
+        return false;
+    }
+    return true;
+}
+
+void Core::unclaim_key(const KeyItem& it) {
+    std::lock_guard<std::mutex> g(mu_);
+    store_.unclaim_key(it.msg_id, it.burst);
+}
+
+void Core::set_key_mode(const std::string& msg_id, const std::string& mode) {
+    if (!core_standing_mode(mode)) return;
+    std::lock_guard<std::mutex> g(mu_);
+    store_.set_key_mode(msg_id, mode);
+}
+
+void Core::standing_off(const std::string& mode, const std::string& why) {
+    if (gk_) gk_->revoke(mode, why);
+}
+
+void Core::key_automatic() {
+    if (!gk_) return;
+    gk_->held();  // y dialogs past gale-key's 120 s are dropped here, even if never touched again
+    if (emcon_) return;
+    const std::vector<std::string> on = gk_->standing();
+    if (on.empty()) return;
+    const auto now = std::chrono::steady_clock::now();
+    for (auto& r : store_.written_automatic(16)) {
+        if (std::find(on.begin(), on.end(), r.mode) == on.end() || key_queued_.count(r.id)) continue;
+        if (auto t = key_retry_.find(r.id); t != key_retry_.end()) {
+            if (now < t->second) continue;
+            key_retry_.erase(t);
+        }
+        std::string why;
+        if (!key_checks(r, &why)) {
+            if (key_told_.insert(r.burst).second) log(r.id, "not asked of gale-key: " + why);
+            continue;
+        }
+        key_queued_.insert(r.id);
+        gk_->key_standing(
+            KeyItem{r.id, r.burst, r.world, r.channel}, r.mode,
+            [this](const KeyItem& it) {
+                std::lock_guard<std::mutex> g(mu_);
+                key_queued_.erase(it.msg_id);
+                auto row = store_.key_row(it.msg_id);
+                std::string why;
+                if (!row || row->burst != it.burst || !key_checks(*row, &why)) return false;
+                return store_.claim_key(it.msg_id, it.burst);
+            },
+            [this](const KeyItem& it, const GaleKeyReply& rep) {
+                if (rep.reached) return;
+                std::lock_guard<std::mutex> g(mu_);
+                store_.unclaim_key(it.msg_id, it.burst);
+                key_retry_[it.msg_id] = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+            });
     }
 }
 
@@ -787,12 +918,17 @@ void Core::handle_rx(const std::string& bytes) {
 // ---- the operator's hand on the queue, EMCON and link formats ----
 
 void Core::set_emcon(bool on) {
-    std::lock_guard<std::mutex> g(mu_);
-    if (emcon_ == on) return;
-    emcon_ = on;
-    store_.set_flag("emcon", on);
-    log("", on ? "EMCON on: nothing is sent, acks included, until it is turned off"
-               : "EMCON off: the queue goes out again");
+    {
+        std::lock_guard<std::mutex> g(mu_);
+        if (emcon_ == on) return;
+        emcon_ = on;
+        store_.set_flag("emcon", on);
+        log("", on ? "EMCON on: nothing is sent, acks included, until it is turned off"
+                   : "EMCON off: the queue goes out again");
+    }
+    // gale-key revokes every standing grant on EMCON, and a revoked grant
+    // doesn't come back by itself: the core's modes go off with them.
+    if (on && gk_ && !gk_->standing().empty()) gk_->revoke("all", "EMCON on");
 }
 
 bool Core::emcon() {

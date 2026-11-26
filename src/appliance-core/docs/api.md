@@ -29,6 +29,8 @@ own fields or settings.
 | The activity log, new lines only | `log` with `after` |
 | A message's history and body | `list`, `get` |
 | Any level-zero form (setup, book, channels, schedules, bundles, keymasters, tapes, backups) | `form_list`, `form_get`, `form_check`, `form_submit` |
+| The y dialog that keys a written burst | `key_prepare` when it opens, `key_confirm` on the keyboard y, `key_cancel` on No or leaving it |
+| The y dialog that turns an automatic mode on, and turning it off | `standing_prepare`, `key_confirm`, `key_cancel`; `standing_off` |
 
 `send`, `send_acp127`, `send_acp126`, `send_chat`, `parse_acp127` and
 `parse_traffic` stay as they were for tools that build the envelope
@@ -233,6 +235,21 @@ With the station book on, `status` also has `on_duty`, `net` (the open net) and
 `contract_rev`, `channel {ant_rx, ant_tx, recalled_on}`, `relays.antenna`,
 `keyed`, `tx_locked`, `meter` and the rest. It is read at most once a second.
 It is left out when no tuner socket is set or nothing answers on it.
+
+`keying` says whether the core can ask gale-key to key (see "Keying: the core
+asks gale-key" below):
+
+    "keying":{"gale_key":"not answering","socket":"/run/gale-key/key.sock",
+      "why":"gale-key isn't running (no socket at /run/gale-key/key.sock): nothing is keyed, bursts stay written",
+      "standing":[],"held":0}
+
+- `gale_key`: `answering` (the last request had its reply), `busy` (gale-key
+  took the last request and hadn't answered within the timeout, as while it
+  keys; with `why`), `not answering` (with `why`), `not asked yet`, or `none`
+  (no gale-key set up for this station: the loopback, STANAG 5066 and
+  Appendix A links, and training).
+- `standing`: the standing modes on (`machine`, `routing`, `auto_qsl`).
+- `held`: y dialogs holding a token now.
 
 ## Worlds: MARS only, never amateur (ask 37)
 
@@ -1201,9 +1218,11 @@ Outgoing: `queued`, `sending`, `sent`, `acked`, `failed`, and:
 - `unacked`: went out 1 + `ack_retries` times with no ack. Goes again by
   itself when its station is heard.
 - `written` (greybeard modem): the burst is in the outbox but nothing has
-  keyed it yet. It becomes `sent` only when gale-key's key result says it was
-  keyed, and `failed` ("not keyed: why") when gale-key refused. See
-  "Transmit: written, then sent" below. `cancel` and `requeue` work on it.
+  keyed it yet. The core asks gale-key to key it: on the operator's y, or by
+  itself under a standing mode (see "Keying: the core asks gale-key"). It
+  becomes `sent` only when gale-key's key result says it was keyed, and
+  `failed` ("not keyed: why") when gale-key refused. See "Transmit: written,
+  then sent" below. `cancel` and `requeue` work on it.
 - `held`: the operator held it.
 - `cancelled`: the operator cancelled it.
 - `expired`: still not through `--expire-h` hours after it was filed.
@@ -1280,6 +1299,14 @@ waits while EMCON is on, counts against `auto_per_hour`, and goes into the
 ordinary queue, so it shows in the Out Box and Activity and goes out the
 pinned transmit route. A command heard while machine mode was off is never
 answered later.
+
+Each automatic send carries its standing mode: routed traffic `routing`, a
+QSL receipt `auto_qsl`, every machine-mode answer `machine`. Its burst is
+keyed only while the core holds that mode on, which takes the operator's y
+(`standing_prepare`; see "Keying: the core asks gale-key"). `bbs_set`
+turning `machine_mode` or `routing` off, or `ack` to `off`, turns the matching
+standing mode off and tells gale-key to revoke it. Turning one on grants
+nothing by itself.
 
 ### Settings
 
@@ -1562,12 +1589,14 @@ name is replaced), and returns `{"ok":true,"kind","from","to","folder","file","b
 It is MSG-REPORTS `e`. A bad kind or day gets `report`'s own error and writes
 nothing. In training it writes to the practice station's folder, as `export` does.
 
-## Transmit: written, then sent (stub for gale-key)
+## Transmit: written, then sent
 
 The core never keys the radio. With the greybeard modem it writes each burst
-to the outbox as `BURST.wav` and marks the message `written`. gale-key keys
-it (or refuses) and then writes one result file beside it, whole, by writing
-`.BURST.key.json.tmp` and renaming it to `BURST.key.json`:
+to the outbox as `BURST.wav` and marks the message `written`. The core is the
+caller that asks greybeard-ale's gale-key to key it, over gale-key's socket
+(next section). gale-key keys it (or refuses), and for every key whose WAV is
+in the outbox, socket keys included, it writes one result file beside it,
+whole, by writing `.BURST.key.json.tmp` and renaming it to `BURST.key.json`:
 
 ```
 {"version":1,"burst":"BURST.wav","result":"keyed","why":"","at":"2026-11-26T15:00:00Z"}
@@ -1580,5 +1609,143 @@ it (or refuses) and then writes one result file beside it, whole, by writing
   naming another burst, is renamed `.key.json.bad` and changes nothing.
 - A result for an ack or orderwire burst is logged only.
 - There is no timeout: a burst stays `written` until a result comes.
+- The result file is the one source of truth. gale-key's reply on the socket
+  is logged and shown to the operator, and never changes a message's state.
 - `status` counts `written`. `tools/stub_channel.py --key-results` writes
   these files for testing.
+
+## Keying: the core asks gale-key
+
+gale-key (greybeard-ale, docs/gale-tx.md) is the station's one keying
+service. The core asks it to key a burst already in the outbox; it never
+keys the radio itself, and there is no VOX. The socket is `--gale-key-socket`
+(default `/run/gale-key/key.sock`; `none` sets no gale-key), with
+`--gale-key-timeout-ms` (default 5000) for its reply. Only a station on the
+greybeard modem has one. Training refuses every call here.
+
+The caller of each request, and what it sends:
+
+| When | The core sends gale-key |
+|---|---|
+| `key_prepare` | `{"cmd":"prepare","kind":"air","wav":"/abs/OUTBOX/BURST.wav","world":"mars","channel":"P1","control":"local","final":false}` |
+| `key_confirm` on a send | the same with `"cmd":"key"` and `"token"` |
+| an automatic send, once written | `{"cmd":"key","kind":"air","wav":...,"world":"mars","channel":"P1","control":"automatic","final":false,"standing":"routing"}` |
+| `standing_prepare` | `{"cmd":"prepare","kind":"standing:routing"}` |
+| `key_confirm` on a mode | `{"cmd":"grant","mode":"routing","token":...}` |
+| `standing_off`, or the BBS mode turned off | `{"cmd":"revoke","mode":"routing"}` (or `"all"`) |
+| `key_status` | `{"cmd":"status"}` |
+
+A burst is sent to gale-key only when all of these hold. Otherwise the call is
+refused with the reason, or, for an automatic send, the reason is logged once:
+
+- it is a burst of a message of ours, still `written`, and gale-key hasn't
+  been asked to key it yet (once asked, its result file decides);
+- its world is the message's, and it is `mars`: the core never asks gale-key
+  to key an item of the amateur world, nor one to a station of the amateur
+  world (ask 40);
+- it has a channel: the channel the radio was last set to through
+  `tuner_channel` when the burst was written. A burst written with no channel
+  set is never sent to gale-key; requeue it once one is set;
+- EMCON is off.
+
+### key_prepare, key_confirm, key_cancel: the operator's y
+
+`{"cmd":"key_prepare","msg_id":"ID"}` (or `"burst":"BURST.wav"`), sent when
+the kiosk opens its y dialog →
+
+    {"ok":true,"prepare_id":"KP-0123456789abcdef","expires_s":120,
+     "confirm":{"kind":"air","world":"mars","channel":"P1","control":"local","id":false,"ptt":"rts",
+                "msg_id":"ID","burst":"BURST.wav"}}
+
+A prepare is only for a burst already written: `msg_id` or `burst` must name
+a message of ours in state `written` whose `BURST.wav` is in the outbox now.
+An empty call, an unknown message or burst, a message in any other state, or
+a burst whose WAV is gone is refused, and gale-key isn't asked. gale-key binds
+its token to the WAV's bytes, so a prepare never covers a burst written later.
+
+The core asks gale-key to prepare, which runs every gate and answers with a
+one-shot token. The core holds the token against `prepare_id`. The token
+never leaves the core: not in a reply, not in the log. `confirm` is gale-key's
+summary for the y, and only the fields the kiosk shows: `kind`, `world`,
+`channel` (the label), `control`, `id` (whether the ID goes out), `ptt`. No
+frequency goes to the kiosk: any text from gale-key that names one is
+replaced by "(gale-key's text named a frequency; not shown)". A refused
+prepare holds nothing and returns gale-key's reason. A new `key_prepare` for
+the same burst drops the token held before it.
+
+The held token is bound to that exact burst: the WAV's path and sha256 (read
+when the prepare is made), the message's world and the channel. It belongs to
+the connection (API socket or gale-web's WebSocket) that opened the dialog: it
+is confirmed only there, and dropped when that connection closes (a page
+reloaded with the dialog open). One never confirmed or cancelled is dropped at
+`expires_s` (gale-key's 120 s), whether or not anything asks for it again.
+
+`{"cmd":"key_confirm","prepare_id":"KP-...","confirm":"Y"}`, sent on the
+keyboard y →
+
+    {"ok":true,"kind":"air","msg_id":"ID","burst":"BURST.wav","asked":true,
+     "gale_key":{"reached":true,"answered":true,"ok":true,"exit":0,"reason":""},
+     "note":"the message stays written until gale-key's BURST.key.json says keyed (sent) or refused (failed)"}
+
+The core marks the burst asked and sends `key` with the token. `gale_key` is
+gale-key's reply, frequency-free; `answered` is false when gale-key took the
+request but answered after the timeout (it may still be keying). The message
+stays `written` until the result file comes. The call is refused, and nothing
+is sent:
+
+- without `confirm` of `Y` (the core never makes up a Y; the dialog stays held);
+- sooner than 0.5 s after the prepare (gale-key would refuse it; still held);
+- after `key_cancel`, after the token was used, once it is past `expires_s`
+  (gale-key's 120 s at most), or after its connection closed: open the dialog
+  again;
+- on another connection than the one that opened it;
+- when the WAV is no longer in the outbox, or its sha256 differs from the
+  prepare's;
+- when the message is no longer `written` with that burst, its world or
+  channel changed, gale-key was already asked to key it, or the checks above
+  no longer hold.
+
+When gale-key can't be reached, nothing keys: the call says why, the burst
+stays `written` and may be prepared again.
+
+`{"cmd":"key_cancel","prepare_id":"KP-..."}` → `{"ok":true,"prepare_id":"KP-...","dropped":true}`
+drops a held token (`dropped` false when none was held). Send it when the
+operator answers No or leaves the dialog.
+
+### standing_prepare, standing_off: automatic sends
+
+Routing, machine-mode answers and auto-QSL key under a standing grant per
+mode, `machine`, `routing` or `auto_qsl`. The core never asks for
+`amateur_auto`. A mode goes on only through the same prepare and y:
+
+`{"cmd":"standing_prepare","mode":"routing"}` →
+`{"ok":true,"prepare_id":"KP-...","expires_s":120,"confirm":{"kind":"standing","mode":"routing","world":"mars"}}`
+
+then `key_confirm` with that `prepare_id` and `confirm` `Y` sends `grant` →
+`{"ok":true,"kind":"standing","mode":"routing","on":true,"gale_key":{...}}`.
+It is refused under EMCON, and when gale-key's transmit world isn't `mars`.
+`key_cancel` drops it as for a send.
+
+While a mode is on, each written burst of that mode is keyed with
+`"standing":MODE`, once, on the core's own thread. When gale-key can't be
+reached, it is tried again 30 s later.
+
+`{"cmd":"standing_off","mode":"routing"}` (or `"all"`) →
+`{"ok":true,"mode":"routing","on":false,"gale_key":{...}}`. The mode is off in
+the core at once, whatever gale-key answers, and gale-key is sent `revoke`.
+EMCON turned on turns every mode off the same way. gale-key also revokes
+grants itself (EMCON, the hourly cap, a change of transmit world). A burst
+keyed under a grant gale-key no longer holds comes back refused, and the
+message is `failed`; gale-key's reply ("no standing grant ...") turns that
+mode off in the core, so the next bursts wait for the operator's y. The core holds its modes in memory
+only, as gale-key does: after a restart every mode is off until the operator
+gives the y again.
+
+### key_status
+
+`{"cmd":"key_status"}` → `keying` as in `status`, `gale_key` (the reply), and
+`station`, the parts of gale-key's own status the kiosk shows:
+
+    "station":{"ready":true,"keyed":false,"ptt":"rts","transmit_world":"mars",
+               "why_not":[],"grants":["routing"]}
+

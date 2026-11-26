@@ -93,8 +93,26 @@ public:
     // Went out whole: state sent, one more send, and the time an ack is due
     // (0: none is expected).
     void mark_sent(const std::string& id, int64_t ack_due);
-    // Written to the outbox as `burst`, not on the air yet (the write-back).
-    void mark_written(const std::string& id, const std::string& burst);
+    // Written to the outbox as `burst`, not on the air yet (the write-back),
+    // for `channel` (the designator the core sent it on; "" for none). A new
+    // burst has not been asked of gale-key yet.
+    void mark_written(const std::string& id, const std::string& burst, const std::string& channel = "");
+    // What gale-key is asked about one written burst (gale_key.h).
+    struct KeyRow {
+        std::string id, dst, world, state, burst, channel;
+        std::string mode;  // the standing mode of an automatic send; "" for the operator's own
+        bool asked = false;
+    };
+    std::optional<KeyRow> key_row(const std::string& id);
+    // Written bursts of automatic sends not yet asked of gale-key, oldest first.
+    std::vector<KeyRow> written_automatic(int limit);
+    // Marks an automatic send with its standing mode (machine, routing, auto_qsl).
+    void set_key_mode(const std::string& id, const std::string& mode);
+    // Marks the burst asked of gale-key, once: false when it already was, or the
+    // message is no longer written with that burst.
+    bool claim_key(const std::string& id, const std::string& burst);
+    // gale-key never got the request: the burst may be asked again.
+    void unclaim_key(const std::string& id, const std::string& burst);
     // The message of ours a burst file holds, if any.
     std::optional<std::string> id_by_burst(const std::string& burst);
     // Sent messages whose ack is overdue.
