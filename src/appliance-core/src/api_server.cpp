@@ -3085,8 +3085,11 @@ std::string ApiServer::handle_call(Core& core, const std::string& line) {
         if (bad) return error_reply("limit must be a number");
         JsonWriter w;
         w.begin_object().field("ok", true).begin_array("messages");
-        for (const Message& m : core.queue(limit))
-            write_message(w, m, m.state == "queued" && core.waits_for_link(m.dst));
+        auto q = core.queue(limit);
+        for (const Message& m : q) write_message(w, m, m.state == "queued" && core.waits_for_link(m.dst));
+        // Then the bursts written to the outbox, waiting for their key.
+        if (static_cast<int>(q.size()) < limit)
+            for (const Message& m : core.written_out(limit - static_cast<int>(q.size()))) write_message(w, m);
         w.end_array().end_object();
         return w.str();
     }

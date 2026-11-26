@@ -25,7 +25,8 @@ own fields or settings.
 | The guidance while the operator types | `compose_check` (on each change, or on a short pause) |
 | "What goes here?" beside a field, or "help me word this" | `compose_advise` |
 | Send | `compose_send` |
-| Messages waiting to go, in sending order | `queue` |
+| Messages waiting to go, in sending order, then those written and waiting for their key | `queue` |
+| Whether a sent message has reached `written` (and later `sent` or `failed`) | `get` or `queue`, polled: see "Following a message" under "list, get" |
 | The activity log, new lines only | `log` with `after` |
 | A message's history and body | `list`, `get` |
 | Any level-zero form (setup, book, channels, schedules, bundles, keymasters, tapes, backups) | `form_list`, `form_get`, `form_check`, `form_submit` |
@@ -72,7 +73,8 @@ serves the kiosk screen, on 127.0.0.1 only, no TLS
     unchanged as its first member (`{"rid":7,"ok":true,...}`). A number stays
     a number, a string a string. The handler never sees `rid`. Without `rid`
     the frame goes to the handler exactly as sent. A reply with no `rid` is a
-    push (none are sent yet).
+    push (none are sent yet: a screen polls, as "Following a message to
+    `written`, `sent` or `failed`" says).
   - Limits: 1 MiB per frame and per whole message (close 1009); binary
     frames close with 1003, bad UTF-8 with 1007, protocol errors with 1002.
     When the core stops, open sockets get close 1001.
@@ -500,8 +502,10 @@ implements `compose::Advisor` can be set with `compose::set_advisor`.
 
 `{"cmd":"queue","limit":100}` → `{"ok":true,"messages":[...]}`: outgoing
 messages not yet sent, in the order they will go (the one on the air, then
-FLASH, IMMEDIATE, PRIORITY, ROUTINE, oldest first within each). Each message
-has the same fields as `list`.
+FLASH, IMMEDIATE, PRIORITY, ROUTINE, oldest first within each). After them
+come the messages whose burst is `written` to the outbox and waits for its
+key, in the same order. Each message has the same fields as `list`, `state`
+included; `limit` counts both.
 With `--link-gate`, a message whose station has no link yet carries
 `"waiting_for_link":true`; it goes as soon as one is reported, and the log says
 "waiting for a link to B" and then "link to B is up". ACKs are never held.
@@ -521,6 +525,23 @@ lines.
 "created_at","updated_at","body","sends","last_error"?}]}`
 
 `sends` counts how many times a message went out whole on the air.
+
+### Following a message to `written`, `sent` or `failed`
+
+The core pushes nothing: every reply answers a request, on the API port and
+on the WebSocket alike. A burst is written on the core's own thread, a
+moment after the send, so a screen polls for it:
+
+- `get {id}` every second or so while its `state` is `queued` or `sending`.
+  `written` means the burst is in the outbox and the y dialog
+  (`key_prepare`) can open. Keep polling, more slowly, until `sent` (gale-key
+  keyed it) or `failed` (`last_error` says why). `updated_at` changes with
+  every state.
+- Or poll `queue`: a message stays in it while `queued`, `sending` or
+  `written`, each with its `state`, and leaves it once `sent` or `failed`.
+- `log` with `after` carries the same steps as lines ("written to the outbox
+  as ...", "keyed by gale-key", "not keyed by gale-key: ...") for the
+  activity log; read the state from `get` or `queue`, not from the text.
 
 `list` with `dir`, `get`'s in-box extras and `log` with `stream` are under
 "In box" below.

@@ -1076,7 +1076,30 @@ int main() {
         CHECK(s.core->release(hd, &err));
         CHECK(wait_for([&] { return s.state(hd) == "written"; }, 10000));
 
-        std::string pr = call(*s.core, {{"cmd", "standing_prepare"}, {"mode", "routing"}});
+        // gale-web polls for written: queue keeps a written message, after
+        // those still to be written, with its state; get gives the same state.
+        {
+            const std::string q1 = s.core->submit("FARSTN", 'R', "STILL QUEUED", &err, /*held=*/true);
+            s.core->set_emcon(true);
+            CHECK(s.core->release(q1, &err));
+            JsonValue q = parsed(call(*s.core, {{"cmd", "queue"}}));
+            const JsonValue* ms = q.get("messages");
+            std::vector<std::pair<std::string, std::string>> got;
+            if (ms && ms->type == JsonValue::Type::Array)
+                for (auto& m : ms->arr) got.emplace_back(str(m, "id"), str(m, "state"));
+            CHECK(got.size() == 3);
+            CHECK(got.size() == 3 && got[0] == std::make_pair(q1, std::string("queued")) &&
+                  got[1] == std::make_pair(rq, std::string("written")) &&
+                  got[2] == std::make_pair(hd, std::string("written")));
+            JsonValue g = parsed(call(*s.core, {{"cmd", "get"}, {"id", rq}}));
+            const JsonValue* gm = g.get("messages");
+            CHECK(gm && gm->type == JsonValue::Type::Array && gm->arr.size() == 1 &&
+                  str(gm->arr[0], "state") == "written");
+            CHECK(s.core->cancel(q1, &err));
+            s.core->set_emcon(false);
+        }
+
+        std::string pr =call(*s.core, {{"cmd", "standing_prepare"}, {"mode", "routing"}});
         const std::string sid = str(parsed(pr), "prepare_id");
         s.now = s.now + 2;
         CHECK(ok(call(*s.core, {{"cmd", "key_confirm"}, {"prepare_id", sid}, {"confirm", "Y"}})));

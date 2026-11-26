@@ -74,6 +74,9 @@ public:
     // Outgoing messages not yet sent (queued or sending), in the order they
     // will go: precedence first, then age.
     std::vector<Message> queue(int limit);
+    // Outgoing messages written to the outbox, waiting for their key, in
+    // sending order.
+    std::vector<Message> written_out(int limit);
     // Outgoing messages not yet through: queued, held or unacked, oldest first.
     std::vector<Message> unfinished(int limit);
     // Event lines with seq > after, oldest first, at most limit.

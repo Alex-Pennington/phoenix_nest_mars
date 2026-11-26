@@ -234,6 +234,7 @@ public:
     std::vector<Message> list(int limit);
     std::optional<Message> get(const std::string& id);
     std::vector<Message> queue(int limit);
+    std::vector<Message> written_out(int limit);  // written, waiting for their key
     std::vector<Event> events(int64_t after, int limit);
 
     // Called for each event line (also written to the store's event table).

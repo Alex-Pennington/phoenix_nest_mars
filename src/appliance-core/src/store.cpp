@@ -191,6 +191,17 @@ std::vector<Message> Store::list(int limit) {
     return out;
 }
 
+std::vector<Message> Store::written_out(int limit) {
+    Stmt s(db_, (std::string("SELECT ") + kCols +
+                 " FROM messages WHERE direction = 'out' AND state = 'written'"
+                 " ORDER BY CASE prec WHEN 'Z' THEN 0 WHEN 'O' THEN 1 WHEN 'P' THEN 2 ELSE 3 END, created_at, rowid LIMIT ?")
+                    .c_str());
+    s.bind(1, static_cast<int64_t>(limit));
+    std::vector<Message> out;
+    while (s.step()) out.push_back(row(s));
+    return out;
+}
+
 std::vector<Message> Store::queue(int limit) {
     Stmt s(db_, (std::string("SELECT ") + kCols +
                  " FROM messages WHERE direction = 'out' AND state IN ('queued', 'sending')"

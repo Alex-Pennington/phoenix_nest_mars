@@ -446,6 +446,11 @@ std::vector<Message> Core::queue(int limit) {
     return store_.queue(limit);
 }
 
+std::vector<Message> Core::written_out(int limit) {
+    std::lock_guard<std::mutex> g(mu_);
+    return store_.written_out(limit);
+}
+
 std::vector<Event> Core::events(int64_t after, int limit) {
     std::lock_guard<std::mutex> g(mu_);
     return store_.events(after, limit);
