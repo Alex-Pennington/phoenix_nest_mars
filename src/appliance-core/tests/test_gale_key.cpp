@@ -429,12 +429,21 @@ int main() {
         }
         rep = call(*s.core, {{"cmd", "key_prepare"}, {"msg_id", w2}});
         CHECK(!ok(rep) && str(parsed(rep), "error").find("amateur") != std::string::npos);
+        // A burst written on a channel the plan keeps for the amateur world
+        // (station design v1.9, ask 40): never keyed by the core.
+        CHECK(ok(call(*s.core, {{"cmd", "channel_put"}, {"name", "AMX"}, {"frequency", "15000"}, {"world", "amateur"}})));
+        s.set_channel("AMX");
+        const std::string w3 = s.written("FARSTN", "WRITTEN ON AN AMATEUR CHANNEL");
+        s.set_channel("P1");
+        rep = call(*s.core, {{"cmd", "key_prepare"}, {"msg_id", w3}});
+        CHECK(!ok(rep) && str(parsed(rep), "error").find("an amateur channel") != std::string::npos);
         // The request itself naming the amateur world is refused before anything.
         CHECK(!ok(call(*s.core, {{"cmd", "key_prepare"}, {"msg_id", c1}, {"world", "amateur"}})));
         CHECK(f.count("prepare") == prepares);
         // And an automatic one: a routing send to the amateur station, with routing on.
         s.core->set_key_mode(am, "routing");
         s.core->set_key_mode(w2, "routing");
+        s.core->set_key_mode(w3, "routing");
 
         // ---- standing modes: off means no key; grant on the y; revoke on off
         const std::string r1 = s.written("FARSTN", "ROUTED ONE");
@@ -469,7 +478,8 @@ int main() {
         const int keys_now = f.count("key");
         // The amateur ones were never asked, with routing on.
         std::this_thread::sleep_for(std::chrono::milliseconds(400));
-        CHECK(f.count("key") == keys_now && s.state(am) == "written" && s.state(w2) == "written");
+        CHECK(f.count("key") == keys_now && s.state(am) == "written" && s.state(w2) == "written" &&
+              s.state(w3) == "written");
         // A machine-mode answer waits: machine is not on.
         const std::string m1 = s.written("FARSTN", "MACHINE ANSWER");
         s.core->set_key_mode(m1, "machine");

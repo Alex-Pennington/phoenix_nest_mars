@@ -1,10 +1,15 @@
 #include "ops.h"
 
 #include "channels.h"
+#include "compose.h"
 
 #include "sqlite_stmt.h"
 
 #include <sqlite3.h>
+
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
 #include <algorithm>
 #include <cctype>
@@ -239,6 +244,19 @@ Ops::Ops(std::string station, const std::string& db_path) : station_(book_key(st
         Stmt q(db_, "PRAGMA table_info(schedules)");
         while (q.step()) has = has || q.text(1) == "channel";
         if (!has) exec("ALTER TABLE schedules ADD COLUMN channel TEXT DEFAULT ''");
+    }
+    {
+        // Ask 28: what gale-rx needs.
+        bool plan = false, idx = false, mode = false;
+        Stmt q(db_, "PRAGMA table_info(schedules)");
+        while (q.step()) {
+            plan = plan || q.text(1) == "plan";
+            idx = idx || q.text(1) == "rx_index";
+            mode = mode || q.text(1) == "rx_mode";
+        }
+        if (!plan) exec("ALTER TABLE schedules ADD COLUMN plan TEXT DEFAULT ''");
+        if (!idx) exec("ALTER TABLE schedules ADD COLUMN rx_index INTEGER DEFAULT -1");
+        if (!mode) exec("ALTER TABLE schedules ADD COLUMN rx_mode TEXT DEFAULT ''");
     }
     std::string base = db_path;
     if (base.size() > 3 && base.compare(base.size() - 3, 3, ".db") == 0) base.resize(base.size() - 3);
@@ -800,7 +818,8 @@ int64_t next_start(const std::string& days, int start, int64_t t) {
 }
 
 static const char* kSchedCols =
-    "name, days, start, minutes, roster, exercise, ncs, note, auto_open, last_start, last_net, channel";
+    "name, days, start, minutes, roster, exercise, ncs, note, auto_open, last_start, last_net, channel, plan, rx_index,"
+    " rx_mode";
 
 static NetSchedule row_sched(Stmt& q) {
     NetSchedule s;
@@ -816,6 +835,9 @@ static NetSchedule row_sched(Stmt& q) {
     s.last_start = q.i64(9);
     s.last_net = q.text(10);
     s.channel = q.text(11);
+    s.plan = q.text(12);
+    s.rx_index = static_cast<int>(q.i64(13));
+    s.rx_mode = q.text(14);
     return s;
 }
 
@@ -837,11 +859,32 @@ bool Ops::sched_put(NetSchedule s, std::string* error) {
     s.channel = book_key(s.channel);
     if (!s.channel.empty() && !valid_designator(s.channel))
         return fail("channel: the channel's designator (CH01, P1), never a frequency");
+    if (auto c = channels_->get(s.channel); c && c->world == "amateur")
+        return fail("channel: " + s.channel + " is an amateur channel; a MARS net meets on a MARS channel (ask 40)");
     for (auto& r : s.roster) r = book_key(r);
+    // gale-rx's plan (ask 28): a file name in its net_plans folder, so its
+    // case is kept.
+    if (!s.plan.empty()) {
+        bool letter = false, ok = s.plan.size() <= 32 && s.plan[0] != '-' && s.plan[0] != '.';
+        for (char c : s.plan) {
+            if (std::isalpha(static_cast<unsigned char>(c))) letter = true;
+            else if (!std::isdigit(static_cast<unsigned char>(c)) && c != '-' && c != '_') ok = false;
+        }
+        if (!ok || !letter || compose::looks_like_frequency(s.plan))
+            return fail("plan: the label of a plan in gale-rx's net_plans folder (net03), 1 to 32 letters, digits, - "
+                        "or _, never a frequency");
+    }
+    for (auto& c : s.rx_mode) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+    if (!s.rx_mode.empty() && s.rx_mode != "USB" && s.rx_mode != "LSB" && s.rx_mode != "CW" && s.rx_mode != "AM")
+        return fail("mode: USB, LSB, CW or AM, the modes gale-rx sets");
+    if (s.rx_index < -1 || s.rx_index > 999) return fail("index: the plan's channel, 0 to 999 counted from 0");
+    if (s.rx_index >= 0 && s.plan.empty()) return fail("index: a channel of the plan, so give the plan too");
+    if (!s.rx_mode.empty() && s.rx_index < 0)
+        return fail("mode: gale-rx sets a mode only on a channel it is given by index: give the index too");
     auto old = sched_get(s.name);
     Stmt(db_,
          "INSERT OR REPLACE INTO schedules(name, days, start, minutes, roster, exercise, ncs, note, auto_open,"
-         " last_start, last_net, channel) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)")
+         " last_start, last_net, channel, plan, rx_index, rx_mode) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
         .bind(1, s.name)
         .bind(2, s.days)
         .bind(3, static_cast<int64_t>(s.start))
@@ -854,6 +897,9 @@ bool Ops::sched_put(NetSchedule s, std::string* error) {
         .bind(10, old ? old->last_start : 0)
         .bind(11, old ? old->last_net : std::string())
         .bind(12, s.channel)
+        .bind(13, s.plan)
+        .bind(14, static_cast<int64_t>(s.rx_index))
+        .bind(15, s.rx_mode)
         .step();
     return true;
 }
@@ -1009,7 +1055,146 @@ std::vector<std::string> Ops::sched_tick() {
                            (s.auto_open ? " and opens itself" : ""));
         }
     }
+    // gale-rx's files follow the week as it turns (a 1SAT comes and goes),
+    // and any change made without sched_put (an import, a bundle, a restore).
+    std::string rx = write_rx_schedule();
+    if (rx.rfind("not written", 0) == 0) {
+        if (rx != rx_failed_) said.push_back("gale-rx's schedule file " + rx);
+        rx_failed_ = rx;
+    }
     return said;
+}
+
+// ---- gale-rx's schedule files (ask 28) ----
+
+RxSchedule rx_schedule(const std::vector<NetSchedule>& scheds, int64_t now) {
+    static const char* kRxDays[7] = {"MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"};  // gale-rx's week
+    constexpr int kWeek = 7 * 1440;
+    struct Slot {
+        int wm;  // minute of gale-rx's week, Monday 0000Z first
+        const NetSchedule* s;
+    };
+    RxSchedule out;
+    std::vector<Slot> starts;
+    std::vector<const NetSchedule*> sorted;
+    for (auto& s : scheds) sorted.push_back(&s);
+    std::sort(sorted.begin(), sorted.end(), [](auto* a, auto* b) { return a->name < b->name; });
+    const int64_t today = floor_day(now);
+    for (auto* s : sorted) {
+        if (s->plan.empty()) {
+            out.skipped.push_back(s->name + ": no plan");
+            continue;
+        }
+        auto rules = day_rules(s->days);
+        // The week from today: a week-of-month day (1SAT) is in only when its
+        // next date is that one.
+        for (int64_t day = today; day < today + 7; ++day) {
+            if (!day_matches(rules, day)) continue;
+            std::time_t t = static_cast<std::time_t>(day * 86400);
+            std::tm u{};
+            gmtime_r(&t, &u);
+            int wm = ((u.tm_wday + 6) % 7) * 1440 + s->start;
+            auto clash = std::find_if(starts.begin(), starts.end(), [&](const Slot& x) { return x.wm == wm; });
+            if (clash != starts.end()) {
+                out.skipped.push_back(s->name + ": starts at the same time as " + clash->s->name + " on " +
+                                      kRxDays[wm / 1440]);
+                continue;
+            }
+            starts.push_back({wm, s});
+        }
+    }
+    // Each sitting ends in a park slot, unless another starts then or is
+    // under way then (a slot runs until the next one).
+    auto inside = [&](int m) {
+        for (auto& x : starts) {
+            int from = x.wm, len = x.s->minutes;
+            int d = ((m - from) % kWeek + kWeek) % kWeek;
+            if (d < len) return true;
+        }
+        return false;
+    };
+    std::vector<std::pair<Slot, bool>> slots;  // bool: an end
+    for (auto& x : starts) slots.push_back({x, false});
+    for (auto& x : starts) {
+        int end = (x.wm + x.s->minutes) % kWeek;
+        if (!inside(end) && std::none_of(slots.begin(), slots.end(), [&](auto& y) { return y.first.wm == end; }))
+            slots.push_back({{end, x.s}, true});
+    }
+    std::sort(slots.begin(), slots.end(), [](auto& a, auto& b) { return a.first.wm < b.first.wm; });
+    auto tag = [](const std::string& name) {
+        std::string t;
+        for (char c : name) t += std::isalnum(static_cast<unsigned char>(c)) ? c : '-';
+        return t;
+    };
+    out.net_schedule =
+        "# DAY HHMM(Zulu) PLAN MODE -- written by appliance-core from its net schedules (sched_put); a slot runs "
+        "until the next\n";
+    out.slot_channels =
+        "# DAY HHMM INDEX [MODE] or DAY HHMM park -- written by appliance-core from its net schedules (sched_put)\n";
+    for (auto& [x, end] : slots) {
+        char at[16];
+        std::snprintf(at, sizeof at, "%s %02d%02d", kRxDays[x.wm / 1440], (x.wm % 1440) / 60, x.wm % 60);
+        std::string plan = "net_plans/" + x.s->plan + ".plan";
+        if (end) {
+            out.net_schedule += std::string(at) + " " + plan + " scan  # end of " + tag(x.s->name) + "\n";
+            out.slot_channels += std::string(at) + " park\n";
+            continue;
+        }
+        out.net_schedule += std::string(at) + " " + plan + " net  # " + tag(x.s->name) +
+                            (x.s->channel.empty() ? "" : " + " + x.s->channel) + "\n";
+        if (x.s->rx_index >= 0)
+            out.slot_channels += std::string(at) + " " + std::to_string(x.s->rx_index) + " " +
+                                 (x.s->rx_mode.empty() ? "USB" : x.s->rx_mode) + "\n";
+    }
+    return out;
+}
+
+namespace {
+
+// Written whole: a temp file renamed over it, mode 600.
+bool write_file_whole(const std::string& path, const std::string& body, std::string* error) {
+    std::string tmp = path + ".new";
+    int fd = ::open(tmp.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0600);
+    if (fd < 0) {
+        *error = "can't write " + tmp;
+        return false;
+    }
+    bool ok = ::write(fd, body.data(), body.size()) == static_cast<ssize_t>(body.size()) && ::fsync(fd) == 0;
+    ::fchmod(fd, 0600);
+    ::close(fd);
+    if (!ok || std::rename(tmp.c_str(), path.c_str()) != 0) {
+        ::unlink(tmp.c_str());
+        *error = "can't write " + path;
+        return false;
+    }
+    return true;
+}
+
+}  // namespace
+
+void Ops::set_rx_schedule_dir(const std::string& dir) {
+    std::lock_guard<std::recursive_mutex> g(mu_);
+    rx_dir_ = dir;
+    rx_last_.clear();
+}
+
+std::string Ops::write_rx_schedule(bool force) {
+    std::lock_guard<std::recursive_mutex> g(mu_);
+    if (rx_dir_.empty()) return "off";
+    RxSchedule r = rx_schedule(sched_list(), now());
+    std::string both = r.net_schedule + '\0' + r.slot_channels;
+    if (!force && both == rx_last_) return "unchanged";
+    std::string err;
+    struct stat st{};
+    if (::stat(rx_dir_.c_str(), &st) != 0 || !S_ISDIR(st.st_mode)) err = "no folder " + rx_dir_;
+    else if (write_file_whole(rx_dir_ + "/slot-channels.txt", r.slot_channels, &err) &&
+             write_file_whole(rx_dir_ + "/net_schedule.txt", r.net_schedule, &err)) {
+        rx_last_ = both;
+        rx_failed_.clear();
+        return "written";
+    }
+    rx_last_.clear();
+    return "not written: " + err;
 }
 
 // ---- duty ----

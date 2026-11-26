@@ -407,8 +407,13 @@ static void drill(const fs::path& dir) {
     CHECK(!ok(r) && str(arr(r, "problems")[0], "field") == "frequency" && !A.ops->channels().get("P3"));
     r = form(*A.core, "CHANNEL", {{"name", "P 3"}, {"frequency", "7000"}, {"mode", "SSB"}});
     CHECK(!ok(r) && arr(r, "problems").size() == 2);
+    // A frequency left blank keeps the one a channel holds (asks 27, 29), so
+    // the form doesn't ask for it; a new channel without one is refused by
+    // channel_put itself, and nothing is added.
     r = call(*A.core, {{"cmd", "form_check"}, {"form", "CHANNEL"}, {"name", "P4"}});
-    CHECK(ok(r) && !yes(r, "ready") && str(arr(r, "problems")[0], "field") == "frequency");
+    CHECK(ok(r) && yes(r, "ready"));
+    r = form(*A.core, "CHANNEL", {{"name", "P4"}});
+    CHECK(!ok(r) && str(r, "error").find("frequency") != std::string::npos && !A.ops->channels().get("P4"));
     // Opening P1 again fills in what's held, never its frequency.
     r = show(*A.core, "CHANNEL", "name", "P1");
     CHECK(ok(r) && yes(r, "prefilled") && str(*field_of(r, "use"), "value") == "PRIMARY");

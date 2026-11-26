@@ -10,6 +10,7 @@
 #include "bbs.h"
 #include "compose.h"
 #include "config.h"
+#include "records.h"
 #include "settings.h"
 #include "first_start.h"
 #include "core.h"
@@ -137,7 +138,15 @@ void usage() {
         "                        each burst in the outbox (the operator's y, or a\n"
         "                        standing mode), never the radio itself (default\n"
         "                        /run/gale-key/key.sock; none: nothing is keyed)\n"
-        "  --gale-key-timeout-ms N  how long to wait for gale-key's reply (default 5000)\n\n"
+        "  --gale-key-timeout-ms N  how long to wait for gale-key's reply (default 5000)\n"
+        "  --rx-schedule-dir DIR  write gale-rx's net_schedule.txt and slot-channels.txt\n"
+        "                        there from the net schedules, on every change (default:\n"
+        "                        none written; docs/formats.md)\n"
+        "  --lock KIND           refuse every change to a kind of record from the kiosk\n"
+        "                        (repeatable): channels, schedule, book, key-tape, cipher,\n"
+        "                        cards, handouts, forms, guide, bbs-rules\n"
+        "  --book-auto-add-heard yes|no  add MARS stations heard to the book (default no;\n"
+        "                        the operator sets it from the kiosk)\n\n"
         "The radio side, read for gale-web (station_view.h; channels go by name, never\n"
         "by frequency). Each defaults to GALE-DIR/its usual name; a file that isn't\n"
         "there (the store not mounted) is reported, never an error:\n"
@@ -165,6 +174,8 @@ struct Station {
 
 std::shared_ptr<LinkMonitor> g_link;
 std::string g_tuner_socket;
+std::string g_rx_schedule_dir;          // ask 28: "" writes no gale-rx schedule file
+std::vector<std::string> g_lock_kinds;  // ask 26: kinds of record the host locked
 std::string g_gale_key_socket = kGaleKeySocket;
 int g_gale_key_timeout_ms = kGaleKeyTimeoutMs;
 std::shared_ptr<GaleKey> g_gale_key;  // for the greybeard-ale station only: its bursts are in the outbox
@@ -386,8 +397,10 @@ int main(int argc, char** argv) {
             else if (a == "--no-acks") acks = false;
             else if (a == "--acks") acks = true;
             else if (a == "--no-link-gate") link_gate = false;
+            else if (a == "--rx-schedule-dir") g_rx_schedule_dir = next();
+            else if (a == "--lock") g_lock_kinds.push_back(next());
             else if (a == "--world" || a == "--tx-world" || a == "--ptt-line" || a == "--cat-ptt" ||
-                     a == "--engineering-readouts" || a == "--keying-file") {
+                     a == "--engineering-readouts" || a == "--keying-file" || a == "--book-auto-add-heard") {
                 // Read by settings.h (the keying rows are gale-key's): checked below.
                 std::string v = next(), norm, why;
                 if (const settings::Row* r = settings::find(a.substr(2)); r && r->cls == "operator" &&
@@ -513,6 +526,10 @@ int main(int argc, char** argv) {
         st.op = op_map;
         settings::init(st);
         std::string why;
+        if (!records::set_locked(g_lock_kinds, &why)) {
+            std::cerr << why << "\n";
+            return 2;
+        }
         if (!check_only && !settings::write_keying(static_cast<int64_t>(std::time(nullptr)), &why))
             std::cerr << "keying settings: " << why << " (gale-key reads them from keying_settings)\n";
         if (!check_only && !settings::sync_world(&why)) std::cerr << "world: " << why << "\n";
@@ -764,6 +781,12 @@ int main(int argc, char** argv) {
                         std::make_shared<GaleKeySocket>(g_gale_key_socket, g_gale_key_timeout_ms), g.outbox_dir);
             }
             if (!start_station(stations[0], c, std::move(modem), api_port, static_cast<uint16_t>(g_web_port))) return 1;
+            // Ask 28: gale-rx's schedule files, written now and on every change.
+            if (!g_rx_schedule_dir.empty() && stations[0].core->ops()) {
+                stations[0].core->ops()->set_rx_schedule_dir(g_rx_schedule_dir);
+                log_line(station, "gale-rx schedule file " + stations[0].core->ops()->write_rx_schedule(true) + " (" +
+                                      g_rx_schedule_dir + ")");
+            }
         } else {
             std::cerr << "give --station (greybeard-ale) or --loopback-pair (try --help)\n";
             return 2;

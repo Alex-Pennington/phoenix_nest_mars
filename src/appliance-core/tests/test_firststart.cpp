@@ -355,6 +355,8 @@ static void hand_entered_into_bundle(const fs::path& dir) {
     CHECK(ok(r) && str(r, "use").empty() && !leaks(raw, "10000"));
     r = api(*A.core, {{"cmd", "channels_list"}}, &raw);
     CHECK(ok(r) && !leaks(raw, "5000") && !leaks(raw, "10000"));
+    // A channel kept for the amateur world never goes in a MARS bundle (asks 37, 40).
+    CHECK(ok(api(*A.core, {{"cmd", "channel_put"}, {"name", "A1"}, {"frequency", "15000"}, {"world", "amateur"}})));
 
     // Entered by hand, sealed to B in B's bundle, and B's plan fills in.
     CHECK(ok(api(*A.core, {{"cmd", "card_import"}, {"text", station::format_card(*B.core->identity())}})));
@@ -369,6 +371,7 @@ static void hand_entered_into_bundle(const fs::path& dir) {
     CHECK(ok(r) && str(r, "frequencies") == "opened" && num(r, "frequencies_added") == 2);
     CHECK(B.ops->channels().get("P1") && B.ops->channels().get("P1")->hz == 5000000);
     CHECK(B.ops->channels().get("P2") && B.ops->channels().get("P2")->hz == 10000000);
+    CHECK(!B.ops->channels().get("A1"));
     A.core->stop();
     B.core->stop();
 }

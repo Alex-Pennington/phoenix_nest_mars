@@ -32,7 +32,8 @@ const std::vector<std::string>& config_keys() {
         "gale-dir",    "words",       "scan-log",      "wwv-dir",     "gps-status", "health-file",
         "engine-status", "lqa-db",    "favourites",    "own-address", "scan-plan",  "radio-file", "store-root",
         "amateur-own-address", "amateur-words", "keying-file",
-        "world",       "tx-world",    "ptt-line",      "cat-ptt",     "engineering-readouts"};
+        "world",       "tx-world",    "ptt-line",      "cat-ptt",     "engineering-readouts",
+        "book-auto-add-heard", "rx-schedule-dir", "lock"};
     return k;
 }
 

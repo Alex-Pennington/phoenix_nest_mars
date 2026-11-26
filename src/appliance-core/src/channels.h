@@ -27,6 +27,17 @@ struct Channel {
     // record written before these fields existed reads as 1 and 1.
     int ant_rx = 0;       // the port the receiver listens on
     int ant_tx = 0;       // the port each transmit, tune and tuner memory is on
+    // Station design v1.9: the world the channel belongs to, mars or amateur.
+    // "" on a channel being put means "not given": the plan keeps what it
+    // held, or mars for a new channel. A record written before this field
+    // existed reads as mars. The core's routing and automatic sends use only
+    // mars channels (ask 40); an amateur channel is there to listen on.
+    std::string world;
+    // The channel's HFLink label (an amateur channel's everyday name), or "".
+    // Never a frequency. On a channel being put, label_given false keeps the
+    // plan's label.
+    std::string label;
+    bool label_given = false;
 };
 
 class ChannelPlan {
@@ -40,8 +51,12 @@ public:
     bool remove(const std::string& name);
     std::vector<Channel> list();
     std::optional<Channel> get(const std::string& name);
-    // The designator for a frequency, when the plan holds it (within 50 Hz).
+    // The designator of a MARS channel on a frequency, when the plan holds
+    // one (within 50 Hz). An amateur channel is never a MARS designator.
     std::string designator_for(int64_t hz);
+    // The name to show for a frequency: a MARS channel's designator, an
+    // amateur channel's HFLink label (its designator when it has none), or "".
+    std::string display_name_for(int64_t hz);
     size_t size();
 
 private:
@@ -54,6 +69,10 @@ private:
 // A channel designator: 1 to 12 letters, digits or -, with at least one
 // letter, and not shaped like a frequency.
 bool valid_designator(const std::string& s);
+
+// An HFLink label: 1 to 16 letters, digits, - / . or _, with a letter, and
+// not shaped like a frequency.
+bool valid_channel_label(const std::string& s);
 
 // A frequency as a card writes it, to hertz. "7.3455" (MHz below 1000),
 // "7345.5" (kHz), "7345500" (Hz), or with a unit (MHZ, KHZ). unit_hint is

@@ -8,6 +8,8 @@
 #include "parts.h"
 #include "sha256.h"
 #include "ops.h"
+#include "channels.h"
+#include "settings.h"
 #include "station_view.h"
 
 #include <algorithm>
@@ -659,6 +661,11 @@ bool Core::key_checks(const Store::KeyRow& r, std::string* error) {
     if (r.channel.empty())
         return fail(r.burst + " has no channel (no channel was set through tuner_channel when it was written): "
                               "never sent to gale-key; requeue it once a channel is set");
+    // Station design v1.9: the core keys only on MARS channels.
+    if (ops_)
+        if (auto c = ops_->channels().get(r.channel); c && c->world == "amateur")
+            return fail(r.burst + " was written on " + r.channel +
+                        ", an amateur channel: the MARS message center never keys on one (ask 40)");
     if (emcon_) return fail("EMCON is on: nothing is asked of gale-key until it is off");
     return true;
 }
@@ -1062,6 +1069,18 @@ void Core::heard(const std::string& who) {
     if (ops_ && world_refusal(src).empty()) {
         const std::string ch = tuner_ ? tuner_->current_channel() : std::string();
         ops_->heard(src, ch);
+        // Ask 30: with book-auto-add-heard on, a MARS station heard that the
+        // book doesn't know goes in it, as a station of the MARS world.
+        if (settings::value("book-auto-add-heard") == "yes" && !ops_->book_find(src)) {
+            BookEntry e;
+            e.name = src;
+            e.kind = "station";
+            e.call = src;
+            e.source = "heard";
+            e.world = "mars";
+            std::string err;
+            if (ops_->book_put(e, &err)) log("", "heard " + src + ": added to the book");
+        }
     }
     // Traffic that went unanswered goes again now the station is on frequency.
     auto un = store_.out_to(src, "unacked");
