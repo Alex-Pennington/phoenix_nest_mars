@@ -253,6 +253,20 @@ asks gale-key" below):
 - `answers_written`: ACK and orderwire bursts in the outbox with no result
   from gale-key yet. They key only under the standing mode `machine`.
 
+`radio_channel` is the channel the radio is on, as `tuner_channel` last set
+it, with or without a tuner daemon (see Tuner). Clients read it here; the
+operator never types it:
+
+    "radio_channel":{"label":"P1","world":"mars","since":"2026-11-26T15:00:00Z","source":"tuner_channel"}
+
+- `label`: the channel's designator. Never a frequency.
+- `world`: the channel's world. The core's channel plan is the MARS message
+  center's, so a channel set through it is `mars`.
+- `since`: when it was set, UTC.
+- `source`: always `tuner_channel`.
+- `label`, `world` and `since` are null when no channel has been set since
+  the core started.
+
 ## Worlds: MARS only, never amateur (ask 37)
 
 Alex's hard rule: there is no forward or auto-copy route between MARS and
@@ -1790,5 +1804,10 @@ gives the y again.
 `station`, the parts of gale-key's own status the kiosk shows:
 
     "station":{"ready":true,"keyed":false,"ptt":"rts","transmit_world":"mars",
-               "why_not":[],"grants":["routing"]}
+               "why_not":[],"grants":["routing"],
+               "channel":{"label":"P1","world":"mars","since":"2026-11-26T15:00:00Z","source":"tuner_channel"}}
+
+`station.channel` is the core's own `radio_channel` (see status), the same
+object, so the kiosk shows the channel next to gale-key's state. `station` is
+there only when gale-key answered.
 

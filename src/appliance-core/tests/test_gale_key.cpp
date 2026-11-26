@@ -898,9 +898,33 @@ int main() {
         f.outbox = s.gc.outbox_dir;
         f.start();
         CHECK(ok(call(*s.core, {{"cmd", "channel_put"}, {"name", "P1"}, {"frequency", "5000"}})));
+        // Nothing set since start: radio_channel is all null but its source.
+        auto radio = [](const JsonValue& v, const char* k) -> JsonValue {
+            const JsonValue* x = v.is_object() ? v.get(k) : nullptr;
+            return x && x->is_object() ? *x : JsonValue();
+        };
+        auto is_null = [](const JsonValue& v, const char* k) {
+            const JsonValue* x = v.get(k);
+            return x && x->type == JsonValue::Type::Null;
+        };
+        JsonValue rc = radio(parsed(call(*s.core, {{"cmd", "status"}})), "radio_channel");
+        CHECK(rc.is_object() && is_null(rc, "label") && is_null(rc, "world") && is_null(rc, "since") &&
+              str(rc, "source") == "tuner_channel");
         std::string rep = call(*s.core, {{"cmd", "tuner_channel"}, {"channel", "P1"}});
         CHECK(ok(rep) && str(parsed(rep), "channel") == "P1" && rep.find("5000") == std::string::npos);
         CHECK(s.core->tuner() && s.core->tuner()->current_channel() == "P1");
+        // Set: the label, its world, when, and where it came from; never a frequency.
+        std::string st = call(*s.core, {{"cmd", "status"}});
+        rc = radio(parsed(st), "radio_channel");
+        const std::string since = str(rc, "since");
+        CHECK(str(rc, "label") == "P1" && str(rc, "world") == "mars" && str(rc, "source") == "tuner_channel");
+        CHECK(since.size() == 20 && since[4] == '-' && since[10] == 'T' && since.back() == 'Z');
+        CHECK(st.find("5000") == std::string::npos);
+        std::string ks = call(*s.core, {{"cmd", "key_status"}});
+        JsonValue kc = radio(radio(parsed(ks), "station"), "channel");
+        CHECK(str(kc, "label") == "P1" && str(kc, "world") == "mars" && str(kc, "since") == since &&
+              str(kc, "source") == "tuner_channel");
+        CHECK(ks.find("5000") == std::string::npos);
         CHECK(str(parsed(call(*s.core, {{"cmd", "tuner_bypass"}})), "code") == "no-tuner");
         const std::string id = s.written("FARSTN", "CHANNEL FROM GALE-RX");
         const std::string pid = str(parsed(call(*s.core, {{"cmd", "key_prepare"}, {"msg_id", id}})), "prepare_id");

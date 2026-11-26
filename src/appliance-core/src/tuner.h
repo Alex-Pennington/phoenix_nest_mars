@@ -154,6 +154,13 @@ public:
     // channel's designator. With no tuner, ok with tuner=false.
     TunerOutcome channel(const Channel& c);
     std::string current_channel() const;
+    // The channel the radio was last set to, for clients that show it (status
+    // radio_channel): the designator, its world and when (UTC, ISO 8601 Z).
+    // Never a frequency. nullopt when none has been set since start.
+    struct RadioChannel {
+        std::string label, world, since;
+    };
+    std::optional<RadioChannel> radio_channel() const;
 
     // The daemon's status block, as JSON text, for the core's status call:
     // tuner_status read at most once a second, passed through unchanged.
@@ -194,6 +201,7 @@ private:
     bool pinned_ = true;
     std::shared_ptr<Keyer> keyer_;
     std::string channel_;
+    std::string channel_since_;  // when channel_ was set, ISO 8601 Z; "" none
     std::function<void(const std::string&)> log_;
     std::mutex seq_mu_;  // one sequence at a time
     std::mutex status_mu_;

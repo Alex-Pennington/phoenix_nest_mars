@@ -6,6 +6,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <ctime>
 #include <sys/socket.h>
 #include <sys/time.h>
 #include <sys/un.h>
@@ -193,6 +194,15 @@ std::string TunerKeying::current_channel() const {
     return channel_;
 }
 
+std::optional<TunerKeying::RadioChannel> TunerKeying::radio_channel() const {
+    std::lock_guard<std::mutex> g(mu_);
+    if (channel_.empty()) return std::nullopt;
+    // The core's channel plan is the MARS message center's: every channel in
+    // it is a MARS channel (docs/api.md, "Worlds"), so tuner_channel can only
+    // name one of those.
+    return RadioChannel{channel_, "mars", channel_since_};
+}
+
 std::string TunerKeying::status_block() {
     if (!link_) return "";
     std::lock_guard<std::mutex> g(status_mu_);
@@ -232,8 +242,14 @@ TunerOutcome TunerKeying::channel(const Channel& c) {
     std::lock_guard<std::mutex> seq(seq_mu_);
     TunerOutcome o;
     {
+        std::time_t t = std::time(nullptr);
+        std::tm u{};
+        gmtime_r(&t, &u);
+        char at[32];
+        std::strftime(at, sizeof at, "%Y-%m-%dT%H:%M:%SZ", &u);
         std::lock_guard<std::mutex> g(mu_);
         channel_ = c.name;
+        channel_since_ = at;
     }
     if (!link_) {
         o.ok = true;
