@@ -183,7 +183,7 @@ std::string send_acp127(Core& core, std::map<std::string, std::string>& req) {
     m.station_serial = std::to_string(core.next_counter("acp127.station." + m.originator_ri, 9999));
     std::string text = acp127::build(m, &err);
     if (text.empty()) return error_reply(err);
-    std::string id = core.submit(req["to_station"], m.prec, text, &err);
+    std::string id = core.submit(req["to_station"], m.prec, text, &err, SendOpts::in(req["service"], req["radio_channel"]));
     if (id.empty()) return error_reply(err);
     JsonWriter w;
     w.begin_object().field("ok", true).field("id", id).field("edition", acp127::kEdition).field("message", text).end_object();
@@ -219,7 +219,7 @@ std::string send_acp126(Core& core, std::map<std::string, std::string>& req) {
     m.serial = static_cast<int>(core.next_counter("acp126.nr." + m.station, 999));
     std::string text = acp126::build(m, &err);
     if (text.empty()) return error_reply(err);
-    std::string id = core.submit(req["to_station"], m.prec, text, &err);
+    std::string id = core.submit(req["to_station"], m.prec, text, &err, SendOpts::in(req["service"], req["radio_channel"]));
     if (id.empty()) return error_reply(err);
     JsonWriter w;
     w.begin_object().field("ok", true).field("id", id).field("source", acp126::kSource)
@@ -249,7 +249,8 @@ std::string send_chat(Core& core, std::map<std::string, std::string>& req) {
     }
     std::string err, line = acp201::build(c, &err);
     if (line.empty()) return error_reply(err);
-    std::string id = core.submit(req["to_station"], 'R', line, &err);
+    std::string id = core.submit(req["to_station"], 'R', line, &err,
+                                 SendOpts::in(req["service"], req.count("radio_channel") ? req["radio_channel"] : req["channel"]));
     if (id.empty()) return error_reply(err);
     JsonWriter w;
     w.begin_object().field("ok", true).field("id", id).field("message", line).end_object();
@@ -286,7 +287,8 @@ compose::Draft draft_of(std::map<std::string, std::string>& req, const std::set<
     d.template_id = req["template"];
     d.procedure = req["procedure"];
     for (auto& kv : req)
-        if (kv.first != "cmd" && kv.first != "template" && kv.first != "procedure" && !also_skip.count(kv.first))
+        if (kv.first != "cmd" && kv.first != "template" && kv.first != "procedure" && kv.first != "service" &&
+            kv.first != "world" && kv.first != "radio_channel" && !also_skip.count(kv.first))
             d.values[kv.first] = kv.second;
     return d;
 }
@@ -307,6 +309,18 @@ void write_issues(JsonWriter& w, const std::vector<compose::Issue>& issues) {
 std::string compose_templates(Core& core) {
     // Codress can be sent only with a key current now.
     std::string codress_no = compose::codress_why_not(compose_ctx(core));
+    // The services each format may go in: those whose table lists it.
+    auto services_of = [&](const std::vector<std::string>& procs) {
+        std::vector<std::string> out;
+        if (core.services())
+            for (const Service* sv : core.services()->all())
+                for (auto& p : procs)
+                    if (sv->offers(p)) {
+                        out.push_back(sv->name);
+                        break;
+                    }
+        return out;
+    };
     JsonWriter w;
     w.begin_object().field("ok", true).begin_array("procedures");
     for (auto& p : compose::procedures()) {
@@ -314,7 +328,9 @@ std::string compose_templates(Core& core) {
         std::string why_not = p.available ? codress_no : p.why_not;
         w.begin_object().field("id", p.id).field("title", p.title).field("summary", p.summary).field("available", available);
         if (!available) w.field("why_not", why_not);
-        w.end_object();
+        w.begin_array("services");
+        for (auto& sv : services_of({p.id})) w.field("", sv);
+        w.end_array().end_object();
     }
     w.end_array().begin_array("templates");
     for (auto& t : compose::templates()) {
@@ -326,6 +342,8 @@ std::string compose_templates(Core& core) {
             .field("prec", std::string(1, t.prec))
             .begin_array("procedures");
         for (auto& p : t.procedures) w.field("", p);
+        w.end_array().begin_array("services");
+        for (auto& sv : services_of(t.procedures)) w.field("", sv);
         w.end_array().end_object();
     }
     w.end_array().end_object();
@@ -404,9 +422,10 @@ static std::vector<std::string> split_targets(const std::string& s) {
 }
 
 std::string compose_send(Core& core, std::map<std::string, std::string>& req) {
-    // Ask 37: a station of the amateur world is refused before the form is checked.
+    // The route function, before the form is checked: a crossing is refused.
+    const std::string service = req["service"], radio_channel = req["radio_channel"];
     for (auto& t : split_targets(req["to_station"]))
-        if (std::string why = core.world_refusal(t); !why.empty()) return error_reply(why);
+        if (Route rt = core.route_for(service, t, radio_channel); !rt.ok) return error_reply(rt.refusal);
     compose::Draft d = draft_of(req, {"sign", "hold"});
     compose::Context ctx = compose_ctx(core);
     ctx.now = std::time(nullptr);
@@ -420,7 +439,12 @@ std::string compose_send(Core& core, std::map<std::string, std::string>& req) {
     }
     if (r.to_targets.empty()) return error_reply("no station to send to");
     for (auto& t : r.to_targets)  // the whole send, before any copy is queued
-        if (std::string why = core.world_refusal(t); !why.empty()) return error_reply(why);
+        if (Route rt = core.route_for(service, t, radio_channel); !rt.ok) return error_reply(rt.refusal);
+    // A service offers only the formats its table lists.
+    std::string msg_service = service;
+    if (msg_service.empty() && !r.to_targets.empty()) msg_service = core.route_for("", r.to_targets[0]).service;
+    if (const Service* sv = core.services() ? core.services()->find(msg_service) : nullptr; sv && !sv->offers(r.procedure))
+        return error_reply("refused: " + r.procedure + " is not a format of the " + msg_service + " service");
     compose::Serials s;
     if (!r.channel_counter.empty()) s.channel_serial = static_cast<int>(core.next_counter(r.channel_counter, 999));
     if (!r.serial_counter.empty()) {
@@ -432,7 +456,9 @@ std::string compose_send(Core& core, std::map<std::string, std::string>& req) {
     if (!r.ready) return error_reply("the message changed while it was being sent; check it again");
     // Signed by this station (station.h) unless the operator says not to.
     // Codress is signed inside, before it is enciphered.
-    const bool signed_msg = core.identity() && req["sign"] != "N" && r.procedure != "ACP201_CHAT";
+    // PLAIN is the operator's text alone: never signed.
+    const bool signed_msg =
+        core.identity() && req["sign"] != "N" && r.procedure != "ACP201_CHAT" && r.procedure != "PLAIN";
     if (signed_msg) r.message = station::sign(r.message, *core.identity());
     // One copy for each station: a collective from the station book fans out.
     std::string err;
@@ -463,9 +489,12 @@ std::string compose_send(Core& core, std::map<std::string, std::string>& req) {
                 continue;
             }
             sent_text = out;
-            id = core.submit_codress(t, r.prec, out, r.message, r.codress_key, &e);
+            id = core.submit_codress(t, r.prec, out, r.message, r.codress_key, &e, SendOpts::in(service, radio_channel));
         } else {
-            id = core.submit(t, r.prec, r.message, &e, req["hold"] == "Y");
+            SendOpts o = SendOpts::in(service, radio_channel);
+            o.held = req["hold"] == "Y";
+            if (r.procedure == "PLAIN") o.link = "plain";
+            id = core.submit(t, r.prec, r.message, &e, o);
         }
         if (!id.empty()) {
             ids.push_back(id);
@@ -2706,24 +2735,27 @@ std::string ApiServer::handle_call(Core& core, const std::string& line) {
     if (!parse_flat_object(line, req)) return error_reply("request must be one flat JSON object");
     const std::string cmd = req["cmd"];
 
-    // Ask 37: the core is the MARS message center. A call that carries a
-    // world other than mars is refused, unless it only reads or sets up
-    // (the word feed, the settings, the book's world mark): nothing is ever
-    // queued, copied or forwarded into the amateur world from here.
-    if (req.count("world")) {
-        std::string wv = req["world"];
-        for (auto& c : wv) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    // Services (docs/api.md): `world` is read as `service` for one release;
+    // both, differing, is refused. A service with a table is accepted, any
+    // other refused, except on the calls that still read or set the old world
+    // marks (word feeds, settings, the book and channel marks) until stage 2.
+    if (req.count("world") || req.count("service")) {
+        auto low = [](std::string v) {
+            for (auto& c : v) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+            return v;
+        };
+        std::string svc, why;
+        if (!request_service(low(req["service"]), low(req["world"]), svc, &why)) return error_reply(why);
         static const std::set<std::string> reads = {
             "word_feed",      "heard_stations", "scanner_status", "settings_list", "settings_set", "settings_reset",
             "keying_settings", "identity_get",  "identity_set",   "book_put",      "book_get",     "book_list",
             "station_health", "captures_list",  "status",
-            // A channel's world is set up on CHANNELS (station design v1.9).
             "channel_put", "channels_list", "channels_get_full",
-            // A form's action comes back through here and is checked itself.
             "form_get", "form_check", "form_submit"};
-        if (!wv.empty() && wv != "mars" && !reads.count(cmd))
-            return error_reply("refused: world " + wv +
-                               ": the MARS message center never sends, copies or forwards into the amateur world");
+        if (!svc.empty() && !reads.count(cmd) && !(core.services() && core.services()->valid(svc)))
+            return error_reply("refused: " + no_table(svc));
+        req["service"] = svc;
+        if (req.count("world")) req["world"] = svc;
     }
 
     // Ask 26: a call that changes a kind of record the host locked is
@@ -2760,7 +2792,7 @@ std::string ApiServer::handle_call(Core& core, const std::string& line) {
                     if (!retire_training(core, t, 30000, &err)) return error_reply(err);
                 }
                 if (on != "N" && !t) {
-                    t = std::make_shared<Training>(training_dir(core), core.station());
+                    t = std::make_shared<Training>(training_dir(core), core.station(), core.services_ptr());
                     bool good = reload == "Y" ? t->reload(&err) : t->start(&err);
                     if (!good) return error_reply(std::string("training didn't ") + (reload == "Y" ? "reload: " : "start: ") + err);
                     std::lock_guard<std::mutex> g(g_training_mu);
@@ -2937,14 +2969,15 @@ std::string ApiServer::handle_call(Core& core, const std::string& line) {
         // collective sends one copy to each.
         std::vector<std::string> to = core.ops() ? core.ops()->send_targets(req["to"]) : std::vector<std::string>{};
         if (to.empty()) to.push_back(req["to"]);
-        // Ask 37: one station of the amateur world refuses the whole send, before any copy is queued.
+        // The route function: one crossing refuses the whole send, before any copy is queued.
+        const std::string channel = req.count("radio_channel") ? req["radio_channel"] : req["channel"];
         for (auto& t : to)
-            if (std::string why = core.world_refusal(t); !why.empty())
-                return error_reply(to.size() > 1 ? "refused for " + req["to"] + ": " + why : why);
+            if (Route rt = core.route_for(req["service"], t, channel); !rt.ok)
+                return error_reply(to.size() > 1 ? "refused for " + req["to"] + ": " + rt.refusal : rt.refusal);
         std::string err;
         std::vector<std::string> ids;
         for (auto& t : to) {
-            std::string id = core.submit(t, prec[0], req["body"], &err);
+            std::string id = core.submit(t, prec[0], req["body"], &err, SendOpts::in(req["service"], channel));
             if (id.empty()) return ids.empty() ? error_reply(err) : error_reply(err + " (sent to " + std::to_string(ids.size()) + " before this)");
             ids.push_back(id);
         }
@@ -3037,6 +3070,31 @@ std::string ApiServer::handle_call(Core& core, const std::string& line) {
     if (cmd == "parse_traffic") return parse_traffic(core, req);
     if (cmd == "send_chat") return send_chat(core, req);
     if (cmd == "compose_templates") return compose_templates(core);
+    if (cmd == "services_list") {
+        // docs/api.md, "Services": the tables' columns that carry no frequency.
+        // The kiosk shows them and never edits them.
+        const std::string local = sv::paths().gale_dir;
+        JsonWriter w;
+        w.begin_object().field("ok", true).begin_array("services");
+        if (const Services* all = core.services())
+            for (const Service* x : all->all()) {
+                w.begin_object()
+                    .field("service", x->name)
+                    .field("display_name", x->display_name)
+                    .field("worked", x->worked)
+                    .field("transmit", x->transmit)
+                    .begin_array("formats");
+                for (auto& f : x->formats) w.field("", f);
+                w.end_array().field("encryption", x->encryption).begin_array("automatic_modes");
+                for (auto& m : x->automatic_modes) w.field("", m);
+                w.end_array()
+                    .field("listen_only", all->listen_only(*x, local))
+                    .field("station_id", x->station_id)
+                    .end_object();
+            }
+        w.end_array().end_object();
+        return w.str();
+    }
     if (cmd == "compose_form") return compose_form(core, req);
     if (cmd == "compose_check") return compose_check(core, req);
     if (cmd == "compose_send") return compose_send(core, req);
@@ -3257,7 +3315,7 @@ std::string ApiServer::handle_call(Core& core, const std::string& line) {
     if (auto r = handle_ops(core, cmd, req)) return *r;
 
     return error_reply(
-        "unknown cmd; use status, key_prepare, standing_prepare, key_confirm, key_cancel, standing_off, key_status, scanner_status, scanner_hold, scanner_release, scanner_record, scanner_plan, word_feed, identity_get, identity_set, settings_list, settings_set, settings_reset, keying_settings, station_health, captures_list, heard_stations, tuner_status, tuner_channel, send, list, get, queue, log, emcon, cancel, hold, release, requeue, link_format, orderwire, rx_raw, overdue, send_file, get_file, send_acp127, send_acp126, send_chat, parse_acp127, "
+        "unknown cmd; use status, services_list, key_prepare, standing_prepare, key_confirm, key_cancel, standing_off, key_status, scanner_status, scanner_hold, scanner_release, scanner_record, scanner_plan, word_feed, identity_get, identity_set, settings_list, settings_set, settings_reset, keying_settings, station_health, captures_list, heard_stations, tuner_status, tuner_channel, send, list, get, queue, log, emcon, cancel, hold, release, requeue, link_format, orderwire, rx_raw, overdue, send_file, get_file, send_acp127, send_acp126, send_chat, parse_acp127, "
         "parse_traffic, compose_templates, compose_form, compose_check, compose_send, compose_advise, key_import, keys_list, key_zeroize, key_open, cipher_status, cipher_install, cipher_remove, station_card, station_backup, station_restore, card_import, cards_list, card_check, card_send, net_tape, tape_seal, or the book's calls (docs/api.md): book_*, net_*, sched_*, duty_*, log_add, station_log, report_monthly");
 }
 

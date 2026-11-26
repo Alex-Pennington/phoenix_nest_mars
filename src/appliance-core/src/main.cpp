@@ -134,11 +134,17 @@ void usage() {
         "  --tuner-socket PATH   greybeard-ale's LDG tuner daemon (ldg-tuner/1); the\n"
         "                        tuner_* calls go there, and each channel's antenna\n"
         "                        ports with them (default: no tuner)\n"
-        "  --gale-key-socket PATH  greybeard-ale's gale-key: the core asks it to key\n"
-        "                        each burst in the outbox (the operator's y, or a\n"
-        "                        standing mode), never the radio itself (default\n"
-        "                        /run/gale-key/key.sock; none: nothing is keyed)\n"
-        "  --gale-key-timeout-ms N  how long to wait for gale-key's reply (default 5000)\n"
+        "  --controller-socket PATH  greybeard-ale's station controller (gale-rx): the\n"
+        "                        core hands it each burst in the outbox (the operator's\n"
+        "                        y, or a standing mode), never the radio itself (default\n"
+        "                        /run/gale-rx/control.sock; none: nothing is keyed).\n"
+        "                        --gale-key-socket is read as it for one release\n"
+        "  --controller-timeout-ms N  how long to wait for the controller to accept a\n"
+        "                        send (default 5000; never the key itself)\n"
+        "  --services-dir DIR    the service tables, one SERVICE.json each (default\n"
+        "                        /etc/greybeard-ale/services; greybeard-ale docs/services.md)\n"
+        "  --services-unlocked   a test stand: the tables need not be root's (never on a\n"
+        "                        station)\n"
         "  --rx-schedule-dir DIR  write gale-rx's net_schedule.txt and slot-channels.txt\n"
         "                        there from the net schedules, on every change (default:\n"
         "                        none written; docs/formats.md)\n"
@@ -189,8 +195,11 @@ std::shared_ptr<LinkMonitor> g_link;
 std::string g_tuner_socket;
 std::string g_rx_schedule_dir;          // ask 28: "" writes no gale-rx schedule file
 std::vector<std::string> g_lock_kinds;  // ask 26: kinds of record the host locked
-std::string g_gale_key_socket = kGaleKeySocket;
-int g_gale_key_timeout_ms = kGaleKeyTimeoutMs;
+std::string g_gale_key_socket = kControllerSocket;  // the controller's socket (old name kept)
+int g_gale_key_timeout_ms = kControllerTimeoutMs;
+std::string g_services_dir = "/etc/greybeard-ale/services";
+bool g_services_unlocked = false;
+std::shared_ptr<const Services> g_services;  // read once at start
 std::shared_ptr<GaleKey> g_gale_key;  // for the greybeard-ale station only: its bursts are in the outbox
 sv::Paths g_view;  // the radio side's files (station_view.h)
 bool g_link_gate = false;
@@ -247,6 +256,7 @@ bool start_station(Station& s, CoreConfig cfg, std::unique_ptr<ModemDriver> mode
     s.core = std::make_unique<Core>(std::move(cfg), std::move(modem));
     // The station book (address book, nets, duty, log, reports) in the same file.
     s.core->set_ops(std::make_shared<Ops>(name, db));
+    s.core->set_services(g_services);
     if (g_link) s.core->set_link_monitor(g_link);
     // The LDG tuner (tuner.h). Transmit stays pinned to gale-tx/WAV: the core
     // keys nothing, holds no keyer and refuses a tune.
@@ -454,11 +464,13 @@ int main(int argc, char** argv) {
             else if (a == "--advisor-arg") advisor_args.push_back(next());
             else if (a == "--link-socket") link_socket = next();
             else if (a == "--tuner-socket") g_tuner_socket = next();
-            else if (a == "--gale-key-socket") g_gale_key_socket = next();
-            else if (a == "--gale-key-timeout-ms") {
+            else if (a == "--controller-socket" || a == "--gale-key-socket") g_gale_key_socket = next();
+            else if (a == "--services-dir") g_services_dir = next();
+            else if (a == "--services-unlocked") g_services_unlocked = true;
+            else if (a == "--controller-timeout-ms" || a == "--gale-key-timeout-ms") {
                 g_gale_key_timeout_ms = std::stoi(next());
                 if (g_gale_key_timeout_ms < 100 || g_gale_key_timeout_ms > 60000) {
-                    std::cerr << "--gale-key-timeout-ms: 100 to 60000\n";
+                    std::cerr << a << ": 100 to 60000\n";
                     return 2;
                 }
             }
@@ -555,6 +567,19 @@ int main(int argc, char** argv) {
         if (vp.captures.empty()) vp.captures = captures;
         vp.captures_fallback = captures_fallback;
         sv::set_paths(vp);
+    }
+    {
+        // The service tables, read once at start (services.h). A refused file
+        // is said and skipped; the other services still load.
+        Services::Options so;
+        so.require_root = !g_services_unlocked;
+        std::vector<std::string> refused;
+        g_services = Services::load(g_services_dir, so, &refused);
+        for (auto& r : refused) std::cerr << "services: " << r << "\n";
+        std::string names;
+        for (const Service* x : g_services->all()) names += (names.empty() ? "" : ", ") + x->name;
+        std::cerr << "services: " << (names.empty() ? std::string("none: every send is refused") : names) << " ("
+                  << g_services_dir << ")\n";
     }
     if (!link_socket.empty()) {
         g_link = std::make_shared<LinkMonitor>(link_socket, link_poll_ms < 200 ? 200 : link_poll_ms);
@@ -681,11 +706,19 @@ int main(int argc, char** argv) {
             std::cout << "  tuner          none (no tuner-socket)\n";
         }
         if (g_gale_key_socket.empty() || g_gale_key_socket == "none") {
-            std::cout << "  gale-key       none: bursts are written and never keyed\n";
+            std::cout << "  controller     none: bursts are written and never keyed\n";
         } else {
-            std::cout << "  gale-key       " << g_gale_key_socket << " (asked to key each burst; the core never keys)\n";
+            std::cout << "  controller     " << g_gale_key_socket
+                      << " (handed each burst; the core never keys)\n";
             if (!fs::exists(g_gale_key_socket, ec))
-                notes.push_back("gale-key's socket isn't there: until greybeard-ale's gale-key runs, bursts stay written");
+                notes.push_back("the controller's socket isn't there: until greybeard-ale's gale-rx runs, bursts stay written");
+        }
+        {
+            std::string names;
+            for (const Service* x : g_services->all()) names += (names.empty() ? "" : ", ") + x->name;
+            std::cout << "  services       " << (names.empty() ? std::string("none") : names) << " (" << g_services_dir
+                      << ")\n";
+            if (names.empty()) notes.push_back("no service tables in " + g_services_dir + ": every send is refused");
         }
         if (!advisor_prog.empty()) {
             std::string adv = find_program(advisor_prog);
@@ -791,10 +824,12 @@ int main(int argc, char** argv) {
                 g.outbox_dir = outbox.empty() ? db_dir + "/" + station + "-outbox" : outbox;
                 g.state_file = db_dir + "/" + station + "-captures-seen.txt";
                 modem = std::make_unique<GreybeardModem>(g);
-                // gale-key keys the outbox's bursts when asked (gale_key.h).
-                if (!g_gale_key_socket.empty() && g_gale_key_socket != "none")
+                // The station controller keys the outbox's bursts when handed them (gale_key.h).
+                if (!g_gale_key_socket.empty() && g_gale_key_socket != "none") {
                     g_gale_key = std::make_shared<GaleKey>(
                         std::make_shared<GaleKeySocket>(g_gale_key_socket, g_gale_key_timeout_ms), g.outbox_dir);
+                    g_gale_key->set_poll_ms(2000);  // the radio's channel, from the controller's status
+                }
             }
             if (!start_station(stations[0], c, std::move(modem), api_port, static_cast<uint16_t>(g_web_port))) return 1;
             // Ask 28: gale-rx's schedule files, written now and on every change.

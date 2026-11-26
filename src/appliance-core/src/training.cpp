@@ -98,7 +98,8 @@ const char* kSecret =
 
 }  // namespace
 
-Training::Training(std::string dir, std::string call) : dir_(std::move(dir)), call_(std::move(call)) {}
+Training::Training(std::string dir, std::string call, std::shared_ptr<const Services> services)
+    : dir_(std::move(dir)), call_(std::move(call)), services_(std::move(services)) {}
 
 Training::~Training() { stop(); }
 
@@ -114,6 +115,7 @@ bool Training::make(const std::string& call, std::unique_ptr<Core>& core, Loopba
     core = std::make_unique<Core>(std::move(cfg), std::move(m));
     std::string base = (fs::path(dir_) / call).string();
     core->set_ops(std::make_shared<Ops>(call, base + ".db"));
+    core->set_services(services_);
     auto kr = std::make_shared<keys::Keyring>(base + ".keys");
     std::string err;
     kr->load(&err);

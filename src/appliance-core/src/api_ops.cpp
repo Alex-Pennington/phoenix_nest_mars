@@ -621,7 +621,11 @@ std::optional<std::string> handle_ops(Core& core, const std::string& cmd, std::m
         m.serial = static_cast<int>(core.next_counter("acp126.nr." + m.station, 999));
         std::string text = acp126::build(m, &err);
         if (text.empty()) return err_reply(err);
-        std::string msg = core.submit(kBroadcast, m.prec, text, &err);
+        // A broadcast needs its service named: the request's, else its channel's.
+        std::string svc = req["service"];
+        if (svc.empty() && !m.channel.empty())
+            if (auto pc = ops->channels().get(m.channel)) svc = pc->world;
+        std::string msg = core.submit(kBroadcast, m.prec, text, &err, SendOpts::in(svc));
         if (msg.empty()) return err_reply(err);
         ops->log_add("net",
                      "call-up sent on " + n->id + " to " +

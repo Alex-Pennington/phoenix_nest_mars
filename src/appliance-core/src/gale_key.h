@@ -1,32 +1,36 @@
-// The core as gale-key's caller (mars-suite issue #7; greybeard-ale
-// docs/gale-tx.md, "The operator's y" and "The service's interface").
+// The core as the station controller's caller (greybeard-ale
+// docs/station-controller.md; docs/api.md, "Keying: the core asks the station
+// controller"). The file and class keep gale-key's name for one release; the
+// requests are the controller's.
 //
-// gale-key is greybeard-ale's one keying service: nothing else on the station
-// keys the radio, and the core never does. The core only asks it to key a
-// burst that is already in the outbox, over gale-key's socket
-// (default /run/gale-key/key.sock): one JSON object on one line per
-// connection, one line back.
+// The core is the networking controller and the station controller (gale-rx)
+// is the link controller for the one radio (MIL-STD-188-141B D.4.2.8). The core
+// never talks to gale-key: the controller orders it. Over the controller's
+// socket (default /run/gale-rx/control.sock; one JSON object on one line per
+// connection, one line back) each burst goes down as a network message in two
+// parts: `message` ({"wav": ABS}), carried unopened, and `control` (the
+// link-level addressee `to`, the `service`, the operator's `channel` label,
+// kind, control, final, and the token or a standing mode).
 //
-//  - An operator's send: the kiosk opens its y dialog with key_prepare. The
-//    core asks gale-key to `prepare` the key, holds the one-shot token against
-//    that dialog, and gives the kiosk gale-key's confirm summary, with no
-//    token and no frequency. On the operator's Y (key_confirm) the core sends
-//    `key` with the token. key_cancel drops a held token; a held token dies
-//    with gale-key's 120 s.
-//  - An automatic send (BBS routing, machine mode answers, auto-QSL): once its
-//    burst is written, the core sends `key` with "standing": MODE, only while
-//    the core holds that mode on. A mode is turned on only through the same
-//    prepare and y path (`prepare kind standing:MODE`, then `grant`), and off
-//    with `revoke`. amateur_auto is never asked for (ask 40).
+//  - An operator's send: key_prepare asks the controller to `prepare`; the core
+//    holds the one-shot token against that dialog and gives the kiosk the
+//    confirm summary, with no token and no frequency. On the operator's Y
+//    (key_confirm) the core sends `key` with the token in `control`.
+//  - An automatic send (BBS routing, machine answers, auto-QSL): once its burst
+//    is written, `key` with "standing": MODE, only while the core holds that
+//    mode on. A mode goes on only through `prepare kind standing:MODE` and the
+//    y (`grant`), and off with `revoke`. Until stage 5 the core asks for
+//    automatic modes in MARS only, as it did before (greybeard-ale #18).
 //  - The core's ACK and orderwire bursts key the same way, under "machine".
-//  - Every `key` goes through the hook set with set_around: the core runs
-//    the tuner's pre_tx and post_tx around it (tuner.h, around_key).
 //
-// The socket's reply never changes a message's state. gale-key writes
-// BURST.key.json beside every burst in the outbox it is asked to key (keyed or
-// refused), and that file is the one source of truth (docs/api.md, "Transmit:
-// written, then sent"). With no gale-key answering, nothing keys: the burst
-// stays written and the status says why.
+// The controller answers a `key` when it accepts the send, not when the key
+// ends; the timeout bounds only that reply. The reply never changes a
+// message's state: the result file BURST.key.json beside the burst is the one
+// source of truth (docs/api.md, "Transmit: written, then sent").
+//
+// `status` gives the radio's channel and its service; that report is the core's
+// radio_channel. It is read on this object's thread every poll interval, and
+// whenever the core asks.
 #pragma once
 
 #include "json.h"
@@ -45,19 +49,29 @@
 
 namespace pna {
 
-constexpr const char* kGaleKeySocket = "/run/gale-key/key.sock";
-constexpr int kGaleKeyTimeoutMs = 5000;  // a reply this late is "not answered", never a result
+constexpr const char* kControllerSocket = "/run/gale-rx/control.sock";
+constexpr int kControllerTimeoutMs = 5000;  // bounds the accept reply, never the key
+constexpr const char* kGaleKeySocket = kControllerSocket;  // the old name, one release
+constexpr int kGaleKeyTimeoutMs = kControllerTimeoutMs;
 constexpr double kGaleKeyTokenS = 120.0;  // gale-key's token life, at most
 constexpr double kGaleKeySoonestS = 0.5;  // gale-key refuses a key sooner than this after the prompt
 
-// One reply from gale-key.
+// One reply from the controller.
 struct GaleKeyReply {
-    bool reached = false;   // gale-key took the whole request line
+    bool reached = false;   // the controller took the whole request line
     bool answered = false;  // and a reply line came back in time
     bool ok = false;
-    int exit = -1;          // gale-key's exit code (docs/gale-tx.md, Command line); -1 none
-    std::string reason;     // gale-key's reason, or ours when it wasn't reached or didn't answer
+    bool accepted = false;  // a `key`: the controller took custody of the burst
+    int exit = -1;          // gale-key's exit code, when the controller passes one on; -1 none
+    std::string reason;     // the controller's reason, or ours when it wasn't reached or didn't answer
     JsonValue body;         // the whole reply, when answered
+};
+
+// The controller's report of where the radio is: a label and its service,
+// never a frequency. known is false until the controller has answered.
+struct RadioReport {
+    bool known = false;
+    std::string label, service, since, source;
 };
 
 // Where the core sends gale-key requests. Abstract so tests use a fake.
@@ -114,11 +128,11 @@ private:
     unsigned long long id_;
 };
 
-// A burst the core may ask gale-key to key: the message it carries, the
-// burst's file name in the outbox, the message's world and the channel the
-// core sent it on.
+// A burst the core may hand the controller: the message it carries, the
+// burst's file name in the outbox, the message's service, the channel label
+// it goes on, and the link-level addressee.
 struct KeyItem {
-    std::string msg_id, burst, world, channel;
+    std::string msg_id, burst, service, channel, to;
 };
 
 class GaleKey {
@@ -148,7 +162,7 @@ public:
         std::string kind;   // "air" (one burst) or "standing" (a mode)
         KeyItem item;       // air
         std::string wav, sha256;  // air: the WAV gale-key bound the token to, and its bytes' sha256
-        std::string mode;   // standing
+        std::string mode, service;  // standing
         double at = 0, until = 0;
         unsigned long long conn = 0;  // the connection that opened it (KeyConnection)
         std::string token;
@@ -165,8 +179,8 @@ public:
     // prepare an operator's key (control local). A new prepare for a burst
     // drops any older token held for that burst.
     Prepared prepare(const KeyItem& it);
-    // prepare kind standing:MODE, for the y that turns a mode on.
-    Prepared prepare_standing(const std::string& mode);
+    // prepare kind standing:MODE in one service, for the y that turns a mode on.
+    Prepared prepare_standing(const std::string& mode, const std::string& service);
 
     // Takes a held token out for its y. False with *error, and the token still
     // held, when it is sooner than 0.5 s after its prepare. False with *error
@@ -188,7 +202,9 @@ public:
     GaleKeyReply grant(const Held& h);
     // The mode ("all" for every one) goes off here first, then `revoke` is sent.
     GaleKeyReply revoke(const std::string& mode, const std::string& why);
-    bool standing_on(const std::string& mode);
+    // The mode goes off here only (gale-key already dropped it); nothing is sent.
+    void forget(const std::string& mode);
+        bool standing_on(const std::string& mode);
     std::vector<std::string> standing();
 
     // An automatic key under a standing grant (control automatic), run on this
@@ -203,8 +219,14 @@ public:
     void halt();
     GaleKeyReply key_standing_now(const KeyItem& it, const std::string& mode);
 
-    // `status`, as gale-key answers it.
+    // `status`, as the controller answers it. Every status read updates radio().
     GaleKeyReply status();
+    // The last report of the radio's channel (status's `radio`).
+    RadioReport radio();
+    // Reads status now (blocking, up to the timeout).
+    void refresh_radio();
+    // Reads status on this object's thread every ms (0: only when asked).
+    void set_poll_ms(int ms);
 
     // How the last request went, for the core's status: "" (nothing asked
     // yet), "answering", "busy" (it took the request and answered after the
@@ -215,7 +237,11 @@ public:
 private:
     GaleKeyReply ask(const std::string& request);
     GaleKeyReply send_key(const KeyItem& it, const std::string& request);  // through around_
-    std::string air_request(const char* cmd, const KeyItem& it, const std::string& control) const;
+    // {"cmd":CMD,"message":{"wav":ABS},"control":{to, service, channel, kind, control, final, EXTRA}}.
+    // extra: members for `control`, as JSON text "\"k\":v,..." ("" none).
+    std::string air_request(const char* cmd, const KeyItem& it, const std::string& control,
+                            const std::string& extra) const;
+    void take_radio(const GaleKeyReply& r);
     std::string wav_path(const std::string& burst) const;
     std::string new_id();
     void drop_expired();  // caller holds mu_
@@ -231,6 +257,8 @@ private:
     std::map<std::string, Held> held_;
     std::map<std::string, bool> standing_;
     std::string last_, last_why_;
+    RadioReport radio_;
+    int poll_ms_ = 0;
 
     struct Job {
         KeyItem item;

@@ -18,15 +18,18 @@ std::string err(const std::string& why) {
     return w.str();
 }
 
-// gale-key's answer, as the kiosk may see it: never a token, never a frequency.
+// The controller's answer, as the kiosk may see it: never a token, never a
+// frequency. `controller`, and the same object as `gale_key` for one release.
 void write_reply(JsonWriter& w, const GaleKeyReply& r) {
-    w.begin_object("gale_key")
-        .field("reached", r.reached)
-        .field("answered", r.answered)
-        .field("ok", r.ok)
-        .field("exit", r.exit)
-        .field("reason", no_frequency(r.reason))
-        .end_object();
+    for (const char* k : {"controller", "gale_key"})
+        w.begin_object(k)
+            .field("reached", r.reached)
+            .field("answered", r.answered)
+            .field("ok", r.ok)
+            .field("accepted", r.accepted)
+            .field("exit", r.exit)
+            .field("reason", no_frequency(r.reason))
+            .end_object();
 }
 
 bool is_y(const std::string& v) { return v == "Y" || v == "y"; }
@@ -37,7 +40,9 @@ void write_keying(JsonWriter& w, Core& core) {
     GaleKey* gk = core.gale_key();
     w.begin_object("keying");
     if (!gk) {
-        w.field("gale_key", "none").field("why", "no gale-key is set up for this station: nothing is keyed");
+        w.field("controller", "none")
+            .field("gale_key", "none")
+            .field("why", "no station controller is set up for this station: nothing is keyed");
         w.begin_array("standing").end_array().field("held", 0);
         w.field("answers_written", static_cast<long long>(core.answer_bursts())).end_object();
         return;
@@ -48,11 +53,12 @@ void write_keying(JsonWriter& w, Core& core) {
     const std::string where = gk->where();
     if (!where.empty() && !std::filesystem::exists(where, ec)) {
         state = "not answering";
-        why = "gale-key isn't running (no socket at " + where + "): nothing is keyed, bursts stay written";
+        why = "the station controller isn't running (no socket at " + where +
+              "): nothing is keyed, bursts stay written";
     } else if (state.empty()) {
         state = "not asked yet";
     }
-    w.field("gale_key", state).field("socket", where).field("why", no_frequency(why));
+    w.field("controller", state).field("gale_key", state).field("socket", where).field("why", no_frequency(why));
     w.begin_array("standing");
     for (auto& m : gk->standing()) w.field("", m);
     w.end_array().field("held", static_cast<long long>(gk->held()));
@@ -61,23 +67,23 @@ void write_keying(JsonWriter& w, Core& core) {
 }
 
 void write_radio_channel(JsonWriter& w, const char* key, Core& core) {
-    TunerKeying* tk = core.tuner();
-    auto rc = tk ? tk->radio_channel() : std::nullopt;
+    // The controller's report of the radio's channel and its service; no
+    // longer a label the core was told (docs/api.md, status).
+    RadioReport rc = core.radio_channel();
     w.begin_object(key);
-    if (rc) {
-        // The world of the plan's entry for the label; null when the plan has none.
-        std::string world = rc->world;
-        if (world.empty() && core.ops())
-            if (auto c = core.ops()->channels().get(rc->label)) world = c->world.empty() ? "mars" : c->world;
-        w.field("label", rc->label);
-        if (world.empty()) w.field_null("world");
-        else w.field("world", world);
-        if (rc->since.empty()) w.field_null("since");
-        else w.field("since", rc->since);
+    if (rc.known && !rc.label.empty()) {
+        std::string service = rc.service;
+        if (service.empty() && core.ops())
+            if (auto c = core.ops()->channels().get(rc.label)) service = c->world;
+        w.field("label", rc.label);
+        if (service.empty()) w.field_null("service").field_null("world");
+        else w.field("service", service).field("world", service);
+        if (rc.since.empty()) w.field_null("since");
+        else w.field("since", rc.since);
     } else {
-        w.field_null("label").field_null("world").field_null("since");
+        w.field_null("label").field_null("service").field_null("world").field_null("since");
     }
-    w.field("source", "tuner_channel").end_object();
+    w.field("source", "controller").end_object();
 }
 
 std::optional<std::string> handle_key(Core& core, const std::string& cmd, std::map<std::string, std::string>& req) {
@@ -85,12 +91,16 @@ std::optional<std::string> handle_key(Core& core, const std::string& cmd, std::m
         cmd != "standing_off" && cmd != "key_status")
         return std::nullopt;
     GaleKey* gk = core.gale_key();
-    if (!gk) return err("no gale-key is set up for this station (gale-key-socket): nothing is keyed");
+    if (!gk) return err("no station controller is set up for this station (controller-socket): nothing is keyed");
 
     if (cmd == "key_prepare") {
         KeyItem it;
         std::string why;
         if (!core.key_item(req["msg_id"], req["burst"], it, &why)) return err(why);
+        // A request naming a service names the message's, or it is a crossing.
+        if (!req["service"].empty() && req["service"] != it.service)
+            return err("refused: crossing: the request names " + req["service"] + ", and " + it.msg_id + " is " +
+                       (it.service.empty() ? std::string("of no service") : "of the " + it.service + " service"));
         GaleKey::Prepared p = gk->prepare(it);
         if (!p.ok) return err(p.error);
         JsonWriter w;
@@ -105,7 +115,7 @@ std::optional<std::string> handle_key(Core& core, const std::string& cmd, std::m
     if (cmd == "standing_prepare") {
         const std::string mode = req["mode"];
         if (core.emcon()) return err("EMCON is on: no standing mode is turned on until it is off");
-        GaleKey::Prepared p = gk->prepare_standing(mode);
+        GaleKey::Prepared p = gk->prepare_standing(mode, req["service"].empty() ? std::string("mars") : req["service"]);
         if (!p.ok) return err(p.error);
         JsonWriter w;
         w.begin_object()
@@ -137,7 +147,12 @@ std::optional<std::string> handle_key(Core& core, const std::string& cmd, std::m
             GaleKeyReply r = gk->grant(h);
             if (!(r.answered && r.ok))
                 return err("standing " + h.mode + " not granted: " + (r.reason.empty() ? "no reason given" : r.reason));
-            w.begin_object().field("ok", true).field("kind", "standing").field("mode", h.mode).field("on", true);
+            w.begin_object()
+                .field("ok", true)
+                .field("kind", "standing")
+                .field("mode", h.mode)
+                .field("service", h.service)
+                .field("on", true);
             write_reply(w, r);
             w.end_object();
             return w.str();
@@ -151,6 +166,12 @@ std::optional<std::string> handle_key(Core& core, const std::string& cmd, std::m
             core.unclaim_key(h.item);
             return err("not keyed: " + r.reason + "; " + h.item.burst + " stays written");
         }
+        if (r.answered && !r.accepted) {
+            // Refused at the controller: no result file comes, so the burst may be prepared again.
+            core.unclaim_key(h.item);
+            return err("not keyed: the controller refused it: " + (r.reason.empty() ? "no reason given" : r.reason) +
+                       "; " + h.item.burst + " stays written");
+        }
         w.begin_object()
             .field("ok", true)
             .field("kind", "air")
@@ -158,7 +179,7 @@ std::optional<std::string> handle_key(Core& core, const std::string& cmd, std::m
             .field("burst", h.item.burst)
             .field("asked", true);
         write_reply(w, r);
-        w.field("note", "the message stays written until gale-key's BURST.key.json says keyed (sent) or refused (failed)")
+        w.field("note", "the message stays written until BURST.key.json says keyed (sent) or refused (failed)")
             .end_object();
         return w.str();
     }
@@ -183,11 +204,8 @@ std::optional<std::string> handle_key(Core& core, const std::string& cmd, std::m
         if (const JsonValue* x = r.body.get("ready"); x && x->type == JsonValue::Type::Bool) w.field("ready", x->b);
         if (const JsonValue* x = r.body.get("keyed"); x && x->type == JsonValue::Type::Bool) w.field("keyed", x->b);
         if (const JsonValue* x = r.body.get("ptt"); x && x->type == JsonValue::Type::String &&
-                                                    (x->s == "rts" || x->s == "dtr" || x->s == "cat"))
+                                                    (x->s == "rts" || x->s == "dtr"))
             w.field("ptt", x->s);
-        if (const JsonValue* x = r.body.get("transmit_world");
-            x && x->type == JsonValue::Type::String && (x->s == "mars" || x->s == "amateur"))
-            w.field("transmit_world", x->s);
         w.begin_array("why_not");
         if (const JsonValue* x = r.body.get("why_not"); x && x->is_array())
             for (auto& e : x->arr)
@@ -196,9 +214,25 @@ std::optional<std::string> handle_key(Core& core, const std::string& cmd, std::m
         w.begin_array("grants");
         if (const JsonValue* x = r.body.get("grants"); x && x->is_object())
             for (auto& [m, v] : x->obj)
-                if (m == "machine" || m == "routing" || m == "auto_qsl" || m == "amateur_auto") w.field("", m);
+                if (core_standing_mode(m)) w.field("", m);
+        if (const JsonValue* x = r.body.get("grants"); x && x->is_array())
+            for (auto& e : x->arr)
+                if (e.type == JsonValue::Type::String && core_standing_mode(e.s)) w.field("", e.s);
         w.end_array();
         write_radio_channel(w, "channel", core);
+        // Why a send waits or was refused, from the controller's status.
+        w.begin_array("waiting");
+        if (const JsonValue* x = r.body.get("waiting"); x && x->is_array())
+            for (auto& e : x->arr) {
+                if (!e.is_object()) continue;
+                auto t = [&](const char* k) {
+                    const JsonValue* y = e.get(k);
+                    return y && y->type == JsonValue::Type::String ? no_frequency(y->s) : std::string();
+                };
+                w.begin_object().field("service", t("service")).field("channel", t("channel")).field("why", t("why"))
+                    .end_object();
+            }
+        w.end_array();
         w.end_object();
     }
     w.end_object();

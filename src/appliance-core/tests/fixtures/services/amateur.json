@@ -1,0 +1,53 @@
+{
+  "version": 1,
+  "service": "amateur",
+  "display_name": "Amateur",
+  "worked": true,
+  "transmit": true,
+  "radio": {
+    "bands_hz": [[1800000, 2000000], [3500000, 4000000], [7000000, 7300000], [10100000, 10150000],
+                 [14000000, 14350000], [18068000, 18168000], [21000000, 21450000],
+                 [24890000, 24990000], [28000000, 29700000]],
+    "data_segments_hz": [[1800000, 2000000], [3500000, 3600000], [7000000, 7125000],
+                         [10100000, 10150000], [14000000, 14150000], [18068000, 18110000],
+                         [21000000, 21200000], [24890000, 24930000], [28000000, 28300000]],
+    "auto_segments_hz": [[3585000, 3600000], [7100000, 7105000], [10140000, 10150000],
+                         [14095000, 14099500], [14100500, 14112000], [18105000, 18110000],
+                         [21090000, 21100000], [24925000, 24930000], [28120000, 28189000]],
+    "default_mode": "DIG",
+    "default_sideband": "usb",
+    "passband_hz": 3000,
+    "waveforms": ["110a"]
+  },
+  "keying": {
+    "station_id": {"interval_s": 600, "margin_s": 30, "form": "cw", "wpm": 20, "tone_hz": 1000,
+                   "level_dbfs": -10, "gap_s": 0.3, "counts": ["air", "first"]},
+    "identity_file": "amateur/own_address.txt",
+    "call_pattern": "^(?:[A-Z]{1,2}|[A-Z][0-9]|[0-9][A-Z])[0-9][A-Z]{1,4}$",
+    "listen_only_without_call": true,
+    "max_key_s": 30,
+    "keys_per_hour": 12
+  },
+  "priority": {"radio": 10, "operator": 60, "automatic": 20},
+  "messages": {
+    "formats": ["PLAIN"],
+    "encryption": false,
+    "key_source": "plans/amateur/keys/public-default",
+    "acks": "none",
+    "automatic_modes": []
+  },
+  "receive": {
+    "scan_plan": "plans/amateur/hfn",
+    "schedule_source": null,
+    "park_channel": null,
+    "overflow_engine": false,
+    "trim": "auto_only"
+  },
+  "data": {
+    "word_log": "<terminal>/amateur/words",
+    "captures": "<terminal>/amateur/captures",
+    "spool": "<terminal>/amateur/spool",
+    "store": "<terminal>/amateur",
+    "fallback": "amateur/fallback"
+  }
+}

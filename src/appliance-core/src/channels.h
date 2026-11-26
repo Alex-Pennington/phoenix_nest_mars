@@ -57,6 +57,9 @@ public:
     // The name to show for a frequency: a MARS channel's designator, an
     // amateur channel's HFLink label (its designator when it has none), or "".
     std::string display_name_for(int64_t hz);
+    // The service of the plan's channel on a dial (within 50 Hz), or "" when
+    // none is there, or channels of two services share it.
+    std::string service_for(int64_t hz);
     size_t size();
 
 private:

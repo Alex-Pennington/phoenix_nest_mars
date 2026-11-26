@@ -18,6 +18,8 @@
 // as always.
 #pragma once
 
+#include "services.h"
+
 #include <memory>
 #include <string>
 #include <utility>
@@ -33,7 +35,8 @@ public:
 
     // dir: the practice station's folder. call: the station's own call
     // (the practice station uses it, so traffic reads as at home).
-    Training(std::string dir, std::string call);
+    // services: the tables the practice stations route by (the real core's).
+    Training(std::string dir, std::string call, std::shared_ptr<const Services> services = nullptr);
     ~Training();
     // Starts the two practice stations; the first time (or after reload),
     // fills the practice store. False with *error if it couldn't.
@@ -51,6 +54,7 @@ private:
     bool fill(std::string* error);
 
     std::string dir_, call_;
+    std::shared_ptr<const Services> services_;
     std::unique_ptr<Core> me_, ncs_;
     LoopbackModem *my_radio_ = nullptr, *ncs_radio_ = nullptr;
     int played_ = 0;

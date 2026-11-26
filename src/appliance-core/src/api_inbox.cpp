@@ -207,7 +207,7 @@ Row read_row(Stmt& s) {
     r.m.created_at = s.i64(8);
     r.m.updated_at = s.i64(9);
     r.m.last_error = s.text(10);
-    r.m.world = s.text(11) == "amateur" ? "amateur" : "mars";
+    r.m.world = s.text(11);  // as stored: "" is no service, never MARS
     return r;
 }
 
@@ -891,7 +891,9 @@ std::string qsl(Core& core, Db& db, std::map<std::string, std::string>& req) {
             std::string err;
             std::string line = acp201::build(c, &err);
             if (line.empty()) return err_reply("no receipt could be made: " + err);
-            out_id = core.submit(to, 'R', line, &err);
+            // The receipt carries the source message's service, so a crossing is caught.
+            out_id = core.submit(to, 'R', line, &err,
+                                 SendOpts::in(r->m.world.empty() ? req["service"] : r->m.world));
             if (out_id.empty()) return err_reply("receipt refused: " + err);
         }
     }
@@ -975,6 +977,11 @@ std::string retransmit(Core& core, Db& db, std::map<std::string, std::string>& r
         for (size_t n : pick) part += all[n - 1] + "\r\n";
         body = part;
     }
+    // The retransmit carries the source message's service, so a crossing is caught.
+    const std::string svc = r->m.world.empty() ? req["service"] : r->m.world;
+    if (!req["service"].empty() && !r->m.world.empty() && req["service"] != r->m.world)
+        return err_reply("refused: crossing: the request names " + req["service"] + ", and " + r->m.id + " is of the " +
+                         r->m.world + " service");
     const std::string key_name = upper(trim(req["key"]));
     std::string err, id, ind;
     if (!key_name.empty()) {
@@ -988,9 +995,9 @@ std::string retransmit(Core& core, Db& db, std::map<std::string, std::string>& r
         bool ok = core.cipher() && codress::encipher(*core.cipher(), body, ind, secret, out, &err);
         crypto::wipe(secret);
         if (!ok) return err_reply(err.empty() ? "no cipher installed" : err);
-        id = core.submit_codress(dst, prec, out, body, ind, &err);
+        id = core.submit_codress(dst, prec, out, body, ind, &err, SendOpts::in(svc));
     } else {
-        id = core.submit(dst, prec, body, &err);
+        id = core.submit(dst, prec, body, &err, SendOpts::in(svc));
     }
     if (id.empty()) return err_reply(err);
     const bool compress = truthy(req["compress"]);
@@ -1108,6 +1115,21 @@ std::string reply_draft(Core& core, Db& db, std::map<std::string, std::string>& 
     ctx.station = core.station();
     std::string err;
     if (!proc.empty() && compose::form(tmpl, proc, ctx, &err).empty()) proc.clear();
+    // A reply carries the source message's service. A service that does not
+    // offer the drafted format, and offers PLAIN, is drafted as PLAIN.
+    const std::string service = r->m.world;
+    if (const Service* sv = core.services() ? core.services()->find(service) : nullptr) {
+        const compose::Template* t = compose::find_template(tmpl);
+        const std::string use = proc.empty() && t ? t->procedure : proc;
+        if (!sv->offers(use) && sv->offers("PLAIN")) {
+            tmpl = "PLAIN";
+            proc = "PLAIN";
+            std::map<std::string, std::string> keep;
+            keep["to_station"] = to_station;
+            v = keep;
+        }
+    }
+    if (!service.empty()) v["service"] = service;
     if (tmpl == "GENADMIN") v["subj"] = subject;
     JsonWriter w;
     w.begin_object()
@@ -1115,6 +1137,7 @@ std::string reply_draft(Core& core, Db& db, std::map<std::string, std::string>& 
         .field("id", r->m.id)
         .field("template", tmpl)
         .field("procedure", proc)
+        .field("service", service)
         .field("to", v["to"])
         .field("to_station", to_station)
         .field("subject", subject)

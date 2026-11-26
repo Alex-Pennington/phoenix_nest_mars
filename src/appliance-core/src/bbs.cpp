@@ -520,7 +520,7 @@ std::vector<Rule> Engine::rules() {
         r.sched = s.text(6);
         r.compress = s.i64(7) != 0;
         r.mark_processed = s.i64(8) != 0;
-        r.world = s.text(9) == "amateur" ? "amateur" : "mars";
+        r.world = s.text(9);  // the rule's service, as stored
         out.push_back(r);
     }
     return out;
@@ -556,15 +556,17 @@ bool Engine::set_rule(const Rule& r0, int64_t* id, std::string* error) {
         ale.push_back(u);
     }
     if (ale.empty()) return fail(error, "give at least one ALE address, in the order to call them");
-    // Ask 37: a MARS rule only, and never an ALE address of the amateur world.
+    // The rule's service is stored and is the guard (docs/api.md, Services):
+    // a rule with no service, or one no table names, is refused, and so is an
+    // ALE address whose book entry is of another service (a crossing).
     {
         std::string w = trim(r.world);
         for (auto& c : w) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-        if (!w.empty() && w != "mars")
-            return fail(error, "refused: world " + w + ": the MARS BBS never routes into the amateur world");
-        r.world = "mars";
+        if (w.empty()) return fail(error, "refused: a routing rule needs its service");
+        if (!core_.services() || !core_.services()->valid(w)) return fail(error, "refused: " + no_table(w));
+        r.world = w;
         for (auto& a : ale)
-            if (std::string why = core_.world_refusal(a); !why.empty()) return fail(error, "refused: " + why);
+            if (Route rt = core_.route_for(w, a, "", w); !rt.ok) return fail(error, rt.refusal + " (ALE address " + a + ")");
     }
     r.ale = ale;
     if (!valid_sched(r.sched)) return fail(error, "schedule must be empty or HHMMZ");
@@ -574,21 +576,24 @@ bool Engine::set_rule(const Rule& r0, int64_t* id, std::string* error) {
     if (r.id == 0) {
         Stmt m(db_, "SELECT COALESCE(MAX(pos), 0) FROM bbs_rule");
         int64_t pos = m.step() ? m.i64(0) + 1 : 1;
-        Stmt s(db_, "INSERT INTO bbs_rule (pos, match, route, ale, key, sched, compress, mark_processed)"
-                    " VALUES (?, ?, ?, ?, ?, ?, ?, ?)");
+        Stmt s(db_, "INSERT INTO bbs_rule (pos, match, route, ale, key, sched, compress, mark_processed, world)"
+                    " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)");
         s.bind(1, pos).bind(2, r.match).bind(3, r.route).bind(4, ale_s).bind(5, r.key).bind(6, r.sched)
-            .bind(7, static_cast<int64_t>(r.compress)).bind(8, static_cast<int64_t>(r.mark_processed));
+            .bind(7, static_cast<int64_t>(r.compress)).bind(8, static_cast<int64_t>(r.mark_processed)).bind(9, r.world);
         s.step();
         r.id = sqlite3_last_insert_rowid(db_);
-        core_.note("BBS route rule " + std::to_string(r.id) + " added: " + r.match + " -> " + r.route + " (" + ale_s + ")");
+        core_.note("BBS route rule " + std::to_string(r.id) + " added: " + r.match + " -> " + r.route + " (" + ale_s +
+                   ", " + r.world + ")");
     } else {
         Stmt s(db_, "UPDATE bbs_rule SET match = ?, route = ?, ale = ?, key = ?, sched = ?, compress = ?,"
-                    " mark_processed = ? WHERE id = ?");
+                    " mark_processed = ?, world = ? WHERE id = ?");
         s.bind(1, r.match).bind(2, r.route).bind(3, ale_s).bind(4, r.key).bind(5, r.sched)
-            .bind(6, static_cast<int64_t>(r.compress)).bind(7, static_cast<int64_t>(r.mark_processed)).bind(8, r.id);
+            .bind(6, static_cast<int64_t>(r.compress)).bind(7, static_cast<int64_t>(r.mark_processed)).bind(8, r.world)
+            .bind(9, r.id);
         s.step();
         if (sqlite3_changes(db_) == 0) return fail(error, "no rule " + std::to_string(r.id));
-        core_.note("BBS route rule " + std::to_string(r.id) + " changed: " + r.match + " -> " + r.route + " (" + ale_s + ")");
+        core_.note("BBS route rule " + std::to_string(r.id) + " changed: " + r.match + " -> " + r.route + " (" + ale_s +
+                   ", " + r.world + ")");
     }
     if (id) *id = r.id;
     return true;
@@ -755,7 +760,9 @@ std::string Engine::answer(const std::string& to, const std::string& body, const
         return "";
     }
     std::string err;
-    std::string id = core_.submit(dst, 'R', body, &err);
+    // Machine answers are an automatic mode: MARS only until stage 5, as the
+    // world_refusal above already holds (greybeard-ale #18).
+    std::string id = core_.submit(dst, 'R', body, &err, SendOpts::in("mars"));
     if (id.empty()) {
         core_.note("BBS: answer to " + dst + " (" + what + ") refused: " + err);
         return "";
@@ -1055,8 +1062,13 @@ bool Engine::send_routed(Routed& rt) {
         return false;
     }
     // Ask 40: checked again when it goes, so a rule, a re-run or a sitting
-    // that comes due later can't carry amateur traffic into MARS.
-    if (std::string why = world_block(rt.msg_id, src); !why.empty()) {
+    // that comes due later can't carry amateur traffic into MARS. Routing is
+    // an automatic mode: MARS only until stage 5 (greybeard-ale #18).
+    std::string why_block = world_block(rt.msg_id, src);
+    if (why_block.empty() && rule->world != "mars")
+        why_block = "its rule is of the " + (rule->world.empty() ? std::string("(no)") : rule->world) +
+                    " service: until stage 5 the BBS routes MARS traffic only";
+    if (std::string why = why_block; !why.empty()) {
         rt.state = "refused";
         rt.why = why;
         save();
@@ -1079,11 +1091,15 @@ bool Engine::send_routed(Routed& rt) {
             } else if (!codress::encipher(*core_.cipher(), body, ind, secret, out, &err)) {
                 // err says why
             } else {
-                id = core_.submit_codress(dst, prec, out, body, ind, &err);
+                SendOpts o = SendOpts::in(rule->world);
+                o.route_service = rule->world;
+                id = core_.submit_codress(dst, prec, out, body, ind, &err, o);
             }
             crypto::wipe(secret);
         } else {
-            id = core_.submit(dst, prec, body, &err);
+            SendOpts o = SendOpts::in(rule->world);
+            o.route_service = rule->world;
+            id = core_.submit(dst, prec, body, &err, o);
         }
         if (id.empty()) {
             refusals += (refusals.empty() ? "" : "; ") + dst + ": " + err;

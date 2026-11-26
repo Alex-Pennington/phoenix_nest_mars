@@ -35,7 +35,12 @@ struct Message {
     int64_t next_try_at = 0;
     std::string last_error;
     int sends = 0;  // times it went out whole on the air (for the ack timer)
-    std::string world = "mars";  // every item carries its world; the core holds MARS traffic only (ask 37)
+    // Every item carries its service (`world` keeps its old name until the
+    // stage 2 sweep): a sent message's from its route, a received one's from
+    // the channel it was heard on. "" is no service, never read as MARS.
+    std::string world;
+    std::string channel;  // the channel the operator picked for a send ("" none)
+    std::string link;     // "plain": sent as the text alone (PLAIN); "" the station's link format
 };
 
 // One line of the event log (events table rowid is its number).

@@ -238,7 +238,7 @@ std::string resolve(const std::string& def, const Context& ctx) {
 
 // ---------------------------------------------------------------- procedures
 
-enum class Env { Acp127, L16Full, L16Abbr, L16Simple, Acp126Plain, Acp126Simple, Chat, Codress };
+enum class Env { Acp127, L16Full, L16Abbr, L16Simple, Acp126Plain, Acp126Simple, Chat, Codress, Plain };
 
 struct ProcInfo {
     Procedure p;
@@ -294,6 +294,12 @@ const std::vector<ProcInfo>& proc_table() {
               "One line, \"CALL DE STATION // text // HHMMZ K\". For quick exchanges and strips, not formal "
               "traffic.",
               Env::Chat),
+            // docs/api.md, "Services": the operator's text alone, for a service
+            // whose table lists PLAIN in its formats.
+            P("PLAIN", "Plain text",
+              "Your text alone, as you write it: no ACP 127 envelope, no MSC digest, no signature and no cipher. "
+              "It is sent as plain text.",
+              Env::Plain),
         };
     }();
     return t;
@@ -392,6 +398,12 @@ std::vector<Field> envelope(const ProcInfo& pi, char prec) {
                           "The three letters after VZCZC. MMM is what MARS stations use.", "MMM"));
             f.push_back(fto_station);
             break;
+        case Env::Plain:
+            f.push_back(F("to_station", "Station to send to over the air", "call", true, "",
+                          "The station this goes to: its call, a name in the station book, or ALL for every station "
+                          "listening.",
+                          "TEST-1"));
+            break;
         case Env::Chat:
             f.push_back(F("call", "Station to call", "stations", true, "",
                           "Who the chat line is for: a call sign, a chat address like KAPPA71-CM, or ALL.",
@@ -400,7 +412,7 @@ std::vector<Field> envelope(const ProcInfo& pi, char prec) {
             f.push_back(fto_station);
             break;
     }
-    if (pi.env != Env::Chat && pi.env != Env::Codress)
+    if (pi.env != Env::Chat && pi.env != Env::Codress && pi.env != Env::Plain)
         f.push_back(F("wrap", "Break lines at 69 characters", "yn", false, "N",
                       "N sends each line as you write it, the way MARS stations do. Y breaks long lines at 69 "
                       "characters, as ACP 127 asks; use it only when a station or net asks for that. A strip is "
@@ -1030,6 +1042,15 @@ const std::vector<TemplateDef>& template_table() {
                 b.lines = lines_of(v(m, "text"));
                 return b;
             });
+        add("PLAIN", "Plain text",
+            "Your text alone, with no set format, for a service that sends plain text (amateur).", "PLAIN", 'R',
+            {"PLAIN"},
+            {F("text", "Text", "lines", true, "", "What you want to send, as it should arrive.", "QRU?")},
+            [](const Values& m, const RenderCtx&) {
+                Body b;
+                b.lines = lines_of(v(m, "text"));
+                return b;
+            });
         return T;
     }();
     return t;
@@ -1565,7 +1586,10 @@ Result check(const Draft& d, const Context& ctx, const Serials& serials) {
               "Say who to acknowledge to, like AKNLDG TO and your routing indicator.", "AKNLDG TO UHAAAA");
 
     // Precedence.
-    char prec = pi->env == Env::L16Simple || pi->env == Env::Acp126Simple || pi->env == Env::Chat ? 'R' : def->t.prec;
+    char prec = pi->env == Env::L16Simple || pi->env == Env::Acp126Simple || pi->env == Env::Chat ||
+                        pi->env == Env::Plain
+                    ? 'R'
+                    : def->t.prec;
     if (val.count("prec") && val["prec"].size() == 1) prec = val["prec"][0];
     if (val.count("prec")) {
         if (prec == 'Z')
@@ -1760,9 +1784,17 @@ Result check(const Draft& d, const Context& ctx, const Serials& serials) {
             msg = acp201::build(ch, &err);
             break;
         }
+        case Env::Plain: {
+            // The operator's text alone.
+            Body b = def->render(val, RenderCtx{"1"});
+            msg = join(b.lines, "\r\n");
+            if (trim(msg).empty()) err = "no text";
+            if (!err.empty()) msg.clear();
+            break;
+        }
     }
-    // Every message but a chat line carries the MSC digest (digest.h).
-    if (!msg.empty() && pi->env != Env::Chat) msg = digest::append(msg);
+    // Every message but a chat line and PLAIN carries the MSC digest (digest.h).
+    if (!msg.empty() && pi->env != Env::Chat && pi->env != Env::Plain) msg = digest::append(msg);
     if (msg.empty()) {
         c.add("", "error", plain_error(err), "Check the fields marked above, or send it as 16L, which is less strict.");
         r.issues = c.issues;

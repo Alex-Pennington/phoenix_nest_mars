@@ -250,6 +250,17 @@ std::string ChannelPlan::display_name_for(int64_t hz) {
     return amateur;
 }
 
+std::string ChannelPlan::service_for(int64_t hz) {
+    std::lock_guard<std::mutex> g(mu_);
+    std::string svc;
+    for (auto& c : ch_) {
+        if (std::llabs(c.hz - hz) > 50) continue;
+        if (!svc.empty() && svc != c.world) return "";
+        svc = c.world;
+    }
+    return svc;
+}
+
 size_t ChannelPlan::size() {
     std::lock_guard<std::mutex> g(mu_);
     return ch_.size();

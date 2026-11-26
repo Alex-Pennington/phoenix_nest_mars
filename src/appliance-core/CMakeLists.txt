@@ -122,6 +122,8 @@ add_library(pna_core STATIC
   src/bbs.cpp
   src/api_bbs.cpp
   src/gale_key.cpp
+  src/services.cpp
+  src/route.cpp
   src/api_key.cpp
   src/api_inbox.cpp
   modules/pna_aes.cpp)

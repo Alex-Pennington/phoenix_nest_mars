@@ -1,0 +1,47 @@
+{
+  "version": 1,
+  "service": "mars",
+  "display_name": "MARS (test fixture)",
+  "worked": true,
+  "transmit": true,
+  "radio": {
+    "bands_hz": null,
+    "data_segments_hz": null,
+    "auto_segments_hz": null,
+    "default_mode": "DIG",
+    "default_sideband": "usb",
+    "passband_hz": 3000,
+    "waveforms": ["110a"]
+  },
+  "keying": {
+    "station_id": null,
+    "identity_file": null,
+    "call_pattern": null,
+    "listen_only_without_call": false,
+    "max_key_s": 30,
+    "keys_per_hour": 12
+  },
+  "priority": {"radio": 10, "operator": 60, "automatic": 20},
+  "messages": {
+    "formats": ["16L_P2P_FULL", "16L_P2P_ABBR", "16L_P2P_SIMPLE", "16L_RI_FULL", "16L_RI_ABBR",
+                "ACP127_PLAINDRESS", "ACP127_CODRESS", "ACP126_PLAINDRESS", "ACP126_SIMPLE", "ACP201_CHAT"],
+    "encryption": true,
+    "key_source": null,
+    "acks": "none",
+    "automatic_modes": ["routing", "machine", "auto_qsl"]
+  },
+  "receive": {
+    "scan_plan": null,
+    "schedule_source": null,
+    "park_channel": null,
+    "overflow_engine": true,
+    "trim": null
+  },
+  "data": {
+    "word_log": "<terminal>/words",
+    "captures": "<terminal>/captures",
+    "spool": "<terminal>/spool",
+    "store": "<terminal>",
+    "fallback": "fallback"
+  }
+}

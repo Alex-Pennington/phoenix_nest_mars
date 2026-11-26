@@ -154,10 +154,11 @@ std::vector<Row> make_table() {
     for (auto k : {"db-dir", "outbox", "captures", "captures-fallback", "gale-dir", "words", "scan-log", "wwv-dir",
                    "gps-status", "health-file", "engine-status", "lqa-db", "favourites", "own-address", "scan-plan",
                    "radio-file", "store-root", "amateur-own-address", "amateur-words", "keying-file", "web-root",
-                   "rx-schedule-dir"})
+                   "rx-schedule-dir", "services-dir"})
         t.push_back(locked(k, "Paths", k));
     for (auto k : {"api-port", "web-port", "s5066-port", "appa-port"}) t.push_back(locked(k, "Ports", k, "int"));
-    for (auto k : {"link", "link-socket", "link-poll-ms", "tuner-socket", "gale-key-socket", "gale-key-timeout-ms",
+    for (auto k : {"link", "link-socket", "link-poll-ms", "tuner-socket", "controller-socket", "controller-timeout-ms",
+                   "gale-key-socket", "gale-key-timeout-ms",
                    "s5066-peers", "s5066-sap", "s5066-ttl",
                    "s5066-confirm", "s5066-broadcast", "loopback-pair", "loopback-bps"})
         t.push_back(locked(k, "Link", k));

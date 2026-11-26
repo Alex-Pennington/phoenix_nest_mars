@@ -29,6 +29,7 @@ const std::vector<std::string>& config_keys() {
         "appa-port",   "ack-timeout", "ack-retries",   "tx-gap",
         "link-wait",   "expire-h",    "handling",      "raw-rx-log",  "parts-hold-h",
         "parts-resend-per-hour", "tuner-socket", "gale-key-socket", "gale-key-timeout-ms",
+        "controller-socket", "controller-timeout-ms", "services-dir",
         "gale-dir",    "words",       "scan-log",      "wwv-dir",     "gps-status", "health-file",
         "engine-status", "lqa-db",    "favourites",    "own-address", "scan-plan",  "radio-file", "store-root",
         "amateur-own-address", "amateur-words", "keying-file",
