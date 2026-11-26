@@ -2557,8 +2557,7 @@ std::string mark_training(const std::string& reply) {
 // material is built in), or change the real station's backup or cipher.
 std::string training_refuses(const std::string& cmd, std::map<std::string, std::string>& req) {
     static const std::set<std::string> never = {"station_backup", "station_restore", "cipher_install", "cipher_remove",
-                                                "identity_set", "settings_set",
-                                                "settings_reset"};
+                                                "settings_set", "settings_reset"};
     if (never.count(cmd)) return cmd + " isn't done in training: turn training off first";
     if (!req["out"].empty()) return "training doesn't write files: turn training off first";
     if (!req["file"].empty()) return "training doesn't read files in: its traffic is built in";
@@ -2758,6 +2757,9 @@ std::string ApiServer::handle_call(Core& core, const std::string& line) {
             if (auto r = handle_guide(core, cmd, req, true)) return mark_training(*r);
         std::string why = training_refuses(cmd, req);
         if (!why.empty()) return mark_training(error_reply(why));
+        // Ask 39: the amateur addresses are the whole box's, never the
+        // practice station's: checked, never written.
+        if (cmd == "identity_set") return mark_training(sv::identity_check(req));
         return mark_training(handle_call(t->core(), line));
     }
 

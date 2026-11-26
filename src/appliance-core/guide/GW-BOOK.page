@@ -1,0 +1,19 @@
+; gale-web: the station book.
+PAGE GW-BOOK
+TITLE Station book
+KIND screen
+SCREENS GW-BOOK BOOK
+HELP ? guide
+SEE GW-STATION GW-SCHEDULE FORM-BOOK
+BEGIN_TEXT
+Names for the stations you work: a call and the name you know it by,
+and collectives that hold several names. A message can be sent to a name
+from the book and goes to every call it holds.
+
+Every entry carries its world: MARS or amateur. The message center sends
+only to MARS stations. A send to an amateur entry, or to a collective
+holding one, is refused with the reason; it is never sent somewhere else
+instead.
+
+The book can be written out and read back in as a file, world and all.
+END

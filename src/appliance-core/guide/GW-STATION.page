@@ -1,0 +1,19 @@
+; gale-web: this station.
+PAGE GW-STATION
+TITLE This station
+KIND screen
+SCREENS GW-STATION STATION
+HELP ? guide
+SEE KEYS GW-BOOK START
+BEGIN_TEXT
+Your station's call and fingerprint, and the card that carries them.
+Read the fingerprint to your keymaster by voice or show it in person:
+that is how they know the card is yours.
+
+The amateur calls this box answers to are set here too. They are the
+amateur world's own: the MARS message center never sends to them, and a
+MARS call is never one of them.
+
+Practice (training) checks amateur calls you type but never changes
+them: they belong to the whole box, not the practice station.
+END

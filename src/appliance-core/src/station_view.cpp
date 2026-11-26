@@ -1437,9 +1437,10 @@ std::string identity_get(Core&) {
     return w.str();
 }
 
-std::string identity_set(Core& core, std::map<std::string, std::string>& req) {
-    if (!req.count("addresses")) return error_reply("addresses: the amateur calls this station answers to, "
-                                                    "separated by spaces or commas (empty: listen only)");
+// The addresses given to identity_set, checked: "" with *got, or the error.
+std::string identity_parse(std::map<std::string, std::string>& req, std::vector<std::string>* got_out) {
+    if (!req.count("addresses")) return "addresses: the amateur calls this station answers to, "
+                                        "separated by spaces or commas (empty: listen only)";
     std::vector<std::string> got;
     std::set<std::string> seen;
     std::string text = req["addresses"], tok;
@@ -1459,13 +1460,20 @@ std::string identity_set(Core& core, std::map<std::string, std::string>& req) {
     for (char c : text) {
         if (c == ' ' || c == ',' || c == '\n' || c == '\r' || c == '\t' || c == ';') {
             std::string e = take();
-            if (!e.empty()) return error_reply(e);
+            if (!e.empty()) return e;
         } else {
             tok += c;
         }
     }
-    if (std::string e = take(); !e.empty()) return error_reply(e);
-    if (got.size() > 32) return error_reply("at most 32 addresses");
+    if (std::string e = take(); !e.empty()) return e;
+    if (got.size() > 32) return "at most 32 addresses";
+    *got_out = got;
+    return "";
+}
+
+std::string identity_set(Core& core, std::map<std::string, std::string>& req) {
+    std::vector<std::string> got;
+    if (std::string e = identity_parse(req, &got); !e.empty()) return error_reply(e);
     Paths p = paths();
     if (same_file(p.amateur_own, p.own))
         return error_reply("the amateur address file is set to MARS's own-address file: the worlds keep separate "
@@ -1531,6 +1539,22 @@ std::string identity_set(Core& core, std::map<std::string, std::string>& req) {
 }
 
 }  // namespace
+
+std::string identity_check(std::map<std::string, std::string>& req) {
+    std::vector<std::string> got;
+    if (std::string e = identity_parse(req, &got); !e.empty()) return error_reply(e);
+    JsonWriter w;
+    w.begin_object().field("ok", true).field("world", "amateur").begin_array("addresses");
+    for (auto& a : got) w.field("", a);
+    w.end_array()
+        .field("listen_only", got.empty())
+        .field("written", false)
+        .field("scanner_reloaded", false)
+        .field("note", "practice: these addresses are checked only. The amateur address file belongs to the whole "
+                       "box, not the practice station, so training never changes it; turn training off to set them")
+        .end_object();
+    return w.str();
+}
 
 std::optional<std::string> handle(Core& core, const std::string& cmd, std::map<std::string, std::string>& req) {
     if (cmd == "scanner_status") return scanner_status(core);

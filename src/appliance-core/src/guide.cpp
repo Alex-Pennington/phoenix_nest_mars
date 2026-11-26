@@ -423,16 +423,24 @@ std::optional<std::string> handle(const Context& ctx, const std::string& cmd, st
         if (cmd == "guide_get") {
             p = find(ctx, asked);
         } else {
-            // The page that answers ? on this screen: a form's own page, a
-            // written page that lists the screen, or the page of that id.
+            // The page that answers ? on this screen (ask 39), in this order:
+            // a form's own page; a page written or changed on this box whose
+            // SCREENS line lists the screen; a built-in page that lists it;
+            // the page whose id is the screen. Within each, pages go by id.
             if (asked.rfind("FORM-", 0) == 0) p = find(ctx, asked);
-            if (!p && ctx.pages)
-                for (auto& e : ctx.pages->list())
-                    if (std::find(e.p.screens.begin(), e.p.screens.end(), asked) != e.p.screens.end()) {
-                        p = e.p;
-                        origin = e.origin;
-                        break;
-                    }
+            if (!p && ctx.pages) {
+                auto all = ctx.pages->list();
+                for (bool local : {true, false}) {
+                    for (auto& e : all)
+                        if (e.changed == local &&
+                            std::find(e.p.screens.begin(), e.p.screens.end(), asked) != e.p.screens.end()) {
+                            p = e.p;
+                            origin = e.origin;
+                            break;
+                        }
+                    if (p) break;
+                }
+            }
             if (!p) p = find(ctx, asked);
         }
         if (p && ctx.pages && p->kind != "form" && p->kind != "type")

@@ -1,0 +1,26 @@
+; gale-web: the net schedule, edited on this screen.
+PAGE GW-SCHEDULE
+TITLE Net schedule
+KIND screen
+SCREENS GW-SCHEDULE SCHEDULE
+HELP ? guide
+SEE GW-CHANNELS GW-BOOK FORM-SCHEDULE
+BEGIN_TEXT
+When each of your nets meets: its name, the days, the start time (Zulu),
+how long it runs, the channel by its plan label, net control and the
+roster. You set all of it here; nothing about the schedule is kept from
+you.
+
+A sitting opens on time with its roster, on its own channel. While it is
+open, a station heard on that channel is checked in by itself. A station
+heard on another channel, after the sitting ends, or a station of the
+amateur world is never checked in.
+
+The schedule names channels, never frequencies. What a label stands for
+is kept in the station's private channel plan.
+END
+BEGIN_EXAMPLE
+A net that meets Tuesdays at 0100Z for 60 minutes on channel QXA, with
+three stations on its roster. At 0100Z the sitting opens; STA-B is heard
+on QXA at 0104Z and checked in.
+END

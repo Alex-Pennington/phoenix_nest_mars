@@ -45,6 +45,25 @@ The built-in pages are in `guide/*.page`, compiled into the program. A page
 written on the box goes in `DB_DIR/CALL.guide/` and wins over the built-in
 one until it is reset.
 
+How `guide_help {screen}` finds the page for a screen (ask 39), first match
+wins:
+
+1. `FORM-<ID>`: that form's own page.
+2. A page written or changed on this box (`guide_page_put`) whose `SCREENS`
+   line lists the screen.
+3. A built-in page whose `SCREENS` line lists it.
+4. The page whose id is the screen.
+5. None: `found` is false and the MAIN page comes back, so `?` never leads
+   nowhere.
+
+Within 2 and 3, pages are taken in order of their id. So gale-web can bring
+its own page for any screen with `guide_page_put`, and it answers `?` there
+ahead of a built-in page for the same screen, until it is reset.
+
+The gale-web screens with built-in pages: GW-SCHEDULE (screens GW-SCHEDULE
+and SCHEDULE), GW-CHANNELS (GW-CHANNELS, CHANNELS), GW-BOOK (GW-BOOK, BOOK)
+and GW-STATION (GW-STATION, STATION).
+
 Two kinds of page aren't written: they are made from what they explain, so
 an edited template changes its page at once.
 

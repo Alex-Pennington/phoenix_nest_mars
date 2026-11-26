@@ -1,0 +1,20 @@
+; gale-web: the channel plan, by label.
+PAGE GW-CHANNELS
+TITLE Channels
+KIND screen
+SCREENS GW-CHANNELS CHANNELS
+HELP ? guide
+SEE GW-SCHEDULE RADIO TUNER
+BEGIN_TEXT
+The channels this station uses, each by its plan label (a designator).
+Every screen names a channel by its label; frequencies are never shown
+here and never leave the box.
+
+A channel's label is what a net, a schedule and the tuner go by. When the
+radio is set to a channel through the tuner, nets that name that channel
+take check-ins from stations heard on it.
+
+Labels come from the channel plan loaded on this box. A channel with no
+label is shown by its place in the scan plan, as W1C2 (window 1, channel
+2).
+END

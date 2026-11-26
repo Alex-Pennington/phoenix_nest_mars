@@ -184,6 +184,29 @@ static void guide(const fs::path& dir) {
     CHECK(ok(r) && !yes(r, "found") && str(sub(r, "page"), "id") == "MAIN");
     CHECK(!yes(r, "training"));
 
+    // Ask 39: gale-web's screens find their built-in pages by SCREENS line,
+    // under the GW- id and the screen's own id.
+    for (const char* x : {"SCHEDULE", "CHANNELS", "BOOK", "STATION"}) {
+        const std::string gw = std::string("GW-") + x;
+        for (const std::string& screen : {gw, std::string(x)}) {
+            r = call(core, {{"cmd", "guide_help"}, {"screen", screen}});
+            CHECK(ok(r) && yes(r, "found") && str(sub(r, "page"), "id") == gw);
+            if (str(sub(r, "page"), "id") != gw) std::cerr << "  no GW page for " << screen << "\n";
+        }
+    }
+    // A page put on the box for a screen answers ? there ahead of the
+    // built-in page that lists the same screen, until it is reset.
+    CHECK(ok(call(core, {{"cmd", "guide_page_put"},
+                         {"text", "PAGE AA-LOCAL\nTITLE Our schedule\nKIND screen\nSCREENS SCHEDULE\n"
+                                  "BEGIN_TEXT\nOUR OWN SCHEDULE PAGE.\nEND\n"}})));
+    r = call(core, {{"cmd", "guide_help"}, {"screen", "SCHEDULE"}});
+    CHECK(ok(r) && str(sub(r, "page"), "id") == "AA-LOCAL" && str(sub(r, "page"), "origin") == "edited here");
+    r = call(core, {{"cmd", "guide_help"}, {"screen", "GW-SCHEDULE"}});
+    CHECK(ok(r) && str(sub(r, "page"), "id") == "GW-SCHEDULE");
+    CHECK(ok(call(core, {{"cmd", "guide_page_reset"}, {"id", "AA-LOCAL"}})));
+    r = call(core, {{"cmd", "guide_help"}, {"screen", "SCHEDULE"}});
+    CHECK(ok(r) && str(sub(r, "page"), "id") == "GW-SCHEDULE");
+
     // A form's page is made from the form: edit the form, the page follows.
     r = call(core, {{"cmd", "form_template_get"}, {"form", "BOOK"}});
     std::string ft = str(r, "text");

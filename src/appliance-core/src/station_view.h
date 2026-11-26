@@ -145,5 +145,10 @@ std::string name_channels(const std::string& reply_json, const ChannelNames& nam
 // nullopt for any other cmd.
 std::optional<std::string> handle(Core& core, const std::string& cmd, std::map<std::string, std::string>& req);
 
+// identity_set in training (ask 39): the addresses checked as identity_set
+// checks them, and nothing written. The amateur address file is the whole
+// box's and the scanner reads it live, so practice never changes it.
+std::string identity_check(std::map<std::string, std::string>& req);
+
 }  // namespace sv
 }  // namespace pna

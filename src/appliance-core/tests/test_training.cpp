@@ -14,12 +14,14 @@
 #include "../src/loopback_modem.h"
 #include "../src/ops.h"
 #include "../src/station.h"
+#include "../src/station_view.h"
 #include "check.h"
 
 #include <atomic>
 #include <chrono>
 #include <ctime>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <thread>
 #include <unistd.h>
@@ -82,9 +84,24 @@ static void toggle_with_others_open(Station& s) {
     Core& core = *s.core;
     CHECK(ok(call(core, {{"cmd", "training"}, {"on", "Y"}})));  // fills the practice store once
     // Training never writes the station's own files (asks 33, 34).
-    for (const char* c : {"identity_set", "settings_set"}) {
-        JsonValue r = call(core, {{"cmd", c}, {"addresses", "N0CALL"}, {"key", "world"}, {"value", "mars"}});
+    {
+        JsonValue r = call(core, {{"cmd", "settings_set"}, {"key", "world"}, {"value", "mars"}});
         CHECK(!ok(r) && r.get("error") && r.get("error")->s.find("training") != std::string::npos);
+    }
+    // Ask 39: identity_set in training checks the addresses and writes
+    // nothing: the amateur address file is the whole box's.
+    {
+        const fs::path own = fs::path(sv::paths().amateur_own);
+        fs::create_directories(own.parent_path());
+        { std::ofstream f(own); f << "K0TEST\n"; }
+        JsonValue r = call(core, {{"cmd", "identity_set"}, {"addresses", "n0call, N0CALL@"}});
+        CHECK(ok(r) && r.get("written") && !r.get("written")->b && r.get("training") && r.get("training")->b);
+        CHECK(r.get("addresses") && r.get("addresses")->arr.size() == 2);
+        r = call(core, {{"cmd", "identity_set"}, {"addresses", "N0CALL/P"}});
+        CHECK(!ok(r));  // checked as the real call checks
+        std::ifstream f(own);
+        std::string body((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+        CHECK(body == "K0TEST\n");
     }
     std::atomic<bool> run{true};
     std::atomic<long> calls{0}, bad{0};
@@ -232,6 +249,11 @@ int main() {
     fs::path dir = fs::temp_directory_path() / ("pna_training_" + std::to_string(::getpid()));
     fs::remove_all(dir);
     fs::create_directories(dir);
+    {
+        sv::Paths p;
+        p.gale_dir = (dir / "gale").string();
+        sv::set_paths(p);
+    }
     {
         Station s;
         make_station(dir, s);

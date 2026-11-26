@@ -834,8 +834,15 @@ kiosk's startup call prompt saves through `identity_set`.
   scanner can't be told, the save still stands and `note` says the scanner
   reads the file at its next start.
 
-Refused: a bad address (the file is left as it was), the amateur file set to
-MARS's own-address file, and training (it never writes the station's files).
+Refused: a bad address (the file is left as it was) and the amateur file set
+to MARS's own-address file.
+
+In training (ask 39) `identity_set` checks the addresses exactly as above and
+writes nothing: the amateur address file belongs to the whole box, not the
+practice station, and the scanner reads it live, so practice must never change
+what the real station answers to. The reply is `{ok, training:true, world,
+addresses[], listen_only, written:false, scanner_reloaded:false, note}`; a bad
+address is refused as usual. `identity_get` in training reads the real file.
 
 ### word_feed
 
@@ -941,12 +948,17 @@ memory after use and never written to the log.
   Given the id of one part of a long tape, it gathers the set; with parts
   missing it returns `ok` false, `error`, `tag`, `from`, `parts`, `have`,
   `missing_parts` and `id`.
-- `keys_list` also gives each key's `check`, to read by voice.
 - `keys_list`: `keys`, each with `indicator`, `net`, `tape`, `from`, `until`,
-  `state`, `cipher` (the module the key is for) and `usable` (false when that
-  module isn't in the slot).
+  `state`, `check` (to read by voice), `cipher` (the module the key is for) and
+  `usable` (false when that module isn't in the slot).
 - `key_zeroize {which}`: wipes one key (`QXR01`) or a whole tape (`QXR`).
   Returns `zeroized`, the count.
+
+Checked against the code at this tip (ask 39): every shape above is what the
+core answers. Two things changed since fb1ec9f. In training these four calls
+work on the practice station's own keyring (DB_DIR/CALL.training/), never the
+real one, and each reply carries `"training":true`. And a call that carries a
+`world` other than `mars` is refused before it runs (ask 37).
 
 ### This station's keys
 
@@ -1147,7 +1159,12 @@ docs/cipher-slot.md is the spec.
   `lib/`, or a packet folder holding `cipher/`). It must pass every slot
   check. Returns the same as `cipher_status`.
 - `cipher_remove`: takes the installed module out; `pna-aes` is back in the
-  slot. Keys for the removed module stay held but aren't used.
+  slot. Keys for the removed module stay held but aren't used. With no module
+  installed it answers `ok` false, `error` "no installed cipher module".
+
+`cipher_install` and `cipher_remove` are refused in training (the slot is the
+real station's). `cipher_status` there describes the practice station's slot,
+which always holds `pna-aes`.
 
 ## Working with MSC stations
 
