@@ -740,7 +740,8 @@ available to copy.
   to 16 letters, digits or `- / . _`, with a letter, never a frequency, kept
   in capitals; left out it is kept, sent empty it is cleared. `ant_rx` and `ant_tx` are the tuner
   ports the channel receives and transmits on: `1` or `2`, blank meaning 1;
-  anything else is refused. A new channel, and every channel in a plan
+  anything else is refused. Left out, each keeps the channel's port (the
+  CHANNEL form leaves out a port left blank). A new channel, and every channel in a plan
   written before these fields, is 1 and 1. A frequency card imported again
   keeps the ports set by hand, and the world and label. Returns `name`,
   `result` (`added`, `replaced` or `same`), `frequency_changed`, `mode`,

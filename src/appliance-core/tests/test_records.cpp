@@ -282,6 +282,16 @@ void locks(const fs::path& dir) {
 
     CHECK(records::set_locked({}, &err));
     CHECK(ok(api(c, {{"cmd", "channel_put"}, {"name", "P1"}, {"ant_tx", "2"}})));
+    // The CHANNEL form with the ports left out keeps the ports held: a TX
+    // port set to 2 is not put back to 1.
+    CHECK(ok(api(c, {{"cmd", "channel_put"}, {"name", "P1"}, {"ant_rx", "2"}})));
+    r = api(c, {{"cmd", "form_submit"}, {"form", "CHANNEL"}, {"name", "P1"}, {"use", "PRIMARY"}});
+    CHECK(ok(r) && A.ops->channels().get("P1")->use == "PRIMARY");
+    CHECK(A.ops->channels().get("P1")->ant_tx == 2 && A.ops->channels().get("P1")->ant_rx == 2);
+    // A new channel with none given takes port 1.
+    CHECK(ok(api(c, {{"cmd", "form_submit"}, {"form", "CHANNEL"}, {"name", "P7"}, {"frequency", "7000"}})));
+    CHECK(A.ops->channels().get("P7") && A.ops->channels().get("P7")->ant_tx == 1 &&
+          A.ops->channels().get("P7")->ant_rx == 1);
     A.core->stop();
 }
 
