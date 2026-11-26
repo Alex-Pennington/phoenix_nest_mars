@@ -57,10 +57,12 @@ int main() {
     // ---- the table: every config key is a row; host plumbing is locked ------
     for (const char* k : {"db-dir", "api-port", "web-port", "link-socket", "tx-cmd", "gale-dir", "keying-file"})
         CHECK(settings::find(k) && settings::find(k)->cls == "locked");
-    for (const char* k : {"station", "tx-mode", "world", "tx_world", "ptt_line", "cat_ptt", "engineering_readouts",
+    for (const char* k : {"station", "tx-mode", "world", "ptt_line", "cat_ptt", "engineering_readouts",
                           "no-acks", "max-attempts", "handling", "raw-rx-log"})
         CHECK(settings::find(k) && settings::find(k)->cls == "operator");
     CHECK(settings::find("ptt_line")->key == "ptt-line" && !settings::find("frequency"));
+    // tx-world retired (greybeard-ale #18 v2.2): a send carries its own service.
+    CHECK(!settings::find("tx-world") && !settings::find("tx_world"));
 
     // ---- values checked ----------------------------------------------------
     std::string n, e;
@@ -99,8 +101,8 @@ int main() {
     CHECK(str(*row(v, "station"), "value") == "CFG" && str(*row(v, "station"), "source") == "config");
     CHECK(!row(v, "api-port"));  // locked rows only with all=Y
     CHECK(row(v, "amateur-calls") && str(*row(v, "amateur-calls"), "call") == "identity_set");
-    // No net_plans and no world file: an amateur station, transmitting amateur.
-    CHECK(str(*row(v, "world"), "value") == "amateur" && str(*row(v, "tx-world"), "value") == "amateur");
+    // No net_plans and no world file: an amateur station. No tx-world row.
+    CHECK(str(*row(v, "world"), "value") == "amateur" && !row(v, "tx-world"));
     CHECK(str(*row(v, "cat-ptt"), "value") == "no" && str(*row(v, "engineering-readouts"), "value") == "no");
     v = call({{"cmd", "settings_list"}, {"all", "Y"}});
     CHECK(row(v, "api-port") && str(*row(v, "api-port"), "class") == "locked");
@@ -129,7 +131,7 @@ int main() {
     CHECK(ok(v) && str(v, "value") == "DTR" && str(v, "applies") == "now");
     JsonValue k;
     CHECK(parse_json(slurp(gale / "keying.json"), k) && str(k, "ptt_line") == "DTR" && !bl(k, "cat_ptt"));
-    CHECK(str(k, "world") == "amateur" && str(k, "tx_world") == "amateur" && str(k, "station") == "CFG");
+    CHECK(str(k, "world") == "amateur" && !k.get("tx_world") && str(k, "station") == "CFG");
 
     // cat-ptt on: the kill-switch warning, and the operator's yes.
     v = call({{"cmd", "settings_set"}, {"key", "cat_ptt"}, {"value", "yes"}});
@@ -140,17 +142,16 @@ int main() {
     CHECK(parse_json(slurp(gale / "keying.json"), k) && bl(k, "cat_ptt"));
     CHECK(ok(call({{"cmd", "settings_set"}, {"key", "cat_ptt"}, {"value", "no"}})));  // off needs no yes
 
-    // world: needs a yes, writes the scanner's world file, keeps tx-world fitting.
+    // world: needs a yes, writes the scanner's world file. No tx-world follows it.
     v = call({{"cmd", "settings_set"}, {"key", "world"}, {"value", "both"}});
     CHECK(!ok(v) && bl(v, "confirm_needed"));
     v = call({{"cmd", "settings_set"}, {"key", "world"}, {"value", "both"}, {"confirm", "Y"}});
     CHECK(ok(v) && slurp(gale / "world") == "both\n");
-    v = call({{"cmd", "settings_set"}, {"key", "tx-world"}, {"value", "mars"}, {"confirm", "Y"}});
-    CHECK(ok(v) && settings::value("tx-world") == "mars");
     v = call({{"cmd", "settings_set"}, {"key", "world"}, {"value", "amateur"}, {"confirm", "Y"}});
-    CHECK(ok(v) && v.get("also_set") && settings::value("tx-world") == "amateur");
+    CHECK(ok(v) && !v.get("also_set"));
     v = call({{"cmd", "settings_set"}, {"key", "tx-world"}, {"value", "mars"}, {"confirm", "Y"}});
-    CHECK(!ok(v) && settings::value("tx-world") == "amateur");  // not a world it works
+    CHECK(!ok(v));  // retired: no such setting
+    CHECK(parse_json(slurp(gale / "keying.json"), k) && !k.get("tx_world"));
 
     // The keying call: the same object as the file.
     v = call({{"cmd", "keying_settings"}});

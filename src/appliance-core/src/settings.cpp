@@ -92,14 +92,7 @@ std::vector<Row> make_table() {
         r.warning = "The scanner restarts on the new plan: about 30 seconds with no scanning.";
         t.push_back(r);
     }
-    {
-        Row r = pick("tx-world", "Worlds", "Transmit in", {"mars", "amateur"}, "",
-                     "The world this station transmits in. It must be one of the worlds it works; the keying "
-                     "service refuses a transmission from the other.");
-        r.gate = "confirm";
-        r.applies = "now";
-        t.push_back(r);
-    }
+    // tx-world retired (greybeard-ale #18 v2.2): a send carries its own service.
     // ---- Keying (design section 8) ----
     {
         Row r = pick("ptt-line", "Keying", "PTT line", {"RTS", "DTR"}, "",
@@ -219,7 +212,7 @@ Start g_start;
 std::map<std::string, std::string> g_started;  // each value in force at start
 
 const std::set<std::string>& keying_keys() {
-    static const std::set<std::string> k = {"world", "tx-world", "ptt-line", "cat-ptt", "engineering-readouts"};
+    static const std::set<std::string> k = {"world", "ptt-line", "cat-ptt", "engineering-readouts"};
     return k;
 }
 
@@ -253,25 +246,20 @@ std::string value_locked(const std::string& key, std::string* source) {
     }
     if (key == "world") return world_default(source);
     if (source) *source = "default";
-    if (key == "tx-world") return value_locked("world", nullptr) == "amateur" ? "amateur" : "mars";
     if (key == "keying-file") return (fs::path(g_start.gale_dir) / "keying.json").string();
     if (const Row* r = find(key)) return r->def;
     return "";
 }
 
-bool fits(const std::string& world, const std::string& tx) { return world == "both" || world == tx; }
-
 std::string keying_json_locked(int64_t now) {
-    std::string ptt = value_locked("ptt-line", nullptr), world = value_locked("world", nullptr),
-                tx = value_locked("tx-world", nullptr);
-    if (!fits(world, tx)) tx = world;
+    // No tx_world: a send carries its own service (greybeard-ale #18 v2.2).
+    std::string ptt = value_locked("ptt-line", nullptr), world = value_locked("world", nullptr);
     JsonWriter w;
     w.begin_object().field("version", 1);
     if (ptt.empty()) w.field_null("ptt_line");
     else w.field("ptt_line", ptt);
     w.field("cat_ptt", value_locked("cat-ptt", nullptr) == "yes")
         .field("world", world)
-        .field("tx_world", tx)
         .field("engineering_readouts", value_locked("engineering-readouts", nullptr) == "yes")
         .field("station", value_locked("station", nullptr))
         .field("updated_at", static_cast<long long>(now))
@@ -312,7 +300,7 @@ void write_row(JsonWriter& w, const Row& r) {
     if (r.type == "action") {
         w.field("call", r.call);
     } else {
-        w.field("value", v).field("default", r.key == "world" || r.key == "tx-world" ? "" : r.def).field("source",
+        w.field("value", v).field("default", r.key == "world" ? "" : r.def).field("source",
                                                                                                          source);
         auto it = g_started.find(r.key);
         w.field("pending_restart", r.applies == "restart" && it != g_started.end() && it->second != v);
@@ -360,17 +348,6 @@ std::string settings_set(std::map<std::string, std::string>& req, int64_t now, b
     bool confirmed = req["confirm"] == "Y" || req["confirm"] == "true";
     bool gated = r->gate == "confirm" && now_v != old && (r->key != "cat-ptt" || now_v == "yes");
     std::vector<std::pair<std::string, std::string>> also;
-    if (r->key == "world" || r->key == "tx-world") {
-        std::string world = value_locked("world", nullptr), tx = value_locked("tx-world", nullptr);
-        if (!fits(world, tx)) {
-            if (r->key == "tx-world") {
-                g_start = before;
-                return error_reply("tx-world: " + tx + " isn't a world this station works (world is " + world + ")");
-            }
-            g_start.op["tx-world"] = world;  // the world it now works
-            also.emplace_back("tx-world", world);
-        }
-    }
     if (gated && !confirmed) {
         g_start = before;
         JsonWriter w;

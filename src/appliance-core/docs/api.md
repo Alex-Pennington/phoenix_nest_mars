@@ -954,14 +954,13 @@ the operator edits every other setting, the station call included.
   one in force since start. `group` filters (Station, Worlds, Keying,
   Display, Traffic, Book); locked rows show only with `all:"Y"`.
 - `settings_set {key, value, confirm?}`: `key` takes `-` or `_`
-  (`ptt_line`). A row with `gate:"confirm"` (station, world, tx-world, and
+  (`ptt_line`). A row with `gate:"confirm"` (station, world, and
   cat-ptt when turned on) answers `{ok:false, confirm_needed:true, warning}`
   until it is sent again with `confirm:"Y"`. Reply: `{ok, key, value,
   changed, applies, restart_needed, also_set[]?, keys_made?, fingerprint?,
   note?}`. A new station call has its keys made at once (`fingerprint`) and
   starts its own message store at the next start. A new `world` is written to
-  GALE-DIR/world, the file the scanner picks its world from; when tx-world no
-  longer fits it, tx-world follows (`also_set`).
+  GALE-DIR/world, the file the scanner picks its world from.
 - `settings_reset {key}`: drops the operator's value; the config's or the
   default stands again.
 - `keying_settings {}` returns `{ok, keying, file}`, `keying` being the
@@ -995,7 +994,7 @@ row:
 
 ```
 {"version":1,"ptt_line":"RTS"|null,"cat_ptt":false,"world":"both",
- "tx_world":"mars","engineering_readouts":false,"station":"CALL",
+ "engineering_readouts":false,"station":"CALL",
  "updated_at":UNIX}
 ```
 
