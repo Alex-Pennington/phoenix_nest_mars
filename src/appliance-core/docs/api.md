@@ -695,7 +695,11 @@ one):
   file) in the last `incoming_s` seconds, `{caller, called[], channel, end}`,
   or null.
 - `last_word {unix, channel, window, sinad, engine}`, `last_hour {words, gaps,
-  local, partial}` (`partial`: the log read didn't reach an hour back),
+  local, station, remote, primary, partial}` (`partial`: the log read didn't
+  reach an hour back). The counts go by each word's `engine`: `station` is the
+  terminal's own engine and `remote` the overflow engine, both primary decodes
+  (`primary` is the two together); `local` is ale-scan's in-process fallback.
+  A word with no engine named counts in `words` only.
   `source` (the word log's file name), `own_address_file`.
 
 ### heard_stations
@@ -725,7 +729,8 @@ doesn't edit it.
   restarts}`: counts since the last start, read as gale-term read them.
 - `radio {available, radio, why, t?}`: the launcher's own word, e.g. "no
   radio" and why.
-- `words_last_hour {words, gaps, local, partial}`.
+- `words_last_hour {words, gaps, local, station, remote, primary, partial}`,
+  counted as in `word_feed`.
 - `scanner {reachable, state, engine, clock, why?}` or null.
 - `sources`: the files read.
 
@@ -736,6 +741,12 @@ first: `{name, size, open, start?, seconds?, trigger?, channel?, window?,
 clock?, lost_s?, modems, payloads}`. `open`: no sidecar yet (being written, or
 cut off). `modems`: a modem verdict file is beside it; `payloads`: decoded
 payload files. Playback isn't ruled on and isn't offered.
+
+With `--captures-fallback` set, the fallback folder the engine writes to while
+the data store fails is listed too. A capture in both is listed once, from the
+store. The reply then also has `store_folder` and `fallback_folder` (each:
+the folder is there), and each capture `fallback` (true: it is in the
+fallback folder). It is `available` when either folder is there.
 
 ## Keys, cards and signatures
 

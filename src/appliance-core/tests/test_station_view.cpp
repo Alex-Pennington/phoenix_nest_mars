@@ -169,12 +169,12 @@ static const char* kPlan =
     "record 17532975:NETB\n";
 
 static std::string word(double unix, double khz, const char* type, const char* chars, double sinad = 12.5,
-                        int window = 1, bool gap = false) {
+                        int window = 1, bool gap = false, const char* engine = "local") {
     char b[400];
     std::snprintf(b, sizeof b,
                   R"({"unix":%.3f,"khz":%.3f,"type":"%s","chars":"%s","word":"a1b2c3","sinad":%.1f,"fec":0,)"
-                  R"("votes":3,"engine":"local","gap":%s,"window":%d,"tx":0,"clock":"wwv","offset_hz":12.0})",
-                  unix, khz, type, chars, sinad, gap ? "true" : "false", window);
+                  R"("votes":3,"engine":"%s","gap":%s,"window":%d,"tx":0,"clock":"wwv","offset_hz":12.0})",
+                  unix, khz, type, chars, sinad, engine, gap ? "true" : "false", window);
     return b;
 }
 
@@ -282,9 +282,13 @@ int main() {
     // An older day file, then today's: the newest is read.
     write(gale / "words-20200101.jsonl", word(now - 99999, 13579.246, "TIS", "OLD") + "\n");
     for (auto& l : {word(now - 30, 13579.246, "TIS", "AB1"), word(now - 29.6, 13579.246, "DATA", "XY@"),
-                    word(now - 20, 17531.864, "TO", "CD2", 9.0, 2), word(now - 19.6, 17531.864, "DATA", "ZZ@", 9.0, 2),
-                    word(now - 19.5, 17531.864, "TIS", "AB1", 9.0, 2), word(now - 19.2, 17531.864, "DATA", "XY@", 9.0, 2),
-                    word(now - 10, 4864.213, "TIS", "GH4", 5.0, 3, true), word(now - 2, 17532.975, "TIS", "AB1", 20.0, 2),
+                    // The terminal's own engine decoded this call, the overflow engine the
+                    // gap word (phoenix_nest_mars#3, ask 12); the rest are ale-scan's fallback.
+                    word(now - 20, 17531.864, "TO", "CD2", 9.0, 2, false, "station"),
+                    word(now - 19.6, 17531.864, "DATA", "ZZ@", 9.0, 2, false, "station"),
+                    word(now - 19.5, 17531.864, "TIS", "AB1", 9.0, 2, false, "station"),
+                    word(now - 19.2, 17531.864, "DATA", "XY@", 9.0, 2, false, "station"),
+                    word(now - 10, 4864.213, "TIS", "GH4", 5.0, 3, true, "remote"), word(now - 2, 17532.975, "TIS", "AB1", 20.0, 2),
                     word(now - 1.8, 17532.975, "DATA", "XY@", 20.0, 2)})
         words += l + "\n";
     words += "garbage line\n";
@@ -322,7 +326,9 @@ int main() {
         }
         CHECK(str(sub(v, "incoming"), "caller") == "AB1XY" && str(sub(v, "incoming"), "channel") == "W2C1");
         CHECK(str(sub(v, "last_word"), "channel") == "NETB" && nm(sub(v, "last_word"), "window") == 2);
-        CHECK(nm(sub(v, "last_hour"), "words") == 9 && nm(sub(v, "last_hour"), "gaps") == 1 && nm(sub(v, "last_hour"), "local") == 9);
+        JsonValue lh = sub(v, "last_hour");
+        CHECK(nm(lh, "words") == 9 && nm(lh, "gaps") == 1 && nm(lh, "local") == 4);
+        CHECK(nm(lh, "station") == 4 && nm(lh, "remote") == 1 && nm(lh, "primary") == 5);
         v = parsed(api(*core, R"({"cmd":"word_feed","limit":"1"})"));
         CHECK(sub(v, "transmissions").arr.size() == 1);
         // Not ours: no incoming.
@@ -410,7 +416,9 @@ int main() {
         CHECK(bl(sl, "available") && str(sl, "state") == "running" && str(sl, "link") == "up");
         CHECK(nm(sl, "overloads") == 1 && nm(sl, "restarts") == 1 && str(sl, "last_visit") == "engine");
         CHECK(str(sub(v, "radio"), "radio") == "no radio");
-        CHECK(nm(sub(v, "words_last_hour"), "words") == 9);
+        JsonValue wh = sub(v, "words_last_hour");
+        CHECK(nm(wh, "words") == 9 && nm(wh, "local") == 4 && nm(wh, "station") == 4 && nm(wh, "remote") == 1 &&
+              nm(wh, "primary") == 5);
         // A stop and a stale clock.
         write(gale / "ale-scan.log", "[ale_scan_gangleri] 2026-11-25T10:00:00Z starting ale-scan\n"
                                      "[ale_scan_gangleri] 2026-11-25T11:00:00Z stopped; no plan: x\n");
@@ -445,6 +453,37 @@ int main() {
         }
         v = parsed(api(*core, R"({"cmd":"captures_list","limit":"1"})"));
         CHECK(sub(v, "captures").arr.size() == 1);
+        CHECK(!v.get("fallback_folder") && !sub(v, "captures").arr[0].get("fallback"));  // no fallback set
+
+        // The engine's fallback folder too (phoenix_nest_mars#3, ask 11): a
+        // capture only there is listed from it; one in both, once, from the store.
+        fs::path fb = gale / "fallback/captures";
+        write(fb / "20991231T000004Z_down.wav", std::string(500, 'x'));
+        write(fb / "20991231T000004Z_down.json", R"({"seconds":2,"trigger":"data","label":"NETB"})");
+        write(fb / "20991231T000004Z_down.modems.json", "{}");
+        write(fb / "20991231T000004Z_down.m110a.0.bin", "x");
+        write(fb / "20991231T000002Z_net.wav", std::string(10, 'x'));
+        sv::Paths pf = p;
+        pf.captures_fallback = fb.string();
+        sv::set_paths(pf);
+        r = api(*core, R"({"cmd":"captures_list"})");
+        v = parsed(r);
+        CHECK(okv(v) && bl(v, "available") && nm(v, "total") == 4 && no_freq(r));
+        CHECK(bl(v, "store_folder") && bl(v, "fallback_folder"));
+        c = sub(v, "captures");
+        CHECK(c.arr.size() == 4);
+        if (c.arr.size() == 4) {
+            CHECK(str(c.arr[0], "name") == "20991231T000004Z_down" && bl(c.arr[0], "fallback"));
+            CHECK(!bl(c.arr[0], "open") && bl(c.arr[0], "modems") && nm(c.arr[0], "payloads") == 1);
+            CHECK(str(c.arr[2], "name") == "20991231T000002Z_net" && !bl(c.arr[2], "fallback"));
+            CHECK(str(c.arr[2], "trigger") == "net");  // the store's copy, with its sidecar
+        }
+        // The store folder gone: the fallback alone is listed.
+        pf.captures = (gale / "no-such-captures").string();
+        sv::set_paths(pf);
+        v = parsed(api(*core, R"({"cmd":"captures_list"})"));
+        CHECK(okv(v) && bl(v, "available") && nm(v, "total") == 2 && !bl(v, "store_folder"));
+        sv::set_paths(p);
     }
 
     // ---- the scanner: status and orders ----------------------------------------

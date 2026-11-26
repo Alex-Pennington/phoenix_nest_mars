@@ -442,6 +442,25 @@ std::string scanner_order(Core& core, const std::string& line) {
     return named;
 }
 
+// The last hour's words, counted by the engine that decoded them (the word's
+// "engine" field): "station" is the terminal's own engine and "remote" the
+// overflow engine, both primary decodes; "local" is ale-scan's in-process
+// fallback (phoenix_nest_mars#3, ask 12). "primary" is station + remote, and
+// words with no engine named (older logs) count in "words" only.
+void write_hour_counts(JsonWriter& w, const WordLog& L, double now) {
+    int n = 0, g = 0, st = 0, re = 0, lo = 0;
+    for (auto& x : L.words)
+        if (now - x.unix <= 3600) {
+            ++n;
+            g += x.gap;
+            st += x.engine == "station";
+            re += x.engine == "remote";
+            lo += x.engine == "local";
+        }
+    w.field("words", n).field("gaps", g).field("local", lo).field("station", st).field("remote", re).field("primary",
+                                                                                                         st + re);
+}
+
 std::string word_feed(Core& core, std::map<std::string, std::string>& req) {
     Paths p = paths();
     double now = now_d();
@@ -493,15 +512,10 @@ std::string word_feed(Core& core, std::map<std::string, std::string>& req) {
             .field("engine", lw.engine)
             .end_object();
     }
-    int hw = 0, hg = 0, hl = 0;
-    for (auto& x : L.words)
-        if (now - x.unix <= 3600) {
-            ++hw;
-            hg += x.gap;
-            hl += x.engine == "local";
-        }
     bool partial = L.cut && !L.words.empty() && now - L.words.front().unix < 3600;
-    w.begin_object("last_hour").field("words", hw).field("gaps", hg).field("local", hl).field("partial", partial).end_object();
+    w.begin_object("last_hour");
+    write_hour_counts(w, L, now);
+    w.field("partial", partial).end_object();
     write_store(w, p);
     w.end_object();
     return w.str();
@@ -820,14 +834,7 @@ std::string station_health(Core& core) {
         WordLog L = read_word_log(p);
         w.begin_object("words_last_hour").field("available", L.available);
         if (L.available) {
-            int n = 0, g = 0, l = 0;
-            for (auto& x : L.words)
-                if (now - x.unix <= 3600) {
-                    ++n;
-                    g += x.gap;
-                    l += x.engine == "local";
-                }
-            w.field("words", n).field("gaps", g).field("local", l);
+            write_hour_counts(w, L, now);
             w.field("partial", L.cut && !L.words.empty() && now - L.words.front().unix < 3600);
         } else {
             w.field("why", L.why);
@@ -865,32 +872,49 @@ std::string captures_list(Core& core, std::map<std::string, std::string>& req) {
     JsonWriter w;
     w.begin_object().field("ok", true);
     std::error_code ec;
-    if (!fs::is_directory(p.captures, ec)) {
+    // The store's folder, then the fallback the engine writes to while the
+    // store fails (phoenix_nest_mars#3, ask 11). A capture is listed once, by
+    // name, from the store's folder when it is in both.
+    const bool store_there = fs::is_directory(p.captures, ec);
+    const bool fb_set = !p.captures_fallback.empty() && p.captures_fallback != p.captures;
+    const bool fb_there = fb_set && fs::is_directory(p.captures_fallback, ec);
+    if (!store_there && !fb_there) {
         w.field("available", false).field("why", "no capture folder at " + p.captures).begin_array("captures").end_array();
         write_store(w, p);
         w.end_object();
         return w.str();
     }
-    std::vector<std::string> wavs;
-    std::set<std::string> files;
-    for (auto& e : fs::directory_iterator(p.captures, ec)) {
-        std::string n = e.path().filename().string();
-        files.insert(n);
-        if (n.size() > 4 && n.compare(n.size() - 4, 4, ".wav") == 0 && e.is_regular_file(ec)) wavs.push_back(n);
+    std::map<std::string, std::string> wav_dir;           // capture file -> its folder
+    std::map<std::string, std::set<std::string>> files;   // folder -> its files
+    for (auto* d : {&p.captures, &p.captures_fallback}) {
+        if (d == &p.captures ? !store_there : !fb_there) continue;
+        auto& here = files[*d];
+        for (auto& e : fs::directory_iterator(*d, ec)) {
+            std::string n = e.path().filename().string();
+            here.insert(n);
+            if (n.size() > 4 && n.compare(n.size() - 4, 4, ".wav") == 0 && e.is_regular_file(ec)) wav_dir.emplace(n, *d);
+        }
     }
+    std::vector<std::string> wavs;
+    for (auto& kv : wav_dir) wavs.push_back(kv.first);
     std::sort(wavs.rbegin(), wavs.rend());
-    w.field("available", true).field("total", static_cast<long long>(wavs.size())).begin_array("captures");
+    w.field("available", true).field("total", static_cast<long long>(wavs.size()));
+    if (fb_set) w.field("store_folder", store_there).field("fallback_folder", fb_there);
+    w.begin_array("captures");
     for (size_t i = 0; i < wavs.size() && static_cast<int>(i) < limit; ++i) {
         const std::string& n = wavs[i];
+        const std::string& dir = wav_dir[n];
+        const std::set<std::string>& here = files[dir];
         std::string base = n.substr(0, n.size() - 4);
         w.begin_object().field("name", base);
-        auto sz = fs::file_size(fs::path(p.captures) / n, ec);
+        if (fb_set) w.field("fallback", dir == p.captures_fallback);
+        auto sz = fs::file_size(fs::path(dir) / n, ec);
         if (ec) w.field_null("size");
         else w.field("size", static_cast<long long>(sz));
         JsonValue d;
         double mt = 0;
         std::string why;
-        if (read_json_file((fs::path(p.captures) / (base + ".json")).string(), &d, &mt, &why)) {
+        if (read_json_file((fs::path(dir) / (base + ".json")).string(), &d, &mt, &why)) {
             w.field("open", false);
             if (auto t = num(d, "utc_start_unix")) w.field("start", rounded(t->n));
             if (auto s = num(d, "seconds")) w.raw("seconds", one_decimal(s->n));
@@ -906,9 +930,9 @@ std::string captures_list(Core& core, std::map<std::string, std::string>& req) {
         } else {
             w.field("open", true);  // no sidecar yet: still being written, or cut off
         }
-        w.field("modems", files.count(base + ".modems.json") > 0);
+        w.field("modems", here.count(base + ".modems.json") > 0);
         int payloads = 0;
-        for (auto it = files.lower_bound(base + "."); it != files.end() && it->rfind(base + ".", 0) == 0; ++it)
+        for (auto it = here.lower_bound(base + "."); it != here.end() && it->rfind(base + ".", 0) == 0; ++it)
             if (it->size() > 4 && it->compare(it->size() - 4, 4, ".bin") == 0) ++payloads;
         w.field("payloads", payloads).end_object();
     }

@@ -40,6 +40,10 @@ tx-mode = 600S
 # greybeard-ale's capture directory: the core reads decoded bursts from it.
 captures =
 
+# The engine's local fallback while the data store fails (on the terminal,
+# local/fallback/captures). Watched too; blank: none.
+captures-fallback =
+
 # Where burst WAVs go for greybeard-ale's transmit stage. Blank: in db-dir.
 outbox =
 

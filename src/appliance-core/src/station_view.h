@@ -29,6 +29,8 @@
 //   scan-plan      the scanner's plan, for channel labels (default GALE/plans/scan.plan)
 //   radio-file     the launcher's radio.json (default GALE/radio.json)
 //   captures       the engine's capture folder (the core's --captures, else GALE/captures)
+//   captures-fallback  where the engine writes captures while the store fails
+//                  (the core's --captures-fallback; no default: not read)
 //   store-root     the data store's mount point; when set, every reply says
 //                  whether it is mounted (no default: not checked)
 // On Gangleri they point under /srv/greybeard-store/greybeard-ale/gangleri/.
@@ -51,7 +53,7 @@ namespace sv {
 struct Paths {
     std::string gale_dir;
     std::string words, scan_log, wwv_dir, gps, health, engine_status, lqa_db, favourites, own, scan_plan, radio,
-        captures, store_root;
+        captures, captures_fallback, store_root;
     // Each empty one filled with its default under gale_dir ("." when empty).
     Paths resolved() const;
 };

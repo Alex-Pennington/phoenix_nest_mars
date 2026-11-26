@@ -41,7 +41,9 @@ Needs a C++17 compiler, CMake, SQLite3, OpenSSL 3 (libcrypto) and python3
   byte count and sha256, and takes the bytes. A file still being written is
   waited for (30 s); a wrong one is skipped and logged. Listings already handled
   are kept in `DB-DIR/NAME-captures-seen.txt`; on a first start everything
-  already in the directory counts as handled.
+  already in the directory counts as handled. `--captures-fallback DIR` adds the
+  local folder the engine writes to while the data store fails: both are
+  watched, and a listing is taken once by its name, whichever folder holds it.
 - **Operator.** gale-term's Messages panel (`--core-port`) or `appliance-cli`.
 
 `CAPTURE.modems.json` is read as greybeard-ale's `tools/modem_verdict.py` writes

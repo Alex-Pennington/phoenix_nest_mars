@@ -80,7 +80,7 @@ void GreybeardModem::event(const std::string& text) {
 
 void GreybeardModem::start(Callbacks cb) {
     cb_ = std::move(cb);
-    for (const std::string& d : {cfg_.work_dir, cfg_.outbox_dir, cfg_.captures_dir})
+    for (const std::string& d : {cfg_.work_dir, cfg_.outbox_dir, cfg_.captures_dir, cfg_.captures_fallback_dir})
         if (!d.empty()) fs::create_directories(d);
 
     // Bursts already handled. On a first start, every listing already in the
@@ -91,10 +91,12 @@ void GreybeardModem::start(Callbacks cb) {
         for (std::string line; std::getline(f, line);)
             if (!line.empty()) seen_.insert(line);
     } else if (!cfg_.captures_dir.empty()) {
-        std::error_code ec;
-        for (auto& de : fs::directory_iterator(cfg_.captures_dir, ec)) {
-            std::string n = de.path().filename().string();
-            if (ends_with(n, kListing)) mark_seen(n);
+        for (auto& d : capture_dirs()) {
+            std::error_code ec;
+            for (auto& de : fs::directory_iterator(d, ec)) {
+                std::string n = de.path().filename().string();
+                if (ends_with(n, kListing)) mark_seen(n);
+            }
         }
         if (!cfg_.state_file.empty()) std::ofstream(cfg_.state_file, std::ios::app);
     }
@@ -210,18 +212,29 @@ void GreybeardModem::rx_loop() {
     }
 }
 
+std::vector<std::string> GreybeardModem::capture_dirs() const {
+    std::vector<std::string> out;
+    if (!cfg_.captures_dir.empty()) out.push_back(cfg_.captures_dir);
+    if (!cfg_.captures_fallback_dir.empty() && cfg_.captures_fallback_dir != cfg_.captures_dir)
+        out.push_back(cfg_.captures_fallback_dir);
+    return out;
+}
+
 void GreybeardModem::scan_captures() {
-    std::vector<std::string> todo;
-    std::error_code ec;
-    for (auto& de : fs::directory_iterator(cfg_.captures_dir, ec)) {
-        std::string n = de.path().filename().string();
-        if (!ends_with(n, kListing)) continue;
-        std::lock_guard<std::mutex> g(mu_);
-        if (!seen_.count(n)) todo.push_back(n);
+    // Name -> folder; the store's folder is read first, so a listing in both
+    // is read from the store.
+    std::map<std::string, std::string> todo;  // sorted: capture names start with their time
+    for (auto& d : capture_dirs()) {
+        std::error_code ec;
+        for (auto& de : fs::directory_iterator(d, ec)) {
+            std::string n = de.path().filename().string();
+            if (!ends_with(n, kListing)) continue;
+            std::lock_guard<std::mutex> g(mu_);
+            if (!seen_.count(n)) todo.emplace(n, d);
+        }
     }
-    std::sort(todo.begin(), todo.end());  // capture names start with their time
-    for (auto& n : todo)
-        if (handle_listing(n)) mark_seen(n);
+    for (auto& [n, d] : todo)
+        if (handle_listing(n, d)) mark_seen(n);
 }
 
 void GreybeardModem::mark_seen(const std::string& name) {
@@ -236,8 +249,8 @@ void GreybeardModem::mark_seen(const std::string& name) {
     }
 }
 
-bool GreybeardModem::handle_listing(const std::string& name) {
-    fs::path dir(cfg_.captures_dir);
+bool GreybeardModem::handle_listing(const std::string& name, const std::string& in) {
+    fs::path dir(in);
     long long t = now_ms();
     long long first;
     {
@@ -269,10 +282,18 @@ bool GreybeardModem::handle_listing(const std::string& name) {
             event("skipped an entry in " + name + ": no plain file name");
             continue;
         }
+        // The payload beside its listing, else in the other folder (a move from
+        // the fallback into the store may be half done); it must match either way.
         std::string data;
-        bool good = read_file(dir / f->s, data);
-        if (good && n && n->type == JsonValue::Type::Number && static_cast<double>(data.size()) != n->n) good = false;
-        if (good && h && h->type == JsonValue::Type::String && sha256_hex(data) != h->s) good = false;
+        auto whole = [&](const std::string& d) {
+            bool ok = read_file(fs::path(d) / f->s, data);
+            if (ok && n && n->type == JsonValue::Type::Number && static_cast<double>(data.size()) != n->n) ok = false;
+            if (ok && h && h->type == JsonValue::Type::String && sha256_hex(data) != h->s) ok = false;
+            return ok;
+        };
+        bool good = whole(in);
+        for (auto& d : capture_dirs())
+            if (!good && d != in) good = whole(d);
         if (!good) {
             if (!give_up) return false;  // wait for the file to be finished
             event("skipped " + f->s + ": missing, wrong size or wrong digest");

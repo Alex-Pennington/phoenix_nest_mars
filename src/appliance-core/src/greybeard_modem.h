@@ -14,6 +14,13 @@
 // byte count and sha256. The driver watches the captures directory, checks every
 // listed file against its count and digest, and hands the bytes to the core.
 //
+// Two capture folders (phoenix_nest_mars#3, ask 11): the station's engine writes
+// to the data store and, while the store fails, to a local fallback folder. Both
+// are watched. A listing is known by its file name, whichever folder holds it,
+// so one moved from the fallback into the store is handled once. A listing's
+// payload files are read from its own folder, else from the other one (a move
+// may be half done).
+//
 // The listing is read as greybeard-ale's tools/modem_verdict.py writes it
 // ("verdicts", each decoded data burst with payload_file, payload_bytes and
 // sha256). Tested against greybeard-ale main a5a4cda with the real 110A modem on
@@ -41,6 +48,7 @@ struct GreybeardConfig {
     std::string work_dir;        // payload files go here
     std::string outbox_dir;      // BURST.wav files go here, for the transmit stage
     std::string captures_dir;    // greybeard-ale's capture directory, watched
+    std::string captures_fallback_dir;  // its local fallback, watched too (empty: none)
     std::string state_file;      // modems.json files already handled, one per line
     int tx_timeout_ms = 60000;
     int poll_ms = 500;
@@ -59,7 +67,7 @@ public:
     bool send(const std::string& bytes) override;
     std::string describe() const override;
 
-    // One pass over the captures directory; the watcher thread calls it, tests may too.
+    // One pass over the capture folders; the watcher thread calls it, tests may too.
     void scan_captures();
     // The last burst written to the outbox (for status and tests).
     std::string last_burst() const;
@@ -69,7 +77,9 @@ private:
     void rx_loop();
     void event(const std::string& text);
     // Returns true when the modems.json is finished with (handled or given up).
-    bool handle_listing(const std::string& path);
+    bool handle_listing(const std::string& name, const std::string& dir);
+    // The capture folders: the store's first, then the fallback (empty ones left out).
+    std::vector<std::string> capture_dirs() const;
     void mark_seen(const std::string& name);
 
     GreybeardConfig cfg_;

@@ -72,6 +72,8 @@ void usage() {
         "  --tx-cmd PROG         gale-tx, or a stand-in (default gale-tx)\n"
         "  --tx-arg ARG          an argument put before gale-tx's own (repeatable)\n"
         "  --captures DIR        greybeard-ale's capture directory (watched)\n"
+        "  --captures-fallback DIR  its local fallback while the data store fails, watched\n"
+        "                        too; a capture is taken once, from either (default none)\n"
         "  --outbox DIR          where burst WAVs go (default DB-DIR/outbox)\n"
         "  --db-dir DIR          the store, work files and state (default .)\n"
         "  --api-port N          local API on 127.0.0.1:N (default 4100)\n"
@@ -284,7 +286,7 @@ std::string find_program(const std::string& prog) {
 }  // namespace
 
 int main(int argc, char** argv) {
-    std::string pair, db_dir = ".", station, tx_mode, captures, outbox;
+    std::string pair, db_dir = ".", station, tx_mode, captures, captures_fallback, outbox;
     std::string tx_prog = "gale-tx";
     std::vector<std::string> tx_args;
     std::string advisor_prog;
@@ -344,6 +346,7 @@ int main(int argc, char** argv) {
             else if (a == "--tx-cmd") tx_prog = next();
             else if (a == "--tx-arg") tx_args.push_back(next());
             else if (a == "--captures") captures = next();
+            else if (a == "--captures-fallback") captures_fallback = next();
             else if (a == "--outbox") outbox = next();
             else if (a == "--db-dir") db_dir = next();
             else if (a == "--loopback-bps") loop_bps = std::stoi(next());
@@ -442,6 +445,7 @@ int main(int argc, char** argv) {
     {
         sv::Paths vp = g_view;
         if (vp.captures.empty()) vp.captures = captures;
+        vp.captures_fallback = captures_fallback;
         sv::set_paths(vp);
     }
     if (!link_socket.empty()) {
@@ -518,6 +522,11 @@ int main(int argc, char** argv) {
                 std::error_code ec;
                 if (captures.empty()) problems.push_back("captures isn't set (greybeard-ale's capture directory)");
                 else if (!fs::is_directory(captures, ec)) problems.push_back("captures: " + captures + " isn't a directory");
+                if (!captures_fallback.empty()) {
+                    std::cout << "  fallback       " << captures_fallback << " (captures while the store fails)\n";
+                    if (!fs::is_directory(captures_fallback, ec))
+                        notes.push_back("captures-fallback " + captures_fallback + " isn't there yet; it is made at the first start");
+                }
             }
             std::cout << "  API            127.0.0.1:" << api_port << "\n";
             if (g_web_port) {
@@ -662,6 +671,7 @@ int main(int argc, char** argv) {
                 g.tx_cmd.insert(g.tx_cmd.end(), tx_args.begin(), tx_args.end());
                 g.mode = tx_mode;
                 g.captures_dir = captures;
+                g.captures_fallback_dir = captures_fallback;
                 g.work_dir = db_dir + "/" + station + "-work";
                 g.outbox_dir = outbox.empty() ? db_dir + "/" + station + "-outbox" : outbox;
                 g.state_file = db_dir + "/" + station + "-captures-seen.txt";

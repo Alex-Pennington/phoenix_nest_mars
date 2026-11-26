@@ -150,6 +150,59 @@ int main() {
         m2.stop();
     }
 
+    // Two capture folders (phoenix_nest_mars#3, ask 11): the store's and the
+    // local fallback the engine writes to while the store fails. Both are
+    // watched; a listing is taken once by its name, whichever folder holds it.
+    {
+        fs::path store = dir / "store-cap", fb = dir / "fallback-cap";
+        fs::create_directories(store);
+        fs::create_directories(fb);
+        write(fb / "old.modems.json", listing("old.bin", "OLDFB"));  // there before the first start
+        write(fb / "old.bin", "OLDFB");
+        GreybeardConfig c;
+        c.mode = "600S";
+        c.captures_dir = store.string();
+        c.captures_fallback_dir = fb.string();
+        c.work_dir = (dir / "w3").string();
+        c.outbox_dir = (dir / "o3").string();
+        c.state_file = (dir / "seen3.txt").string();
+        c.poll_ms = 50;
+        c.settle_ms = 400;
+        Rx rx;
+        GreybeardModem m(c);
+        m.start(rx.cb());
+        std::this_thread::sleep_for(std::chrono::milliseconds(150));
+        CHECK(rx.text().empty());  // old traffic in the fallback isn't fed in either
+        // Written to the fallback while the store was down.
+        write(fb / "e.m110a.0.bin", "FROMFB");
+        write(fb / "e.modems.json", listing("e.m110a.0.bin", "FROMFB"));
+        CHECK(wait_for([&] { return rx.text() == "FROMFB"; }, 2000));
+        // The store is back and the catch-up moves it in: not taken again.
+        fs::rename(fb / "e.m110a.0.bin", store / "e.m110a.0.bin");
+        fs::rename(fb / "e.modems.json", store / "e.modems.json");
+        // Half moved: the listing is in the store, its payload still in the fallback.
+        write(fb / "f.m110a.0.bin", "HALF");
+        write(store / "f.modems.json", listing("f.m110a.0.bin", "HALF"));
+        CHECK(wait_for([&] { return rx.text() == "FROMFBHALF"; }, 2000));
+        // In both folders at once: taken once.
+        for (auto& d : {store, fb}) {
+            write(d / "g.m110a.0.bin", "BOTH");
+            write(d / "g.modems.json", listing("g.m110a.0.bin", "BOTH"));
+        }
+        CHECK(wait_for([&] { return rx.text() == "FROMFBHALFBOTH"; }, 2000));
+        // Written to the store as usual.
+        write(store / "h.m110a.0.bin", "STORE");
+        write(store / "h.modems.json", listing("h.m110a.0.bin", "STORE"));
+        CHECK(wait_for([&] { return rx.text() == "FROMFBHALFBOTHSTORE"; }, 2000));
+        std::this_thread::sleep_for(std::chrono::milliseconds(300));
+        CHECK(rx.text() == "FROMFBHALFBOTHSTORE");
+        {
+            std::lock_guard<std::mutex> g(rx.mu);
+            CHECK(rx.decodes.size() == 4);
+        }
+        m.stop();
+    }
+
     // Send: a failing gale-tx is reported, not hidden.
     {
         GreybeardConfig c;

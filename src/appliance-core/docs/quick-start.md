@@ -48,6 +48,9 @@ and fill in:
 
 - `station`: your station's call (leave it out to set it on first start).
 - `captures`: greybeard-ale's capture directory.
+- `captures-fallback`: on the terminal, the engine's local fallback folder
+  (`local/fallback/captures`), so captures written while the store was down
+  are read too.
 - `tx-cmd`: the full path to gale-tx. The installer fills it in when gale-tx
   is on your PATH.
 

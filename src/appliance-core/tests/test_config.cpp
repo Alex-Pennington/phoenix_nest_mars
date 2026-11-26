@@ -16,12 +16,13 @@ int main() {
                            "tx-arg = --quiet\n"
                            "tx-arg = \"two words\"\n"
                            "captures =\n"
+                           "captures-fallback = /x/fallback/captures\n"
                            "link-gate = yes\n"
                            "no-acks = no\n"
                            "advisor = \"/opt/my helper # not a note\"\n",
                            &a, &err, "/home/op"));
     CHECK((a == std::vector<std::string>{"--station", "NCS-A", "--db-dir", "/home/op/data", "--tx-arg", "--quiet",
-                                         "--tx-arg", "two words", "--link-gate", "--advisor",
+                                         "--tx-arg", "two words", "--captures-fallback", "/x/fallback/captures", "--link-gate", "--advisor",
                                          "/opt/my helper # not a note"}));
 
     a.clear();
