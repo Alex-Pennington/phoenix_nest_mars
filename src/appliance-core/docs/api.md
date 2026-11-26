@@ -253,102 +253,88 @@ asks gale-key" below):
 - `standing`: the standing modes on (`machine`, `routing`, `auto_qsl`).
 - `held`: y dialogs holding a token now.
 - `answers_written`: ACK and orderwire bursts in the outbox with no result
-  from gale-key yet. They key only under the standing mode `machine`.
+  yet. They key only under the standing mode `machine`.
 
-`radio_channel` is the channel the radio is on, as `tuner_channel` last set
-it, with or without a tuner daemon (see Tuner). Clients read it here; the
-operator never types it:
+`radio_channel` is the channel the radio is on, as the station controller
+reports it (see Services). Clients read it here; the operator never types it:
 
-    "radio_channel":{"label":"P1","world":"mars","since":"2026-11-26T15:00:00Z","source":"tuner_channel"}
+    "radio_channel":{"label":"<LABEL>","service":"S","since":"2026-11-26T15:00:00Z","source":"controller"}
 
 - `label`: the channel's designator. Never a frequency.
-- `world`: the world of the channel plan's entry for `label` (`mars` or
-  `amateur`), read when the call is answered; null when the plan holds no
-  channel by that name.
-- `since`: when it was set, UTC.
-- `source`: always `tuner_channel`.
-- `label`, `world` and `since` are null when no channel has been set since
-  the core started.
+- `service`: the service of the channel plan's entry for `label`; null when
+  the plan holds no channel by that name. `world` carries the same value for
+  one release.
+- `since`: when the controller set it, UTC.
+- `source`: `controller`.
+- `label`, `service` and `since` are null when the controller has not
+  answered.
 
-## Worlds: MARS only, never amateur (ask 37)
+## Services
 
-Alex's hard rule: there is no forward or auto-copy route between MARS and
-amateur, ever. The core is the MARS message center, so every item it holds
-is MARS:
+**Layers** (MIL-STD-187-721D, with the terms of MIL-STD-188-141B Appendix D, as
+greybeard-ale #18 section 2 gives them):
 
-- Every message (`list`, `get`, the in-box row) carries `"world":"mars"`.
-- Every station-book entry carries `world` (`mars` default, or `amateur`);
-  `book_put` takes it, and `book_import`/`book_export` have a `world` column.
-- Every routing rule (`route_list`) carries `"world":"mars"`; `route_set`
-  with any other world is refused.
+- **Network.** The core is the station's networking controller (HFNC, 141B D.4.2). This
+  section defines its address list, routes and route function. Stations heard and LQA in use
+  are its path quality matrix (D.4.2.1.2). Message passing is store and forward (D.4.2.3).
+- **Application.** Compose, the formats and the in-box are Application. They call the route
+  function, and they never decide a crossing.
+- **No transport layer.** Appendix D leaves recovery by retransmission to a transport layer
+  above Network (D.4.2.3, D.5.2.5). The core's own ACK and resend code stands in for it.
+- **Below and beside.** The station controller below the core is the link controller, Data link
+  and Physical (Keying, below). The service tables beside it are Network management.
 
-A send to a station of the amateur world is refused in code, with an error
-that says why, and is never rerouted or queued. A station is amateur when it
-is one of this station's own amateur addresses (the scanner's
-`amateur/own_address.txt`), when it was heard on the amateur channels (the
-amateur word log), or when the station book marks it `amateur`. The check is
-in `Core::submit`, so it covers `send` (a collective holding one amateur
-station refuses the whole send, before any copy is queued), `compose_send`,
-`send_acp127`, `send_acp126`, `send_chat`, `retransmit`, `qsl` receipts, net
-call-ups, the BBS's machine answers and routed sends, and the resend queue;
-`requeue` and `release` check again, and so does the airtime point itself: a
-queued item whose station became amateur after it was queued is failed
-there ("refused at the air"), and an ack or answer to one is dropped with a
-log line. A routing rule naming an amateur ALE address is refused.
+The station works one or more services, such as amateur and MARS. Each service is one network,
+named by a service table (greybeard-ale `docs/services.md`). The core names no service in code:
+a service is valid when it has a table, and a value no table defines is refused, never treated
+as MARS. Alex's hard rule stands: there is no forward or auto-copy route between services, ever.
+**Routing is the only guard between services.** Nothing else refuses a message for its service.
 
-A call that carries `world` other than `mars` is refused, except calls that
-only read or set up (`word_feed`, `heard_stations`, `scanner_status`,
-`settings_*`, `identity_*`, `keying_settings`, `book_put`, `book_get`,
-`book_list`, `station_health`, `captures_list`, `status`, `channel_put`,
-`channels_list`, `channels_get_full`, and `form_get`, `form_check` and
-`form_submit`, whose action is checked again when it runs). The refusal reads
-`refused: world amateur: the MARS message center never sends, copies or
-forwards into the amateur world`; a station refusal reads `K0TEST is an
-amateur station (heard on amateur channels); the MARS message center never
-sends to the amateur world`. Broadcasts (ALL) are not a station and still go.
+- `services_list {}` returns `{ok, services[]}`. Each entry has the table's columns that carry
+  no frequency: `service`, `display_name`, `worked`, `transmit`, `formats`, `encryption`,
+  `automatic_modes`, `listen_only` (true when the service needs a call and has none) and
+  `station_id` (whether an ID goes out). The kiosk shows this list and never edits it. The
+  tables are shipped and locked.
+- **`service` on every record.** Every address-book entry (`book_put`, `book_get`,
+  `book_list`, and a `service` column in `book_import`/`book_export`), routing rule
+  (`route_list`, `route_set`), channel (`channels_list`, `channels_get_full`, `channel_put`) and
+  message (`list`, `get`, the in-box row) carries `service`. A route's service is stored. A
+  record with no service, or one that names no table, is refused.
+- **A message's service.** A message takes the service of its destination's book entry. A
+  broadcast (ALL), or an address the book does not hold, takes the `service` the operator picks
+  at compose. `send` and `compose_send` carry `service`. When it differs from the destination's,
+  the send is refused as a crossing. A collective's members must all have the message's service.
+- **Received traffic** takes the service of the channel it was heard on.
+- **A send's channel.** Channel selection is the link controller's (141B D.4.2.8.2), so the
+  core passes the operator's pick down and never sets the radio. `compose_send` and `send` take
+  `channel`, a designator of the message's service. Left out, the send uses the channel the
+  controller reports the radio on, when that channel's service is the message's.
+- **The one route function.** Every send path asks one function for its route: `send`,
+  `compose_send`, `send_acp127`, `send_acp126`, `send_chat`, replies, `qsl` receipts,
+  `retransmit`, net call-ups, BBS routing, machine answers, ACKs and orderwires, and the resend
+  queue, `requeue` and `release`. `qsl` and `retransmit` carry the source message's service. The
+  function is the only place a crossing is refused. A crossing is a message whose service differs
+  from its destination's, its route's or its channel's. The refusal names both services, and the
+  item is never rerouted or queued: `refused: crossing: an amateur message on a MARS channel
+  (<LABEL>)`. Each send path has a test that refuses a crossing.
+- **A plain format.** The `PLAIN` procedure is the operator's text alone: no ACP 127 envelope, no
+  MSC digest, no signature and no cipher. It is sent with link format `plain`. `compose_templates`
+  lists each procedure and template with the `services` it may go in. A service offers only the
+  formats its table lists in `formats`.
+- **No station-wide transmit world.** A send carries its own service. The settings row
+  `tx-world` and the keying file's `tx_world` retire.
+- **The controller, not gale-key.** The core hands each burst to greybeard-ale's station
+  controller (greybeard-ale `docs/station-controller.md`) as a network message (141B D.4.2.8),
+  and never talks to gale-key (Keying, below).
+  `radio_channel` in `status` is the controller's report of the radio's channel and its service.
+  It is no longer a label the core was told.
+- **`world` is an alias for `service` for one release.** A request carrying `world` and no
+  `service` is read as `service`, and replies carry both. Carrying both with different values is
+  refused. `both` is never a service.
 
-### Channels of the amateur world (station design v1.9, ask 40)
-
-Each channel in the plan carries `world`, `mars` (the default) or `amateur`,
-and an optional HFLink `label` (see Station files). An amateur channel is
-there for CHANNELS and to listen on. The core's routing and automatic sends
-use only MARS channels:
-
-- `net_open`, `sched_put` and `net_callup` naming an amateur channel are
-  refused (`channel: A1 is an amateur channel; a MARS net meets on a MARS
-  channel (ask 40)`);
-- a burst written while the radio was on an amateur channel is never sent to
-  gale-key (Keying, below);
-- `bundle_make` leaves amateur channels out, and `bundle_load` never changes
-  a channel this station keeps for the amateur world;
-- a frequency is named by a MARS channel's designator; the radio side names
-  one held only by an amateur channel by its label (its designator when it
-  has none), and a schedule imported with a frequency never takes an amateur
-  channel's designator.
-
-### The BBS's own automatic sends (ask 40)
-
-gale-term only guards the switch that turns routing on, so the core guards
-every automatic path itself. The BBS never answers, QSLs, lists for QRU, lets
-another station pull, or routes on a message whose world isn't `mars` or that
-came from a station of the amateur world. Each is refused with a log line
-(`BBS: ID not answered or routed: it came from K7AMA is an amateur station
-...`), never sent somewhere else:
-
-- received traffic and machine commands: no QSL, no answer, no route;
-- held traffic (QRU, ZEE pulls, `route_rerun`): an amateur sender's traffic
-  is never held;
-- a routed message is checked again when it comes due, so one whose sender
-  became amateur, or whose world changed, after it was routed is `refused`
-  with `why`;
-- `bbs_set ack_to` naming an amateur station is refused, and every answer is
-  checked before the hourly gate;
-- unacked traffic to a station later known as amateur is failed when that
-  station is heard ("not sent again"), never sent again.
-
-Behind these, every send the BBS makes goes through `Core::submit`, and every
-resend (unacked, ack timeout, `requeue`, the rule's next ALE address) passes
-the airtime check, so no rule or resend can skip the guard.
+**Automatic modes stay as they are until stage 5.** Routing, machine answers, auto-QSL and the
+BBS's automatic ACKs work for MARS only, and they keep the refusals they have today. The table
+column `automatic_modes` decides them from stage 5 on (greybeard-ale #18).
 
 ## compose_templates
 
@@ -614,7 +600,7 @@ it was heard on checks that station in with `via: "radio"` (audit C):
   open; with two or more open, it takes nobody by radio.
 - A net opened from a schedule during its sitting takes nobody by radio
   after the sitting's end, though it stays open.
-- A station of the amateur world (see Worlds) is never checked in.
+- A station of the amateur world (see Services) is never checked in.
 
 A station that checked out isn't put back in by radio. The operator can
 still check anyone in by hand. `status` adds `net`, the open net's id.
@@ -969,7 +955,7 @@ The new rows (asks 35, 36):
 | key | values | applies |
 |---|---|---|
 | `world` | `mars`, `amateur`, `both` (default: GALE-DIR/world, else mars with GALE-DIR/net_plans, else amateur) | now |
-| `tx-world` | `mars` or `amateur`, one of the worlds worked (default: amateur for an amateur station, else mars) | now |
+| `tx-world` | retires: a send carries its own service (see Services) | now |
 | `ptt-line` | `RTS` or `DTR`; must match switch S1001 in the SCU-17; unset until chosen | now |
 | `cat-ptt` | `yes`/`no`, default `no`; turning it on needs the operator's yes (a PTT-line kill switch won't stop it) | now |
 | `engineering-readouts` | `yes`/`no`, default `no` | now |
@@ -1166,8 +1152,9 @@ memory after use and never written to the log.
 Checked against the code at this tip (ask 39): every shape above is what the
 core answers. Two things changed since fb1ec9f. In training these four calls
 work on the practice station's own keyring (DB_DIR/CALL.training/), never the
-real one, and each reply carries `"training":true`. And a call that carries a
-`world` other than `mars` is refused before it runs (ask 37).
+real one, and each reply carries `"training":true`. A call that carries a
+`service` (or `world`) that no service table defines is refused before it
+runs (see Services).
 
 ### This station's keys
 
@@ -1556,8 +1543,9 @@ position wins.
   `auto_send_why_not`, `rules`, and `routed` (the last 20: `msg_id`, `rule`,
   `state` `due`/`queued`/`refused`/`failed`, `out_id`, `due`, `ale_pos`,
   `processed`, `why`). `ale_pos` is which of the rule's ALE addresses it is
-  on (0: the first). Each rule also has `"world":"mars"`.
-- `route_set {id?, match, route, ale, key, sched, compress,
+  on (0: the first). Each rule also has `service`, which is stored. A rule
+routes only traffic of its own service (see Services).
+- `route_set {id?, service, match, route, ale, key, sched, compress,
   mark_processed}` adds a rule, or changes rule `id` keeping what isn't
   named. Returns `id`. Needs at least one ALE address; an unknown key is
   refused.
@@ -1571,9 +1559,9 @@ A routed message goes to the rule's first ALE address with the broadcast RI
 struck off; the log names the whole calling order. When the copy to one
 address fails, expires or goes unacked, the rule's next address is called
 with the same message (the unacked copy is cancelled first, so the message
-isn't delivered twice), and `ale_pos` moves on. An address the core refuses
-(this station, or a station of the amateur world) is passed over for the
-next. When no address is left, the routed message is `failed` with why; a
+isn't delivered twice), and `ale_pos` moves on. An address the route
+function refuses (this station, or a station of another service) is passed
+over for the next. When no address is left, the routed message is `failed` with why; a
 last copy that is unacked is left as it is, so it still goes if that
 station is heard. With `key` set, plain
 traffic is enciphered in our cipher slot first (it needs a date-time group
@@ -1763,11 +1751,12 @@ nothing. In training it writes to the practice station's folder, as `export` doe
 ## Transmit: written, then sent
 
 The core never keys the radio. With the greybeard modem it writes each burst
-to the outbox as `BURST.wav` and marks the message `written`. The core is the
-caller that asks greybeard-ale's gale-key to key it, over gale-key's socket
-(next section). gale-key keys it (or refuses), and for every key whose WAV is
-in the outbox, socket keys included, it writes one result file beside it,
-whole, by writing `.BURST.key.json.tmp` and renaming it to `BURST.key.json`:
+to the outbox as `BURST.wav` and marks the message `written`. The core hands
+it to greybeard-ale's station controller (next section), which orders
+gale-key. For every key the controller accepts, one result file is written
+beside the WAV: gale-key's, or the controller's own `refused` when it never
+ordered the key. It is written whole, as `.BURST.key.json.tmp` renamed to
+`BURST.key.json`:
 
 ```
 {"version":1,"burst":"BURST.wav","result":"keyed","why":"","at":"2026-11-26T15:00:00Z"}
@@ -1780,65 +1769,67 @@ whole, by writing `.BURST.key.json.tmp` and renaming it to `BURST.key.json`:
   naming another burst, is renamed `.key.json.bad` and changes nothing.
 - A result for an ack or orderwire burst is logged only.
 - There is no timeout: a burst stays `written` until a result comes.
-- The result file is the one source of truth. gale-key's reply on the socket
-  is logged and shown to the operator, and never changes a message's state.
+- The result file is the one source of truth. The controller's reply on its
+  socket is logged and shown to the operator, and never changes a message's
+  state.
 - `status` counts `written`. `tools/stub_channel.py --key-results` writes
   these files for testing.
 
-## Keying: the core asks gale-key
+## Keying: the core asks the station controller
 
-gale-key (greybeard-ale, docs/gale-tx.md) is the station's one keying
-service. The core asks it to key a burst already in the outbox; it never
-keys the radio itself, and there is no VOX. The socket is `--gale-key-socket`
-(default `/run/gale-key/key.sock`; `none` sets no gale-key), with
-`--gale-key-timeout-ms` (default 5000) for its reply. Only a station on the
-greybeard modem has one. Training refuses every call here.
+greybeard-ale's station controller (gale-rx grown, greybeard-ale
+`docs/station-controller.md`) is the link controller for the one radio. The
+core is the networking controller, and the controller's socket is its
+interface to link controllers (141B D.4.2.8). The core hands down a burst
+already in the outbox and never keys the radio itself. It never talks to
+gale-key: the controller orders it. There is no VOX. The socket is
+`--controller-socket` (default `/run/gale-rx/control.sock`; `none` sets no
+controller). `--gale-key-socket` is read as it for one release. Only a station
+on the greybeard modem has one. Training refuses every call here.
 
 The caller of each request, and what it sends:
 
-| When | The core sends gale-key |
+| When | The core sends the controller |
 |---|---|
-| `key_prepare` | `{"cmd":"prepare","kind":"air","wav":"/abs/OUTBOX/BURST.wav","world":"mars","channel":"P1","control":"local","final":false}` |
-| `key_confirm` on a send | the same with `"cmd":"key"` and `"token"` |
-| an automatic send, once written | `{"cmd":"key","kind":"air","wav":...,"world":"mars","channel":"P1","control":"automatic","final":false,"standing":"routing"}` |
+| `key_prepare` | `{"cmd":"prepare","kind":"air","wav":"/abs/OUTBOX/BURST.wav","service":"S","channel":"<LABEL>","control":"local","final":false}` |
+| `key_confirm` on a send | the same with `"cmd":"key"`, `"to"` (the link-layer address) and `"token"` |
+| an automatic send, once written | `{"cmd":"key","kind":"air","wav":...,"service":"S","channel":"<LABEL>","to":"<ADDRESS>","control":"automatic","final":false,"standing":"routing"}` |
 | an ACK or orderwire, once written | the same with `"standing":"machine"` |
-| `standing_prepare` | `{"cmd":"prepare","kind":"standing:routing"}` |
-| `key_confirm` on a mode | `{"cmd":"grant","mode":"routing","token":...}` |
+| `standing_prepare` | `{"cmd":"prepare","kind":"standing:routing","service":"S"}` |
+| `key_confirm` on a mode | `{"cmd":"grant","mode":"routing","service":"S","token":...}` |
 | `standing_off`, or the BBS mode turned off | `{"cmd":"revoke","mode":"routing"}` (or `"all"`) |
 | `key_status` | `{"cmd":"status"}` |
 
-A burst is sent to gale-key only when all of these hold. Otherwise the call is
+**The reply comes when the controller accepts the send.** It accepts the
+send and takes custody of it, and then it claims the radio, tunes it, reads
+it back and orders gale-key. `--controller-timeout-ms` (default 5000) bounds
+that reply and never the key. The outcome arrives only as the result file
+(Transmit, above).
+
+A burst is handed down only when all of these hold. Otherwise the call is
 refused with the reason, or, for an automatic send, the reason is logged once:
 
-- it is a burst of a message of ours, still `written`, and gale-key hasn't
-  been asked to key it yet (once asked, its result file decides);
-- its world is the message's, and it is `mars`: the core never asks gale-key
-  to key an item of the amateur world, nor one to a station of the amateur
-  world (ask 40);
-- it has a channel: the channel the radio was last set to through
-  `tuner_channel` when the burst was written, with or without a tuner daemon.
-  A burst written with no channel set is never sent to gale-key; requeue it
-  once one is set;
-- that channel isn't one the channel plan keeps for the amateur world
-  (station design v1.9, ask 40): a burst written on an amateur channel is
-  never sent to gale-key, by the operator's y or by a standing mode;
+- it is a burst of a message of ours, still `written`, that the controller
+  hasn't accepted yet (once accepted, its result file decides);
+- the route function gives it a route: the burst's, the message's, the
+  destination's and the channel's services are one (see Services);
+- it has a channel (see Services, "A send's channel"); a burst with none is
+  never handed down, so requeue it once one is set;
 - EMCON is off.
 
-Each `key` goes inside the tuner's sequence when a tuner daemon is set up
-(see "Tuner" above).
+The controller tells the tuner daemon the channel as part of its sequence.
+The core is no longer in that path.
 
 ### ACK and orderwire bursts
 
 An ACK or an orderwire written to the outbox is not a message: the core keeps
-it in memory only, until gale-key's result for it comes. It is keyed under the
-standing mode `machine`, once, on the core's own thread, as an automatic send
-is:
+it in memory only, until its result comes. It is keyed under the standing mode
+`machine`, once, on the core's own thread, as an automatic send is:
 
-- its world is that of the message it answers, or, for an orderwire or an ACK
-  of something not held, that of the station it goes to. It is keyed only in
-  MARS: the core never asks gale-key to key one for the amateur world (ask 40).
-  One to a station the station book marks amateur after it was written is never
-  asked, and the log says so once;
+- its service is that of the message it answers, or, for an orderwire or an
+  ACK of something not held, that of the station it goes to. It goes through
+  the route function like every send. Until stage 5 it is keyed only where
+  automatic modes run today (see Services);
 - its channel is the one the core was on when it was written;
 - with no `machine` grant it stays in the outbox, unkeyed, and `status` counts
   it in `keying.answers_written`;
@@ -1850,19 +1841,20 @@ is:
 the kiosk opens its y dialog →
 
     {"ok":true,"prepare_id":"KP-0123456789abcdef","expires_s":120,
-     "confirm":{"kind":"air","world":"mars","channel":"P1","control":"local","id":false,"ptt":"rts",
+     "confirm":{"kind":"air","service":"S","channel":"<LABEL>","control":"local","id":false,"ptt":"rts",
                 "msg_id":"ID","burst":"BURST.wav"}}
 
 A prepare is only for a burst already written: `msg_id` or `burst` must name
 a message of ours in state `written` whose `BURST.wav` is in the outbox now.
 An empty call, an unknown message or burst, a message in any other state, or
-a burst whose WAV is gone is refused, and gale-key isn't asked. gale-key binds
+a burst whose WAV is gone is refused, and the controller isn't asked. gale-key binds
 its token to the WAV's bytes, so a prepare never covers a burst written later.
 
-The core asks gale-key to prepare, which runs every gate and answers with a
+The core asks the controller to prepare. The controller runs the service
+table's checks and has gale-key run every gate, and it answers with gale-key's
 one-shot token. The core holds the token against `prepare_id`. The token
 never leaves the core: not in a reply, not in the log. `confirm` is gale-key's
-summary for the y, and only the fields the kiosk shows: `kind`, `world`,
+summary for the y, and only the fields the kiosk shows: `kind`, `service`,
 `channel` (the label), `control`, `id` (whether the ID goes out), `ptt`. No
 frequency goes to the kiosk: any text from gale-key that names one is
 replaced by "(gale-key's text named a frequency; not shown)". A refused
@@ -1870,7 +1862,7 @@ prepare holds nothing and returns gale-key's reason. A new `key_prepare` for
 the same burst drops the token held before it.
 
 The held token is bound to that exact burst: the WAV's path and sha256 (read
-when the prepare is made), the message's world and the channel. It belongs to
+when the prepare is made), the message's service and the channel. It belongs to
 the connection (API socket or gale-web's WebSocket) that opened the dialog: it
 is confirmed only there, and dropped when that connection closes (a page
 reloaded with the dialog open). One never confirmed or cancelled is dropped at
@@ -1880,12 +1872,13 @@ reloaded with the dialog open). One never confirmed or cancelled is dropped at
 keyboard y →
 
     {"ok":true,"kind":"air","msg_id":"ID","burst":"BURST.wav","asked":true,
-     "gale_key":{"reached":true,"answered":true,"ok":true,"exit":0,"reason":""},
-     "note":"the message stays written until gale-key's BURST.key.json says keyed (sent) or refused (failed)"}
+     "controller":{"reached":true,"answered":true,"ok":true,"accepted":true,"reason":""},
+     "note":"the message stays written until BURST.key.json says keyed (sent) or refused (failed)"}
 
-The core marks the burst asked and sends `key` with the token. `gale_key` is
-gale-key's reply, frequency-free; `answered` is false when gale-key took the
-request but answered after the timeout (it may still be keying). The message
+The core marks the burst asked and sends the controller `key` with the token.
+`controller` is the controller's reply, frequency-free; `accepted` says it
+took custody of the burst. For one release the same object is also given as
+`gale_key`. The message
 stays `written` until the result file comes. The call is refused, and nothing
 is sent:
 
@@ -1897,11 +1890,11 @@ is sent:
 - on another connection than the one that opened it;
 - when the WAV is no longer in the outbox, or its sha256 differs from the
   prepare's;
-- when the message is no longer `written` with that burst, its world or
-  channel changed, gale-key was already asked to key it, or the checks above
+- when the message is no longer `written` with that burst, its service or
+  channel changed, the controller already accepted it, or the checks above
   no longer hold.
 
-When gale-key can't be reached, nothing keys: the call says why, the burst
+When the controller can't be reached, nothing keys: the call says why, the burst
 stays `written` and may be prepared again.
 
 `{"cmd":"key_cancel","prepare_id":"KP-..."}` → `{"ok":true,"prepare_id":"KP-...","dropped":true}`
@@ -1911,19 +1904,21 @@ operator answers No or leaves the dialog.
 ### standing_prepare, standing_off: automatic sends
 
 Routing, machine-mode answers and auto-QSL key under a standing grant per
-mode, `machine`, `routing` or `auto_qsl`. The core never asks for
-`amateur_auto`. A mode goes on only through the same prepare and y:
+mode, `machine`, `routing` or `auto_qsl`, each for one service. The core never
+asks for `amateur_auto`. A mode goes on only through the same prepare and y,
+sent through the controller:
 
-`{"cmd":"standing_prepare","mode":"routing"}` →
-`{"ok":true,"prepare_id":"KP-...","expires_s":120,"confirm":{"kind":"standing","mode":"routing","world":"mars"}}`
+`{"cmd":"standing_prepare","mode":"routing","service":"S"}` →
+`{"ok":true,"prepare_id":"KP-...","expires_s":120,"confirm":{"kind":"standing","mode":"routing","service":"S"}}`
 
 then `key_confirm` with that `prepare_id` and `confirm` `Y` sends `grant` →
-`{"ok":true,"kind":"standing","mode":"routing","on":true,"gale_key":{...}}`.
-It is refused under EMCON, and when gale-key's transmit world isn't `mars`.
+`{"ok":true,"kind":"standing","mode":"routing","service":"S","on":true,"controller":{...}}`.
+It is refused under EMCON. Until stage 5 it is also refused for a service whose
+automatic modes do not run today (see Services).
 `key_cancel` drops it as for a send.
 
 While a mode is on, each written burst of that mode is keyed with
-`"standing":MODE`, once, on the core's own thread. When gale-key can't be
+`"standing":MODE`, once, on the core's own thread. When the controller can't be
 reached, it is tried again 30 s later. An automatic send the operator
 requeues or releases is his own from then on: no grant keys it, only his y.
 
@@ -1931,7 +1926,7 @@ requeues or releases is his own from then on: no grant keys it, only his y.
 `{"ok":true,"mode":"routing","on":false,"gale_key":{...}}`. The mode is off in
 the core at once, whatever gale-key answers, and gale-key is sent `revoke`.
 EMCON turned on turns every mode off the same way. gale-key also revokes
-grants itself (EMCON, the hourly cap, a change of transmit world). A burst
+grants itself (EMCON, the hourly cap). A burst
 keyed under a grant gale-key no longer holds comes back refused, and the
 message is `failed`; gale-key's reply turns that mode off in the core, so the
 next bursts wait for the operator's y. gale-key has no exit code of its own
@@ -1942,14 +1937,16 @@ gives the y again.
 
 ### key_status
 
-`{"cmd":"key_status"}` → `keying` as in `status`, `gale_key` (the reply), and
-`station`, the parts of gale-key's own status the kiosk shows:
+`{"cmd":"key_status"}` → `keying` as in `status`, `controller` (the reply), and
+`station`, the parts of the controller's status the kiosk shows:
 
-    "station":{"ready":true,"keyed":false,"ptt":"rts","transmit_world":"mars",
+    "station":{"ready":true,"keyed":false,"ptt":"rts",
                "why_not":[],"grants":["routing"],
-               "channel":{"label":"P1","world":"mars","since":"2026-11-26T15:00:00Z","source":"tuner_channel"}}
+               "channel":{"label":"<LABEL>","service":"S","since":"2026-11-26T15:00:00Z","source":"controller"},
+               "waiting":[{"service":"S","channel":"<LABEL>","why":"..."}]}
 
-`station.channel` is the core's own `radio_channel` (see status), the same
-object, so the kiosk shows the channel next to gale-key's state. `station` is
-there only when gale-key answered.
+`station.channel` is the core's `radio_channel` (see status): the
+controller's report of the radio's channel and its service. `waiting` is why
+a send waits or was refused, from the controller's `status`. `station` is
+there only when the controller answered.
 
