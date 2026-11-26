@@ -35,8 +35,64 @@ bool valid_link_format(const std::string& f) { return f == "pna1" || f == "plain
 
 Core::~Core() { stop(); }
 
-void Core::log(const std::string& msg_id, const std::string& text) {
+namespace {
+
+// The dial a capture's file name carries, "_<dial>kHz" (the engine's tag), in
+// Hz; 0 when the name carries none.
+int64_t dial_tag_hz(const std::string& name) {
+    for (size_t at = name.find('_'); at != std::string::npos; at = name.find('_', at + 1)) {
+        size_t i = at + 1;
+        size_t digits = 0, dots = 0;
+        while (i < name.size() && (std::isdigit(static_cast<unsigned char>(name[i])) || name[i] == '.')) {
+            if (name[i] == '.') ++dots;
+            else ++digits;
+            ++i;
+        }
+        if (digits == 0 || dots > 1 || i + 3 > name.size()) continue;
+        if (std::tolower(static_cast<unsigned char>(name[i])) != 'k' ||
+            std::tolower(static_cast<unsigned char>(name[i + 1])) != 'h' ||
+            std::tolower(static_cast<unsigned char>(name[i + 2])) != 'z')
+            continue;
+        const double khz = std::atof(name.substr(at + 1, i - at - 1).c_str());
+        if (khz > 0) return static_cast<int64_t>(khz * 1000 + 0.5);
+    }
+    return 0;
+}
+
+}  // namespace
+
+// A log line never quotes a capture's file name with its dial tag: each such
+// name (a capture, its listing or a payload beside it) becomes "a capture on
+// DESIGNATOR", or "a capture" when no channel has that dial.
+std::string Core::without_dial_tags(const std::string& text) {
+    auto stop = [](char c) {
+        return std::isspace(static_cast<unsigned char>(c)) || c == '(' || c == ')' || c == ',' || c == ';' ||
+               c == ':' || c == '"' || c == '\'' || c == '[' || c == ']';
+    };
+    std::string out;
+    size_t i = 0;
+    while (i < text.size()) {
+        if (stop(text[i])) {
+            out += text[i++];
+            continue;
+        }
+        size_t j = i;
+        while (j < text.size() && !stop(text[j])) ++j;
+        const std::string tok = text.substr(i, j - i);
+        if (const int64_t hz = dial_tag_hz(tok)) {
+            const std::string des = ops_ ? ops_->channels().display_name_for(hz) : std::string();
+            out += des.empty() ? "a capture" : "a capture on " + des;
+        } else {
+            out += tok;
+        }
+        i = j;
+    }
+    return out;
+}
+
+void Core::log(const std::string& msg_id, const std::string& raw) {
     // caller holds mu_ (the store is not shared across threads otherwise)
+    const std::string text = without_dial_tags(raw);
     store_.log_event(msg_id, text);
     if (log_fn_) log_fn_(msg_id.empty() ? text : msg_id + ": " + text);
 }
@@ -446,6 +502,11 @@ std::vector<Message> Core::queue(int limit) {
     return store_.queue(limit);
 }
 
+std::vector<Message> Core::written_out(int limit) {
+    std::lock_guard<std::mutex> g(mu_);
+    return store_.written_out(limit);
+}
+
 std::vector<Event> Core::events(int64_t after, int limit) {
     std::lock_guard<std::mutex> g(mu_);
     return store_.events(after, limit);
@@ -840,12 +901,13 @@ void Core::key_automatic() {
         key_queued_.insert(r.id);
         gk_->key_standing(
             KeyItem{r.id, r.burst, r.world, r.channel}, r.mode,
-            [this](const KeyItem& it) {
+            [this, mode = r.mode](const KeyItem& it) {
                 std::lock_guard<std::mutex> g(mu_);
                 key_queued_.erase(it.msg_id);
                 auto row = store_.key_row(it.msg_id);
                 std::string why;
-                if (!row || row->burst != it.burst || !key_checks(*row, &why)) return false;
+                // Still that mode's: an operator's requeue or release made it his own.
+                if (!row || row->burst != it.burst || row->mode != mode || !key_checks(*row, &why)) return false;
                 return store_.claim_key(it.msg_id, it.burst);
             },
             [this](const KeyItem& it, const GaleKeyReply& rep) {
@@ -1118,6 +1180,8 @@ bool Core::release(const std::string& id, std::string* error) {
     if (m->world != "mars") return refuse(error, id + " is an amateur-world item; the MARS message center never sends it");
     if (std::string why = world_refusal(m->dst); !why.empty()) return refuse(error, why);
     store_.set_state(id, "queued");
+    // The operator's own from here: no standing grant keys it, only a y.
+    store_.set_key_mode(id, "");
     log(id, "released to the queue");
     return true;
 }
@@ -1135,6 +1199,9 @@ bool Core::requeue(const std::string& id, std::string* error) {
     overdue_.erase(id);
     if (m->state == "expired") no_expire_.insert(id);
     store_.requeue(id, false);
+    // The operator's own from here: no standing grant keys it, only a y.
+    store_.set_key_mode(id, "");
+    key_retry_.erase(id);
     log(id, "put back in the queue by the operator (was " + m->state + ")");
     return true;
 }

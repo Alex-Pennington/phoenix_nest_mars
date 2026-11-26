@@ -88,8 +88,8 @@ PREFILL channel name
 FIELD name Designator(X) required upper max=12 check=designator
 FIELD frequency Frequency(X) required secret check=frequency
 FIELD unit Unit(KHZ,MHZ,HZ) default=KHZ
-FIELD ant_rx RX antenna, tuner port(1,2) default=1 fill
-FIELD ant_tx TX antenna, tuner port(1,2) default=1 fill
+FIELD ant_rx RX antenna, tuner port(1,2)
+FIELD ant_tx TX antenna, tuner port(1,2)
 NEXT CHANNEL SCHEDULE
 BEGIN_HELP
 Designator:

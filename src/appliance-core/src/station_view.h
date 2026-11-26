@@ -10,7 +10,8 @@
 //   1. the channel's designator in the station's channel plan (channels.h),
 //   2. its label in the scanner's plan (record/voice HZ:LABEL),
 //   3. its place in the scanner's plan, "W<window>C<channel>" (1-based),
-//   4. "unlisted".
+//   4. in a scanner reply, its place in the running window that reply names,
+//   5. "unlisted".
 //
 // Where the files are (settings, each optional; config keys in brackets):
 //   gale-dir       base for the defaults below (default "."; on the terminal

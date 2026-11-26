@@ -155,8 +155,9 @@ public:
     TunerOutcome channel(const Channel& c);
     std::string current_channel() const;
     // The channel the radio was last set to, for clients that show it (status
-    // radio_channel): the designator, its world and when (UTC, ISO 8601 Z).
-    // Never a frequency. nullopt when none has been set since start.
+    // radio_channel): the designator and when (UTC, ISO 8601 Z); world is
+    // left "" for the caller to take from the channel plan. Never a
+    // frequency. nullopt when none has been set since start.
     struct RadioChannel {
         std::string label, world, since;
     };

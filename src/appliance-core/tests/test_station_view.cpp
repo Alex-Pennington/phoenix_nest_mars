@@ -312,6 +312,15 @@ int main() {
         CHECK(no_freq(named));
         CHECK(sub(v, "channels").is_array() && sub(v, "channels").arr.size() == 2 && sub(v, "channels").arr[1].s == "W1C2");
         CHECK(str(sub(v, "hold"), "record_label") == "x" && str(v, "peak_label") == "NETB" && str(v, "note") == "hi");
+        // A running plan's dial with no name anywhere: its place in the
+        // running window, as with channel_labels, never "unlisted".
+        named = sv::name_channels(R"({"ok":true,"window":3,"channels_khz":[13579.246,4864.213]})", n);
+        v = parsed(named);
+        CHECK(no_freq(named));
+        CHECK(sub(v, "channels").is_array() && sub(v, "channels").arr.size() == 2 &&
+              sub(v, "channels").arr[0].s == "P1" && sub(v, "channels").arr[1].s == "W3C2");
+        CHECK(sub(v, "channel_labels").is_array() && sub(v, "channel_labels").arr.size() == 2 &&
+              sub(v, "channel_labels").arr[0].s == "P1" && sub(v, "channel_labels").arr[1].type == JsonValue::Type::Null);
     }
 
     // ---- word feed ----------------------------------------------------------
@@ -494,6 +503,9 @@ int main() {
         write(cap / "20991231T000002Z_net.wav", std::string(10, 'x'));
         write(cap / "20991231T000002Z_net.json", R"({"seconds":3,"trigger":"net","label":"NETB","khz":17532.975})");
         write(cap / "20991231T000003Z_open.wav", std::string(44, 'x'));
+        // Voice decodes derived from a capture are not recordings: not listed.
+        write(cap / "20991231T000001Z_data.m1.melpe2400.wav", std::string(20, 'x'));
+        write(cap / "20991231T000001Z_data.m11.melpe600.wav", std::string(20, 'x'));
         std::string r = api(*core, R"({"cmd":"captures_list"})");
         JsonValue v = parsed(r);
         CHECK(okv(v) && bl(v, "available") && nm(v, "total") == 3 && no_freq(r));

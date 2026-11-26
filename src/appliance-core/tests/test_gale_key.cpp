@@ -935,6 +935,20 @@ int main() {
         CHECK(str(kc, "label") == "P1" && str(kc, "world") == "mars" && str(kc, "since") == since &&
               str(kc, "source") == "tuner_channel");
         CHECK(ks.find("5000") == std::string::npos);
+        // The world is the plan's entry's for the label: amateur for an
+        // amateur channel, null for a label the plan doesn't hold.
+        CHECK(ok(call(*s.core, {{"cmd", "channel_put"}, {"name", "AMX"}, {"frequency", "15000"}, {"world", "amateur"}})));
+        CHECK(ok(call(*s.core, {{"cmd", "tuner_channel"}, {"channel", "AMX"}})));
+        rc = radio(parsed(call(*s.core, {{"cmd", "status"}})), "radio_channel");
+        CHECK(str(rc, "label") == "AMX" && str(rc, "world") == "amateur");
+        {
+            Channel gone;
+            gone.name = "NOTINPLAN";
+            s.core->tuner()->channel(gone);
+        }
+        rc = radio(parsed(call(*s.core, {{"cmd", "status"}})), "radio_channel");
+        CHECK(str(rc, "label") == "NOTINPLAN" && is_null(rc, "world"));
+        CHECK(ok(call(*s.core, {{"cmd", "tuner_channel"}, {"channel", "P1"}})));
         CHECK(str(parsed(call(*s.core, {{"cmd", "tuner_bypass"}})), "code") == "no-tuner");
         const std::string id = s.written("FARSTN", "CHANNEL FROM GALE-RX");
         const std::string pid = str(parsed(call(*s.core, {{"cmd", "key_prepare"}, {"msg_id", id}})), "prepare_id");
@@ -1051,6 +1065,73 @@ int main() {
         CHECK(at("gale-key status") > at("gale-key key ended"));
         CHECK(ft->count("tuner_post_tx") == 1);
         CHECK(wait_for([&] { return s.state(id) == "sent"; }, 5000));
+    }
+
+    // ---- the operator's requeue or release makes an automatic send the
+    // operator's own: a standing grant never keys it, only key_prepare and a y
+    {
+        FakeGaleKey f;
+        f.sock = sock;
+        Station s(base / "J", "JJJ", sock);
+        f.outbox = s.gc.outbox_dir;
+        f.start();
+        s.set_channel("P1");
+        // Requeued: written by routing, put back by the operator, written again.
+        const std::string rq = s.written("FARSTN", "ROUTED THEN REQUEUED");
+        s.core->set_key_mode(rq, "routing");
+        std::string err;
+        CHECK(s.core->requeue(rq, &err));
+        CHECK(wait_for([&] { return s.state(rq) == "written"; }, 10000));
+        // Released: held while marked routing, then released by the operator.
+        err.clear();
+        const std::string hd = s.core->submit("FARSTN", 'R', "ROUTED THEN RELEASED", &err, /*held=*/true);
+        CHECK(!hd.empty());
+        s.core->set_key_mode(hd, "routing");
+        CHECK(s.core->release(hd, &err));
+        CHECK(wait_for([&] { return s.state(hd) == "written"; }, 10000));
+
+        // gale-web polls for written: queue keeps a written message, after
+        // those still to be written, with its state; get gives the same state.
+        {
+            const std::string q1 = s.core->submit("FARSTN", 'R', "STILL QUEUED", &err, /*held=*/true);
+            s.core->set_emcon(true);
+            CHECK(s.core->release(q1, &err));
+            JsonValue q = parsed(call(*s.core, {{"cmd", "queue"}}));
+            const JsonValue* ms = q.get("messages");
+            std::vector<std::pair<std::string, std::string>> got;
+            if (ms && ms->type == JsonValue::Type::Array)
+                for (auto& m : ms->arr) got.emplace_back(str(m, "id"), str(m, "state"));
+            CHECK(got.size() == 3);
+            CHECK(got.size() == 3 && got[0] == std::make_pair(q1, std::string("queued")) &&
+                  got[1] == std::make_pair(rq, std::string("written")) &&
+                  got[2] == std::make_pair(hd, std::string("written")));
+            JsonValue g = parsed(call(*s.core, {{"cmd", "get"}, {"id", rq}}));
+            const JsonValue* gm = g.get("messages");
+            CHECK(gm && gm->type == JsonValue::Type::Array && gm->arr.size() == 1 &&
+                  str(gm->arr[0], "state") == "written");
+            CHECK(s.core->cancel(q1, &err));
+            s.core->set_emcon(false);
+        }
+
+        std::string pr =call(*s.core, {{"cmd", "standing_prepare"}, {"mode", "routing"}});
+        const std::string sid = str(parsed(pr), "prepare_id");
+        s.now = s.now + 2;
+        CHECK(ok(call(*s.core, {{"cmd", "key_confirm"}, {"prepare_id", sid}, {"confirm", "Y"}})));
+        CHECK(s.gk->standing_on("routing"));
+        std::this_thread::sleep_for(std::chrono::milliseconds(800));
+        CHECK(f.count("key") == 0 && s.state(rq) == "written" && s.state(hd) == "written");
+
+        // The operator's y keys each, as a local key with a token.
+        for (const std::string& id : {rq, hd}) {
+            JsonValue v = parsed(call(*s.core, {{"cmd", "key_prepare"}, {"msg_id", id}}));
+            const std::string pid = str(v, "prepare_id");
+            CHECK(!pid.empty());
+            s.now = s.now + 2;
+            CHECK(ok(call(*s.core, {{"cmd", "key_confirm"}, {"prepare_id", pid}, {"confirm", "Y"}})));
+            auto k = f.last("key");
+            CHECK(k && !k->get("standing") && str(*k, "control") == "local");
+            CHECK(wait_for([&] { return s.state(id) == "sent"; }, 5000));
+        }
     }
 
     // ---- a station with no gale-key at all: the calls say so, status says why

@@ -197,10 +197,8 @@ std::string TunerKeying::current_channel() const {
 std::optional<TunerKeying::RadioChannel> TunerKeying::radio_channel() const {
     std::lock_guard<std::mutex> g(mu_);
     if (channel_.empty()) return std::nullopt;
-    // The core's channel plan is the MARS message center's: every channel in
-    // it is a MARS channel (docs/api.md, "Worlds"), so tuner_channel can only
-    // name one of those.
-    return RadioChannel{channel_, "mars", channel_since_};
+    // The world is the channel plan's to say (write_radio_channel), not the tuner's.
+    return RadioChannel{channel_, "", channel_since_};
 }
 
 std::string TunerKeying::status_block() {

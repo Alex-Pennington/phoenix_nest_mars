@@ -911,6 +911,24 @@ std::string station_health(Core& core) {
     return w.str();
 }
 
+// A voice decode derived from a capture, "<capture>.m<n>.melpe<rate>.wav"
+// (n 1-11): a decode, not a recording.
+bool voice_decode(const std::string& n) {
+    const std::string tail = ".wav";
+    if (n.size() <= tail.size() || n.compare(n.size() - tail.size(), tail.size(), tail) != 0) return false;
+    const std::string s = n.substr(0, n.size() - tail.size());
+    const size_t mel = s.rfind(".melpe");
+    if (mel == std::string::npos) return false;
+    const std::string rate = s.substr(mel + 6);
+    if (rate.empty() || rate.find_first_not_of("0123456789") != std::string::npos) return false;
+    const size_t m = s.rfind(".m", mel - 1);
+    if (m == std::string::npos || m == 0 || mel == 0) return false;
+    const std::string k = s.substr(m + 2, mel - m - 2);
+    if (k.empty() || k.size() > 2 || k.find_first_not_of("0123456789") != std::string::npos || k[0] == '0') return false;
+    const int v = std::atoi(k.c_str());
+    return v >= 1 && v <= 11;
+}
+
 std::string captures_list(Core& core, std::map<std::string, std::string>& req) {
     Paths p = paths();
     int limit = int_arg(req, "limit", 20, 1, 200);
@@ -938,7 +956,8 @@ std::string captures_list(Core& core, std::map<std::string, std::string>& req) {
         for (auto& e : fs::directory_iterator(*d, ec)) {
             std::string n = e.path().filename().string();
             here.insert(n);
-            if (n.size() > 4 && n.compare(n.size() - 4, 4, ".wav") == 0 && e.is_regular_file(ec)) wav_dir.emplace(n, *d);
+            if (n.size() > 4 && n.compare(n.size() - 4, 4, ".wav") == 0 && !voice_decode(n) && e.is_regular_file(ec))
+                wav_dir.emplace(n, *d);
         }
     }
     std::vector<std::string> wavs;
@@ -1331,9 +1350,9 @@ void same_channels(JsonValue& v, const ChannelNames& names) {
         x.s = s;
         return x;
     };
+    const JsonValue* win = v.get("window");
+    const long long w = win && win->type == JsonValue::Type::Number ? std::llround(win->n) : 0;
     if (lab != v.obj.end() && lab->second.is_array()) {
-        const JsonValue* win = v.get("window");
-        long long w = win && win->type == JsonValue::Type::Number ? std::llround(win->n) : 0;
         for (size_t i = 0; i < lab->second.arr.size(); ++i) {
             const JsonValue& l = lab->second.arr[i];
             if (l.type == JsonValue::Type::String && !l.s.empty()) {
@@ -1345,8 +1364,17 @@ void same_channels(JsonValue& v, const ChannelNames& names) {
             }
         }
     } else if (khz != v.obj.end() && khz->second.is_array()) {
-        for (auto& e : khz->second.arr) {
-            JsonValue x = e.type == JsonValue::Type::Number ? text(names.name(e.n)) : JsonValue{};
+        // A dial named nowhere takes its place in the running window, as a
+        // channel with no label does above; "unlisted" only with no window.
+        for (size_t i = 0; i < khz->second.arr.size(); ++i) {
+            const JsonValue& e = khz->second.arr[i];
+            std::string n = e.type == JsonValue::Type::Number ? names.name(e.n) : std::string();
+            if (n == "unlisted" && w > 0) {
+                out.arr.push_back(text("W" + std::to_string(w) + "C" + std::to_string(i + 1)));
+                labels.arr.push_back(JsonValue{});
+                continue;
+            }
+            JsonValue x = n.empty() ? JsonValue{} : text(n);
             out.arr.push_back(x);
             labels.arr.push_back(x);
         }

@@ -25,7 +25,8 @@ own fields or settings.
 | The guidance while the operator types | `compose_check` (on each change, or on a short pause) |
 | "What goes here?" beside a field, or "help me word this" | `compose_advise` |
 | Send | `compose_send` |
-| Messages waiting to go, in sending order | `queue` |
+| Messages waiting to go, in sending order, then those written and waiting for their key | `queue` |
+| Whether a sent message has reached `written` (and later `sent` or `failed`) | `get` or `queue`, polled: see "Following a message" under "list, get" |
 | The activity log, new lines only | `log` with `after` |
 | A message's history and body | `list`, `get` |
 | Any level-zero form (setup, book, channels, schedules, bundles, keymasters, tapes, backups) | `form_list`, `form_get`, `form_check`, `form_submit` |
@@ -72,7 +73,8 @@ serves the kiosk screen, on 127.0.0.1 only, no TLS
     unchanged as its first member (`{"rid":7,"ok":true,...}`). A number stays
     a number, a string a string. The handler never sees `rid`. Without `rid`
     the frame goes to the handler exactly as sent. A reply with no `rid` is a
-    push (none are sent yet).
+    push (none are sent yet: a screen polls, as "Following a message to
+    `written`, `sent` or `failed`" says).
   - Limits: 1 MiB per frame and per whole message (close 1009); binary
     frames close with 1003, bad UTF-8 with 1007, protocol errors with 1002.
     When the core stops, open sockets get close 1001.
@@ -260,8 +262,9 @@ operator never types it:
     "radio_channel":{"label":"P1","world":"mars","since":"2026-11-26T15:00:00Z","source":"tuner_channel"}
 
 - `label`: the channel's designator. Never a frequency.
-- `world`: the channel's world. The core's channel plan is the MARS message
-  center's, so a channel set through it is `mars`.
+- `world`: the world of the channel plan's entry for `label` (`mars` or
+  `amateur`), read when the call is answered; null when the plan holds no
+  channel by that name.
 - `since`: when it was set, UTC.
 - `source`: always `tuner_channel`.
 - `label`, `world` and `since` are null when no channel has been set since
@@ -500,8 +503,10 @@ implements `compose::Advisor` can be set with `compose::set_advisor`.
 
 `{"cmd":"queue","limit":100}` → `{"ok":true,"messages":[...]}`: outgoing
 messages not yet sent, in the order they will go (the one on the air, then
-FLASH, IMMEDIATE, PRIORITY, ROUTINE, oldest first within each). Each message
-has the same fields as `list`.
+FLASH, IMMEDIATE, PRIORITY, ROUTINE, oldest first within each). After them
+come the messages whose burst is `written` to the outbox and waits for its
+key, in the same order. Each message has the same fields as `list`, `state`
+included; `limit` counts both.
 With `--link-gate`, a message whose station has no link yet carries
 `"waiting_for_link":true`; it goes as soon as one is reported, and the log says
 "waiting for a link to B" and then "link to B is up". ACKs are never held.
@@ -514,6 +519,11 @@ With `--link-gate`, a message whose station has no link yet carries
 Oldest first. Pass the reply's `last` as `after` next time to get only new
 lines.
 
+No line quotes a capture's file name that carries its dial (the engine's
+`_<dial>kHz` tag), nor the listing or payload files named after it. Each
+becomes `a capture on DESIGNATOR` when a channel in the plan has that dial,
+else `a capture`. Each line goes to standard output as the log holds it.
+
 ## list, get
 
 `{"cmd":"list","limit":50}` and `{"cmd":"get","id":"AAR4XX-17"}` →
@@ -521,6 +531,23 @@ lines.
 "created_at","updated_at","body","sends","last_error"?}]}`
 
 `sends` counts how many times a message went out whole on the air.
+
+### Following a message to `written`, `sent` or `failed`
+
+The core pushes nothing: every reply answers a request, on the API port and
+on the WebSocket alike. A burst is written on the core's own thread, a
+moment after the send, so a screen polls for it:
+
+- `get {id}` every second or so while its `state` is `queued` or `sending`.
+  `written` means the burst is in the outbox and the y dialog
+  (`key_prepare`) can open. Keep polling, more slowly, until `sent` (gale-key
+  keyed it) or `failed` (`last_error` says why). `updated_at` changes with
+  every state.
+- Or poll `queue`: a message stays in it while `queued`, `sending` or
+  `written`, each with its `state`, and leaves it once `sent` or `failed`.
+- `log` with `after` carries the same steps as lines ("written to the outbox
+  as ...", "keyed by gale-key", "not keyed by gale-key: ...") for the
+  activity log; read the state from `get` or `queue`, not from the text.
 
 `list` with `dir`, `get`'s in-box extras and `log` with `stream` are under
 "In box" below.
@@ -713,7 +740,8 @@ available to copy.
   to 16 letters, digits or `- / . _`, with a letter, never a frequency, kept
   in capitals; left out it is kept, sent empty it is cleared. `ant_rx` and `ant_tx` are the tuner
   ports the channel receives and transmits on: `1` or `2`, blank meaning 1;
-  anything else is refused. A new channel, and every channel in a plan
+  anything else is refused. Left out, each keeps the channel's port (the
+  CHANNEL form leaves out a port left blank). A new channel, and every channel in a plan
   written before these fields, is 1 and 1. A frequency card imported again
   keeps the ports set by hand, and the world and label. Returns `name`,
   `result` (`added`, `replaced` or `same`), `frequency_changed`, `mode`,
@@ -819,7 +847,8 @@ needs only port 4100 (issue 3). The core does no ALE or modem work here.
 the scanner becomes a name before it leaves the core: the channel's
 designator in the channel plan, else its label in the scan plan
 (`record`/`voice HZ:LABEL`), else its place in the scan plan, `W<window>C<channel>`
-(1-based), else `unlisted`. No reply carries a key with `khz`, `hz` or `freq`
+(1-based), else, in a scanner's reply, its place in the running window the
+reply names, else `unlisted`. No reply carries a key with `khz`, `hz` or `freq`
 in it.
 
 **Where the files are.** Settings (config keys, or the same as `--options`),
@@ -861,7 +890,8 @@ last_ok_at, error?, view, scanner, scanner_stale?, incoming?, store?}`.
   with none), `channel_labels` the labels (null for none) and
   `channel_count` how many. A newer scanner (greybeard-ale
   docs/amateur-world.md) sends `channel_labels` and a count; an older one
-  sent `channels_khz`, which is named here and dropped. That older form is
+  sent `channels_khz`, which is named here and dropped (a dial named nowhere
+  is `W<window>C<n>` by its place in the reply's `window`, as above). That older form is
   read for one more release only. The newer scanner's world fields pass
   through as they are: `world` (`mars`, `amateur` or `both`),
   `channel_worlds`, `cycle_s`, `cycle_long`, `amateur_channels`,
@@ -1087,7 +1117,9 @@ doesn't edit it.
 first: `{name, size, open, start?, seconds?, trigger?, channel?, window?,
 clock?, lost_s?, modems, payloads}`. `open`: no sidecar yet (being written, or
 cut off). `modems`: a modem verdict file is beside it; `payloads`: decoded
-payload files. Playback isn't ruled on and isn't offered.
+payload files. Playback isn't ruled on and isn't offered. A voice decode
+derived from a capture, `<capture>.m<n>.melpe<rate>.wav` (n 1-11), is a
+decode, not a recording: it is not listed and not counted in `total`.
 
 With `--captures-fallback` set, the fallback folder the engine writes to while
 the data store fails is listed too. A capture in both is listed once, from the
@@ -1383,6 +1415,9 @@ It holds across a restart.
   Not while it is on the air.
 - `requeue`: an unacked, failed, cancelled or held message goes again with
   fresh counts.
+- After a `release` or a `requeue` the message is the operator's own, even
+  when it was an automatic send (machine, routing, auto-QSL): no standing
+  grant keys its new burst, only `key_prepare` and the operator's y.
 
 Each gives `"ok":false` with an `error` when the message can't take that step.
 
@@ -1887,7 +1922,8 @@ It is refused under EMCON, and when gale-key's transmit world isn't `mars`.
 
 While a mode is on, each written burst of that mode is keyed with
 `"standing":MODE`, once, on the core's own thread. When gale-key can't be
-reached, it is tried again 30 s later.
+reached, it is tried again 30 s later. An automatic send the operator
+requeues or releases is his own from then on: no grant keys it, only his y.
 
 `{"cmd":"standing_off","mode":"routing"}` (or `"all"`) →
 `{"ok":true,"mode":"routing","on":false,"gale_key":{...}}`. The mode is off in
