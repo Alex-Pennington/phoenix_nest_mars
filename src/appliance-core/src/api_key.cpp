@@ -3,6 +3,7 @@
 #include "core.h"
 #include "gale_key.h"
 #include "json.h"
+#include "ops.h"
 #include "tuner.h"
 
 #include <filesystem>
@@ -64,7 +65,13 @@ void write_radio_channel(JsonWriter& w, const char* key, Core& core) {
     auto rc = tk ? tk->radio_channel() : std::nullopt;
     w.begin_object(key);
     if (rc) {
-        w.field("label", rc->label).field("world", rc->world);
+        // The world of the plan's entry for the label; null when the plan has none.
+        std::string world = rc->world;
+        if (world.empty() && core.ops())
+            if (auto c = core.ops()->channels().get(rc->label)) world = c->world.empty() ? "mars" : c->world;
+        w.field("label", rc->label);
+        if (world.empty()) w.field_null("world");
+        else w.field("world", world);
         if (rc->since.empty()) w.field_null("since");
         else w.field("since", rc->since);
     } else {

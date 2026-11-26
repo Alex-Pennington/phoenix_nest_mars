@@ -935,6 +935,20 @@ int main() {
         CHECK(str(kc, "label") == "P1" && str(kc, "world") == "mars" && str(kc, "since") == since &&
               str(kc, "source") == "tuner_channel");
         CHECK(ks.find("5000") == std::string::npos);
+        // The world is the plan's entry's for the label: amateur for an
+        // amateur channel, null for a label the plan doesn't hold.
+        CHECK(ok(call(*s.core, {{"cmd", "channel_put"}, {"name", "AMX"}, {"frequency", "15000"}, {"world", "amateur"}})));
+        CHECK(ok(call(*s.core, {{"cmd", "tuner_channel"}, {"channel", "AMX"}})));
+        rc = radio(parsed(call(*s.core, {{"cmd", "status"}})), "radio_channel");
+        CHECK(str(rc, "label") == "AMX" && str(rc, "world") == "amateur");
+        {
+            Channel gone;
+            gone.name = "NOTINPLAN";
+            s.core->tuner()->channel(gone);
+        }
+        rc = radio(parsed(call(*s.core, {{"cmd", "status"}})), "radio_channel");
+        CHECK(str(rc, "label") == "NOTINPLAN" && is_null(rc, "world"));
+        CHECK(ok(call(*s.core, {{"cmd", "tuner_channel"}, {"channel", "P1"}})));
         CHECK(str(parsed(call(*s.core, {{"cmd", "tuner_bypass"}})), "code") == "no-tuner");
         const std::string id = s.written("FARSTN", "CHANNEL FROM GALE-RX");
         const std::string pid = str(parsed(call(*s.core, {{"cmd", "key_prepare"}, {"msg_id", id}})), "prepare_id");

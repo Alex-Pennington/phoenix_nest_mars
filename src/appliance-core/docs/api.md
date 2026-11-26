@@ -262,8 +262,9 @@ operator never types it:
     "radio_channel":{"label":"P1","world":"mars","since":"2026-11-26T15:00:00Z","source":"tuner_channel"}
 
 - `label`: the channel's designator. Never a frequency.
-- `world`: the channel's world. The core's channel plan is the MARS message
-  center's, so a channel set through it is `mars`.
+- `world`: the world of the channel plan's entry for `label` (`mars` or
+  `amateur`), read when the call is answered; null when the plan holds no
+  channel by that name.
 - `since`: when it was set, UTC.
 - `source`: always `tuner_channel`.
 - `label`, `world` and `since` are null when no channel has been set since
