@@ -139,8 +139,12 @@ public:
     void set_link_monitor(std::shared_ptr<LinkMonitor> m) { link_ = std::move(m); }
     LinkMonitor* link_monitor() const { return link_.get(); }
     // The LDG tuner and the keying sequence around it (tuner.h). Set before
-    // start(); none: the tuner calls answer that no tuner is set up.
-    void set_tuner(std::shared_ptr<TunerKeying> t) { tuner_ = std::move(t); }
+    // start(). Without one, or with one holding no daemon, the core still
+    // records the channel tuner_channel names (gale-key keys on it); the
+    // other tuner calls answer that no tuner is set up.
+    void set_tuner(std::shared_ptr<TunerKeying> t) {
+        tuner_ = t ? std::move(t) : std::make_shared<TunerKeying>(nullptr);
+    }
     TunerKeying* tuner() const { return tuner_.get(); }
     // Whether a message to `station` would wait for a link now. A broadcast
     // (ALL) never waits: it goes out for whoever is listening.
@@ -282,6 +286,9 @@ public:
     // A mode turned off (BBS-SETUP, or the operator's standing_off): off here,
     // and gale-key is told to revoke it.
     void standing_off(const std::string& mode, const std::string& why);
+    // ACK and orderwire bursts written to the outbox and not yet answered by
+    // gale-key's result: keyed under standing "machine" only, MARS only.
+    size_t answer_bursts();
 
     // For tests: run one scheduler pass now.
     void tick();
@@ -333,7 +340,7 @@ private:
     std::atomic<bool> running_{false};
     std::function<void(const std::string&)> log_fn_;
     std::shared_ptr<LinkMonitor> link_;
-    std::shared_ptr<TunerKeying> tuner_;
+    std::shared_ptr<TunerKeying> tuner_ = std::make_shared<TunerKeying>(nullptr);
     std::shared_ptr<Ops> ops_;
     std::shared_ptr<keys::Keyring> keys_;
     void tie_cipher();
@@ -356,6 +363,17 @@ private:
     std::set<std::string> key_queued_;    // automatic keys handed to gale-key's thread, not yet claimed
     std::map<std::string, std::chrono::steady_clock::time_point> key_retry_;  // gale-key wasn't reached: not before
     std::set<std::string> key_told_;      // bursts already logged as never to be asked of gale-key
+    // An ACK or orderwire written to the outbox (not a message: memory only).
+    struct AnswerBurst {
+        std::string about;    // the message it answers ("" for an orderwire)
+        std::string what;     // "ack to STA-B", "orderwire to STA-B"
+        std::string dst, world, channel;
+        bool queued = false;  // handed to gale-key's thread, not yet claimed
+        bool asked = false;   // gale-key was sent its key
+        std::chrono::steady_clock::time_point retry{};  // gale-key wasn't reached: not before
+    };
+    std::map<std::string, AnswerBurst> answer_bursts_;  // by burst file name
+    void key_answers(bool machine_on);  // caller holds mu_
     void raw_rx(const std::string& bytes);
     void note_file(const std::string& id, const std::string& body);
     std::mutex raw_mu_;

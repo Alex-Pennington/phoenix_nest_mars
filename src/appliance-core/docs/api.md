@@ -241,7 +241,7 @@ asks gale-key" below):
 
     "keying":{"gale_key":"not answering","socket":"/run/gale-key/key.sock",
       "why":"gale-key isn't running (no socket at /run/gale-key/key.sock): nothing is keyed, bursts stay written",
-      "standing":[],"held":0}
+      "standing":[],"held":0,"answers_written":0}
 
 - `gale_key`: `answering` (the last request had its reply), `busy` (gale-key
   took the last request and hadn't answered within the timeout, as while it
@@ -250,6 +250,22 @@ asks gale-key" below):
   Appendix A links, and training).
 - `standing`: the standing modes on (`machine`, `routing`, `auto_qsl`).
 - `held`: y dialogs holding a token now.
+- `answers_written`: ACK and orderwire bursts in the outbox with no result
+  from gale-key yet. They key only under the standing mode `machine`.
+
+`radio_channel` is the channel the radio is on, as `tuner_channel` last set
+it, with or without a tuner daemon (see Tuner). Clients read it here; the
+operator never types it:
+
+    "radio_channel":{"label":"P1","world":"mars","since":"2026-11-26T15:00:00Z","source":"tuner_channel"}
+
+- `label`: the channel's designator. Never a frequency.
+- `world`: the channel's world. The core's channel plan is the MARS message
+  center's, so a channel set through it is `mars`.
+- `since`: when it was set, UTC.
+- `source`: always `tuner_channel`.
+- `label`, `world` and `since` are null when no channel has been set since
+  the core started.
 
 ## Worlds: MARS only, never amateur (ask 37)
 
@@ -653,7 +669,8 @@ refusal `code` and `error` as the daemon gave them (`refused-antenna`,
 `busy`, `timeout`, ...). `tuner` is the daemon's whole status block,
 unchanged: `contract_rev`, `channel {ant_rx, ant_tx, recalled_on}`,
 `relays.antenna` and the rest. With no socket set, `tuner_status` answers ok
-with `tuner` null; the others answer `no-tuner`.
+with `tuner` null, `tuner_channel` records the channel (below), and the others
+answer `no-tuner`.
 
 A channel is named by its designator. A frequency never comes in or goes out
 on this port: the core looks it up and sends it only to the local socket. A
@@ -664,8 +681,11 @@ request holding `freq_hz` is refused.
   `tuner_channel {freq_hz, ant_rx, ant_tx}` from the channel plan; it
   switches to `ant_rx` with RF off and recalls the memory for `ant_tx`.
   Returns `channel`, `steps`, `result` and `tuner`. A channel outside 1.8 to
-  54 MHz is refused (`refused-range`) without asking the daemon. With no
-  daemon there, ok: there is nothing to tell.
+  54 MHz is refused (`refused-range`) without asking the daemon. The core
+  records the channel whether or not a daemon is set up: it is the channel
+  gale-key keys each burst on (see "Keying: the core asks gale-key"). On a
+  station without the LDG daemon, gale-rx's `tuner_channel` call sets it. With
+  no daemon set up or answering, ok: there is nothing to tell it.
 - `tuner_recall {channel}`: recalls that channel's memory.
 - `tuner_bypass`, `tuner_store`, `tuner_pre_tx`, `tuner_post_tx`: as the
   daemon's calls.
@@ -679,14 +699,27 @@ request holding `freq_hz` is refused.
   PTT, `tuner_tune`, `tuner_store` (unless `store` is `N`), carrier off,
   `tuner_post_tx`.
 
-Around every keying the core does, it runs the daemon's sequence: with RF
-off, `tuner_pre_tx` (switch to the channel's `ant_tx`), and it keys only on
-ok; after unkey, once the keying process and its watchdog have exited,
-`tuner_post_tx` (back to `ant_rx`), retried on `refused-keyed` with a
-bounded backoff, each try in the log. With no tuner daemon there, keying is
-exactly as without one. Keying is by CAT or a hardware PTT line only: a
-keyer that keys any other way, VOX above all, is refused. The core keys
-nothing today; this sequence is ready for when transmit is unpinned.
+The core keys nothing itself: gale-key does (see "Keying: the core asks
+gale-key"). Around every `key` the core sends gale-key, the operator's and the
+standing ones alike, it runs the daemon's sequence:
+
+1. `tuner_pre_tx`, with RF off: the tuner switches to the channel's `ant_tx`.
+2. `key` to gale-key, only when `tuner_pre_tx` answered ok. When it refused,
+   gale-key isn't asked, the burst stays `written`, and the reason
+   (`tuner_pre_tx CODE: why`) is shown: in `key_confirm`'s error for the
+   operator's y, and in the message's log for a standing key, which is tried
+   again 30 s later.
+3. After gale-key's reply, keyed or not, `tuner_post_tx` (back to `ant_rx`),
+   retried on `refused-keyed` with a bounded backoff, each try in the log.
+   gale-key answers a key when it has ended. When its reply came after
+   `--gale-key-timeout-ms` (it was still keying), the core first waits until
+   gale-key's `status` says it is no longer keyed (at most 130 s, gale-key's
+   120 s key cap and a margin). When `tuner_post_tx` is never taken, the
+   message's log says the tuner didn't go back to the RX antenna.
+
+With no tuner daemon set up, or none answering on its socket, gale-key is
+asked exactly as without one. Keying is by CAT or a hardware PTT line only:
+a keyer that keys any other way, VOX above all, is refused.
 
 ## Modem decodes: unverified, whole
 
@@ -1630,6 +1663,7 @@ The caller of each request, and what it sends:
 | `key_prepare` | `{"cmd":"prepare","kind":"air","wav":"/abs/OUTBOX/BURST.wav","world":"mars","channel":"P1","control":"local","final":false}` |
 | `key_confirm` on a send | the same with `"cmd":"key"` and `"token"` |
 | an automatic send, once written | `{"cmd":"key","kind":"air","wav":...,"world":"mars","channel":"P1","control":"automatic","final":false,"standing":"routing"}` |
+| an ACK or orderwire, once written | the same with `"standing":"machine"` |
 | `standing_prepare` | `{"cmd":"prepare","kind":"standing:routing"}` |
 | `key_confirm` on a mode | `{"cmd":"grant","mode":"routing","token":...}` |
 | `standing_off`, or the BBS mode turned off | `{"cmd":"revoke","mode":"routing"}` (or `"all"`) |
@@ -1644,9 +1678,30 @@ refused with the reason, or, for an automatic send, the reason is logged once:
   to key an item of the amateur world, nor one to a station of the amateur
   world (ask 40);
 - it has a channel: the channel the radio was last set to through
-  `tuner_channel` when the burst was written. A burst written with no channel
-  set is never sent to gale-key; requeue it once one is set;
+  `tuner_channel` when the burst was written, with or without a tuner daemon.
+  A burst written with no channel set is never sent to gale-key; requeue it
+  once one is set;
 - EMCON is off.
+
+Each `key` goes inside the tuner's sequence when a tuner daemon is set up
+(see "Tuner" above).
+
+### ACK and orderwire bursts
+
+An ACK or an orderwire written to the outbox is not a message: the core keeps
+it in memory only, until gale-key's result for it comes. It is keyed under the
+standing mode `machine`, once, on the core's own thread, as an automatic send
+is:
+
+- its world is that of the message it answers, or, for an orderwire or an ACK
+  of something not held, that of the station it goes to. It is keyed only in
+  MARS: the core never asks gale-key to key one for the amateur world (ask 40).
+  One to a station the station book marks amateur after it was written is never
+  asked, and the log says so once;
+- its channel is the one the core was on when it was written;
+- with no `machine` grant it stays in the outbox, unkeyed, and `status` counts
+  it in `keying.answers_written`;
+- its result is logged only (see "Transmit: written, then sent").
 
 ### key_prepare, key_confirm, key_cancel: the operator's y
 
@@ -1736,8 +1791,10 @@ the core at once, whatever gale-key answers, and gale-key is sent `revoke`.
 EMCON turned on turns every mode off the same way. gale-key also revokes
 grants itself (EMCON, the hourly cap, a change of transmit world). A burst
 keyed under a grant gale-key no longer holds comes back refused, and the
-message is `failed`; gale-key's reply ("no standing grant ...") turns that
-mode off in the core, so the next bursts wait for the operator's y. The core holds its modes in memory
+message is `failed`; gale-key's reply turns that mode off in the core, so the
+next bursts wait for the operator's y. gale-key has no exit code of its own
+for this (it is exit 2, as every refusal is), so the core reads its wording:
+a reason starting "no standing grant for MODE", for the mode it asked under. The core holds its modes in memory
 only, as gale-key does: after a restart every mode is off until the operator
 gives the y again.
 
@@ -1747,5 +1804,10 @@ gives the y again.
 `station`, the parts of gale-key's own status the kiosk shows:
 
     "station":{"ready":true,"keyed":false,"ptt":"rts","transmit_world":"mars",
-               "why_not":[],"grants":["routing"]}
+               "why_not":[],"grants":["routing"],
+               "channel":{"label":"P1","world":"mars","since":"2026-11-26T15:00:00Z","source":"tuner_channel"}}
+
+`station.channel` is the core's own `radio_channel` (see status), the same
+object, so the kiosk shows the channel next to gale-key's state. `station` is
+there only when gale-key answered.
 

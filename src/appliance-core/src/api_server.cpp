@@ -2877,6 +2877,8 @@ std::string ApiServer::handle_call(Core& core, const std::string& line) {
         write_link(w, s);
         // gale-key (gale_key.h): answering or not and why, standing modes on.
         write_keying(w, core);
+        // The radio's current channel, as tuner_channel last set it (no frequency).
+        write_radio_channel(w, "radio_channel", core);
         // The tuner daemon's status block, passed through unchanged: channel
         // {ant_rx, ant_tx, recalled_on}, contract_rev, relays.antenna, ...
         // Left out when no tuner is set up or nothing answers.

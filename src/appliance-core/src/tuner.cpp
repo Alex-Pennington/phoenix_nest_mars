@@ -6,6 +6,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <ctime>
 #include <sys/socket.h>
 #include <sys/time.h>
 #include <sys/un.h>
@@ -193,6 +194,15 @@ std::string TunerKeying::current_channel() const {
     return channel_;
 }
 
+std::optional<TunerKeying::RadioChannel> TunerKeying::radio_channel() const {
+    std::lock_guard<std::mutex> g(mu_);
+    if (channel_.empty()) return std::nullopt;
+    // The core's channel plan is the MARS message center's: every channel in
+    // it is a MARS channel (docs/api.md, "Worlds"), so tuner_channel can only
+    // name one of those.
+    return RadioChannel{channel_, "mars", channel_since_};
+}
+
 std::string TunerKeying::status_block() {
     if (!link_) return "";
     std::lock_guard<std::mutex> g(status_mu_);
@@ -232,8 +242,14 @@ TunerOutcome TunerKeying::channel(const Channel& c) {
     std::lock_guard<std::mutex> seq(seq_mu_);
     TunerOutcome o;
     {
+        std::time_t t = std::time(nullptr);
+        std::tm u{};
+        gmtime_r(&t, &u);
+        char at[32];
+        std::strftime(at, sizeof at, "%Y-%m-%dT%H:%M:%SZ", &u);
         std::lock_guard<std::mutex> g(mu_);
         channel_ = c.name;
+        channel_since_ = at;
     }
     if (!link_) {
         o.ok = true;
@@ -267,20 +283,28 @@ TunerOutcome TunerKeying::channel(const Channel& c) {
 }
 
 TunerOutcome TunerKeying::post_tx(Keyer* k) {
+    if (!k) return post_tx_when(nullptr, 0, "the keyer");
+    return post_tx_when([k] { return k->idle(); }, t_.idle_wait_ms, "the keyer");
+}
+
+TunerOutcome TunerKeying::post_tx_when(const std::function<bool()>& idle, int wait_ms, const char* what) {
     TunerOutcome o;
     if (!link_) {
         o.ok = true;
         return o;
     }
     // A keying process is "keyed" to the daemon until it and its watchdog
-    // have exited (5.7): wait for that first.
-    if (k) {
-        int waited = 0;
-        while (!k->idle() && waited < t_.idle_wait_ms) {
+    // have exited (5.7): wait for that first. idle() may itself take a while
+    // (gale-key's status waits for its key), so the wait is by the clock.
+    if (idle) {
+        const auto end = std::chrono::steady_clock::now() + std::chrono::milliseconds(wait_ms);
+        bool done = idle();
+        while (!done && std::chrono::steady_clock::now() < end) {
             sleep_ms(t_.idle_poll_ms);
-            waited += t_.idle_poll_ms;
+            done = idle();
         }
-        if (!k->idle()) log("the keyer hasn't gone idle after " + std::to_string(t_.idle_wait_ms) + " ms; asking anyway");
+        if (!done)
+            log(std::string(what) + " hasn't gone idle after " + std::to_string(wait_ms) + " ms; asking anyway");
     }
     int backoff = t_.post_first_ms;
     for (int i = 1; i <= t_.post_tries; ++i) {
@@ -313,6 +337,49 @@ TunerOutcome TunerKeying::post_tx(Keyer* k) {
     }
     log("tuner_post_tx not accepted (" + o.code + ": " + o.reason +
         "): the receiver may still be on the TX antenna");
+    return o;
+}
+
+TunerOutcome TunerKeying::around_key(const std::function<void()>& key, const std::function<bool()>& ended,
+                                     bool* asked) {
+    std::lock_guard<std::mutex> seq(seq_mu_);
+    TunerOutcome o;
+    if (asked) *asked = false;
+    bool tuner = false;
+    if (link_) {
+        o.last = call("tuner_pre_tx");
+        if (o.last.reached) {
+            tuner = true;
+            o.tuner = true;
+            o.steps.push_back(std::string("tuner_pre_tx ") + (o.last.ok ? "ok" : o.last.code));
+            if (!o.last.ok) {
+                // The antenna for this key is unknown: gale-key isn't asked.
+                o.code = o.last.code;
+                o.reason = o.last.reason;
+                log("tuner_pre_tx " + o.code + ": " + o.reason + "; gale-key not asked to key");
+                return o;
+            }
+        } else {
+            o.steps.push_back("no tuner");
+            log("tuner_pre_tx: " + o.last.reason + "; gale-key asked as without a tuner");
+        }
+    } else {
+        o.steps.push_back("no tuner");
+    }
+    o.steps.push_back("key");
+    if (asked) *asked = true;
+    key();
+    o.ok = true;
+    if (tuner) {
+        TunerOutcome p = post_tx_when(ended, t_.key_end_wait_ms, "gale-key's key");
+        for (auto& s : p.steps) o.steps.push_back(s);
+        o.last = p.last;
+        if (!p.ok) {
+            o.ok = false;
+            o.code = p.code;
+            o.reason = "the tuner didn't go back to the RX antenna after gale-key's key: " + p.reason;
+        }
+    }
     return o;
 }
 
@@ -536,6 +603,25 @@ std::optional<std::string> handle_tuner(TunerKeying* tk, const std::string& cmd,
     for (auto k : {"freq_hz", "frequency", "hz"})
         if (req.count(k)) return refuse(cmd, "refused-args", "name the channel by its designator (channel=P1), not a frequency");
 
+    auto channel_of = [&](std::optional<Channel>& c) -> std::optional<std::string> {
+        std::string name = req["channel"];
+        if (name.empty()) name = req["name"];
+        if (name.empty()) return refuse(cmd, "refused-args", "name the channel: channel=P1");
+        c = lookup ? lookup(name) : std::nullopt;
+        if (!c) return refuse(cmd, "refused-args", "no such channel in the plan");
+        return std::nullopt;
+    };
+
+    // A channel change is recorded whether or not a tuner daemon is set up:
+    // it is the channel gale-key keys on (gale_key.h). Only a daemon is told.
+    if (cmd == "tuner_channel" && tk) {
+        std::optional<Channel> c;
+        if (auto bad = channel_of(c)) return bad;
+        TunerOutcome o = tk->channel(*c);
+        c->hz = 0;
+        return reply_of(cmd, o, c->name);
+    }
+
     if (!tk || !tk->configured()) {
         if (cmd == "tuner_status") {
             JsonWriter w;
@@ -546,22 +632,6 @@ std::optional<std::string> handle_tuner(TunerKeying* tk, const std::string& cmd,
         return refuse(cmd, "no-tuner", "no tuner is set up on this box (tuner-socket in the settings)");
     }
 
-    auto channel_of = [&](std::optional<Channel>& c) -> std::optional<std::string> {
-        std::string name = req["channel"];
-        if (name.empty()) name = req["name"];
-        if (name.empty()) return refuse(cmd, "refused-args", "name the channel: channel=P1");
-        c = lookup ? lookup(name) : std::nullopt;
-        if (!c) return refuse(cmd, "refused-args", "no such channel in the plan");
-        return std::nullopt;
-    };
-
-    if (cmd == "tuner_channel") {
-        std::optional<Channel> c;
-        if (auto bad = channel_of(c)) return bad;
-        TunerOutcome o = tk->channel(*c);
-        c->hz = 0;
-        return reply_of(cmd, o, c->name);
-    }
     if (cmd == "tuner_recall") {
         std::optional<Channel> c;
         if (auto bad = channel_of(c)) return bad;

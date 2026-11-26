@@ -18,6 +18,9 @@
 //    the core holds that mode on. A mode is turned on only through the same
 //    prepare and y path (`prepare kind standing:MODE`, then `grant`), and off
 //    with `revoke`. amateur_auto is never asked for (ask 40).
+//  - The core's ACK and orderwire bursts key the same way, under "machine".
+//  - Every `key` goes through the hook set with set_around: the core runs
+//    the tuner's pre_tx and post_tx around it (tuner.h, around_key).
 //
 // The socket's reply never changes a message's state. gale-key writes
 // BURST.key.json beside every burst in the outbox it is asked to key (keyed or
@@ -83,6 +86,12 @@ private:
 bool core_standing_mode(const std::string& mode);
 const std::vector<std::string>& core_standing_modes();
 
+// gale-key refused a key under a standing mode because it holds no grant for
+// that mode (it never gave one, or revoked it). gale-key has no exit code of
+// its own for this: it is exit 2, as every refusal is, so the reason's
+// wording is read here and nowhere else.
+bool gale_key_holds_no_grant(const GaleKeyReply& r, const std::string& mode);
+
 // Text for the kiosk with no frequency in it: s itself, or a fixed line when
 // s names a frequency (compose::looks_like_frequency, or six digits or more in
 // a row, a frequency in Hz).
@@ -125,6 +134,13 @@ public:
     // Log lines, against a message ("" for none). Never given a token.
     void set_log(std::function<void(const std::string& msg_id, const std::string& text)> log);
     std::string where() const { return link_ ? link_->where() : std::string(); }
+
+    // Runs around every `key` request (the operator's and the standing ones):
+    // it is given the burst and a function that sends the key and returns
+    // gale-key's reply. It returns that reply, or, when it did not send the
+    // key, a reply with reached false and the reason.
+    using Around = std::function<GaleKeyReply(const KeyItem&, const std::function<GaleKeyReply()>& send)>;
+    void set_around(Around around);
 
     // A token held against one y dialog. The token never leaves this object.
     struct Held {
@@ -198,6 +214,7 @@ public:
 
 private:
     GaleKeyReply ask(const std::string& request);
+    GaleKeyReply send_key(const KeyItem& it, const std::string& request);  // through around_
     std::string air_request(const char* cmd, const KeyItem& it, const std::string& control) const;
     std::string wav_path(const std::string& burst) const;
     std::string new_id();
@@ -209,6 +226,7 @@ private:
     std::string outbox_;
     std::function<double()> clock_;
     std::function<void(const std::string&, const std::string&)> log_;
+    Around around_;
     std::mutex mu_;
     std::map<std::string, Held> held_;
     std::map<std::string, bool> standing_;

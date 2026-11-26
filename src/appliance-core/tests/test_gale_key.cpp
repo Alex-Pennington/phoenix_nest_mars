@@ -3,13 +3,16 @@
 // as greybeard-ale's docs/gale-tx.md says (prepare, key, grant, revoke,
 // status) and, for every key whose WAV is in the outbox, writes api.md's
 // BURST.key.json result, keyed or refused. The core never keys anything here.
+// A fake tuner daemon shows the tuner's sequence around each of those keys.
 #include "../src/api_server.h"
 #include "../src/bbs.h"
 #include "../src/core.h"
+#include "../src/frame.h"
 #include "../src/gale_key.h"
 #include "../src/greybeard_modem.h"
 #include "../src/json.h"
 #include "../src/ops.h"
+#include "../src/sha256.h"
 #include "../src/tuner.h"
 #include "check.h"
 
@@ -21,12 +24,15 @@
 #include <sys/un.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cstring>
+#include <deque>
 #include <filesystem>
 #include <fstream>
 #include <functional>
+#include <map>
 #include <mutex>
 #include <set>
 #include <thread>
@@ -54,12 +60,30 @@ static bool flag(const JsonValue& v, const char* k) {
     return x && x->type == JsonValue::Type::Bool && x->b;
 }
 
+// One ordered list for the fake gale-key and the fake tuner, so order shows.
+static std::mutex g_order_mu;
+static std::vector<std::string> g_order;
+static void order(const std::string& e) {
+    std::lock_guard<std::mutex> g(g_order_mu);
+    g_order.push_back(e);
+}
+static std::vector<std::string> order_now() {
+    std::lock_guard<std::mutex> g(g_order_mu);
+    return g_order;
+}
+static void order_clear() {
+    std::lock_guard<std::mutex> g(g_order_mu);
+    g_order.clear();
+}
+
 // ---------------------------------------------------------------- the fake
 
 struct FakeGaleKey {
     fs::path sock, outbox;
     std::string tx_world = "mars";
     std::string refuse_prepare;  // when set, an air prepare is refused with this reason
+    std::atomic<int> key_ms{0};  // how long a key lasts (one request at a time, as gale-key)
+    std::atomic<bool> keyed{false};
     std::mutex mu;
     std::vector<JsonValue> got;              // every request, in order
     std::set<std::string> live, grants;      // tokens not yet spent; standing grants
@@ -151,6 +175,13 @@ struct FakeGaleKey {
                    str(req, "control") + R"(","id":false,"ptt":"rts","dial_hz":13579246,"note":"tuned to 13.579 MHz"}})";
         }
         if (cmd == "key") {
+            order("gale-key key");
+            if (key_ms > 0) {
+                keyed = true;
+                std::this_thread::sleep_for(std::chrono::milliseconds(key_ms.load()));
+                keyed = false;
+                order("gale-key key ended");
+            }
             const std::string wav = str(req, "wav");
             bool good = false;
             std::string why;
@@ -178,6 +209,7 @@ struct FakeGaleKey {
             return R"({"ok":true,"exit":0})";
         }
         if (cmd == "status") {
+            order("gale-key status");
             std::string gs;
             for (auto& m : grants) gs += (gs.empty() ? "" : ",") + std::string("\"") + m + "\":\"" + tx_world + "\"";
             return R"({"ok":true,"service":"gale-key","ready":true,"keyed":false,"ptt":"rts","transmit_world":")" + tx_world +
@@ -205,6 +237,37 @@ struct FakeGaleKey {
     }
 };
 
+// A fake LDG tuner daemon (ldg-tuner/1): every call ok unless scripted.
+struct FakeTuner : TunerLink {
+    std::mutex mu;
+    std::map<std::string, std::deque<std::string>> codes;  // cmd -> refusal codes, used in turn ("" ok)
+    std::vector<std::string> sent;
+    TunerReply call(const std::string& cmd, const std::string&, int) override {
+        std::string code;
+        {
+            std::lock_guard<std::mutex> g(mu);
+            sent.push_back(cmd);
+            auto& q = codes[cmd];
+            if (!q.empty()) {
+                code = q.front();
+                q.pop_front();
+            }
+        }
+        if (cmd != "tuner_status") order(cmd);
+        const std::string block = R"({"protocol":"ldg-tuner/1","contract_rev":2,"channel":{"ant_rx":1,"ant_tx":2}})";
+        if (code.empty())
+            return parse_tuner_reply(R"({"protocol":"ldg-tuner/1","id":1,"ok":true,"cmd":")" + cmd +
+                                     R"(","result":{},"tuner":)" + block + "}");
+        return parse_tuner_reply(R"({"protocol":"ldg-tuner/1","id":1,"ok":false,"cmd":")" + cmd +
+                                 R"(","error":{"code":")" + code + R"(","reason":"the fake says )" + code +
+                                 R"("},"tuner":)" + block + "}");
+    }
+    int count(const std::string& cmd) {
+        std::lock_guard<std::mutex> g(mu);
+        return static_cast<int>(std::count(sent.begin(), sent.end(), cmd));
+    }
+};
+
 // ---------------------------------------------------------------- a station
 
 static std::string call(Core& c, const std::vector<std::pair<std::string, std::string>>& kv) {
@@ -229,7 +292,9 @@ struct Station {
     std::shared_ptr<TunerKeying> tuner;
     std::atomic<double> now{1000.0};
 
-    Station(const fs::path& d, const std::string& name, const fs::path& sock) : dir(d) {
+    Station(const fs::path& d, const std::string& name, const fs::path& sock,
+            std::shared_ptr<TunerLink> tuner_link = nullptr, int gk_timeout_ms = 2000, bool set_tuner = true)
+        : dir(d) {
         fs::create_directories(dir);
         gc.mode = "600S";
         gc.tx_cmd = {"python3", "-I", kSrc + "/tools/stub_gale_tx.py"};
@@ -243,10 +308,15 @@ struct Station {
         cc.ack_timeout_s = 600;
         core = std::make_unique<Core>(cc, std::make_unique<GreybeardModem>(gc));
         core->set_ops(std::make_shared<Ops>(name, cc.db_path));
-        // No tuner daemon: the channel is still remembered by designator.
-        tuner = std::make_shared<TunerKeying>(nullptr);
-        core->set_tuner(tuner);
-        gk = std::make_shared<GaleKey>(std::make_shared<GaleKeySocket>(sock.string(), 2000), gc.outbox_dir);
+        // No tuner daemon unless given: the channel is still remembered by designator.
+        TunerTiming t;
+        t.idle_poll_ms = 20;
+        t.post_first_ms = 10;
+        t.post_max_ms = 40;
+        t.key_end_wait_ms = 10000;
+        tuner = std::make_shared<TunerKeying>(tuner_link, t);
+        if (set_tuner) core->set_tuner(tuner);
+        gk = std::make_shared<GaleKey>(std::make_shared<GaleKeySocket>(sock.string(), gk_timeout_ms), gc.outbox_dir);
         gk->set_clock([this] { return now.load(); });
         core->set_gale_key(gk);
         core->start();
@@ -716,6 +786,261 @@ int main() {
             srv->stop();
         }
         CHECK(f.count("key") == 0 && s.state(m4) == "written");
+    }
+
+    // ---- the mode-off coupling: gale-key's refusal for a grant it doesn't hold
+    // is exit 2 like every refusal, so it is told by its wording, bound to the mode
+    {
+        GaleKeyReply r;
+        r.reached = r.answered = true;
+        r.exit = 2;
+        r.reason = "no standing grant for machine: the operator's y when turning it on grants it";
+        CHECK(gale_key_holds_no_grant(r, "machine"));
+        CHECK(!gale_key_holds_no_grant(r, "routing"));
+        r.exit = 3;
+        CHECK(!gale_key_holds_no_grant(r, "machine"));
+        r.exit = 2;
+        r.reason = "no standing grant for amateur_auto: automatic control in the amateur world needs its own y";
+        CHECK(!gale_key_holds_no_grant(r, "machine") && !gale_key_holds_no_grant(r, "auto_qsl"));
+        r.reason = "the hourly cap is reached: no standing grant";
+        CHECK(!gale_key_holds_no_grant(r, "machine"));
+        r.reason = "no standing grant for machine: x";
+        r.answered = false;
+        CHECK(!gale_key_holds_no_grant(r, "machine"));
+    }
+
+    // ---- ACK and orderwire bursts: keyed under standing machine only, in the
+    // world of what they answer (MARS only), on the core's channel; their
+    // result is logged only
+    {
+        FakeGaleKey f;
+        f.sock = sock;
+        Station s(base / "F", "FFF", sock);
+        f.outbox = s.gc.outbox_dir;
+        f.start();
+        s.set_channel("P1");
+        auto answers = [&] {
+            JsonValue v = parsed(call(*s.core, {{"cmd", "status"}}));
+            const JsonValue* k = v.get("keying");
+            const JsonValue* n = k ? k->get("answers_written") : nullptr;
+            return n && n->type == JsonValue::Type::Number ? static_cast<int>(n->n) : -1;
+        };
+        auto grant = [&](const std::string& mode) {
+            std::string pr = call(*s.core, {{"cmd", "standing_prepare"}, {"mode", mode}});
+            const std::string id = str(parsed(pr), "prepare_id");
+            s.now = s.now + 2;
+            return ok(call(*s.core, {{"cmd", "key_confirm"}, {"prepare_id", id}, {"confirm", "Y"}}));
+        };
+        // A message to us, heard on the air: the core acks it.
+        Frame in;
+        in.type = FrameType::Msg;
+        in.id = "FARSTN-7";
+        in.src = "FARSTN";
+        in.dst = "FFF";
+        in.prec = 'R';
+        in.body = "HELLO FFF";
+        const std::string bytes = encode(in);
+        {
+            std::ofstream b(fs::path(s.gc.captures_dir) / "in.m110a.0.bin", std::ios::binary);
+            b << bytes;
+        }
+        {
+            std::ofstream l(fs::path(s.gc.captures_dir) / "in.modems.json");
+            l << R"({"files":[{"file":"in.m110a.0.bin","bytes":)" << bytes.size() << R"(,"sha256":")" << sha256_hex(bytes)
+              << R"("}]})";
+        }
+        CHECK(wait_for([&] { return s.core->answer_bursts() == 1; }, 10000));
+        std::string err;
+        CHECK(s.core->orderwire("FARSTN", "QSL QRU", &err));
+        CHECK(wait_for([&] { return s.core->answer_bursts() == 2; }, 10000));
+        CHECK(answers() == 2);
+        // Machine off: never asked, routing on or not.
+        CHECK(grant("routing"));
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+        CHECK(f.count("key") == 0 && s.core->answer_bursts() == 2);
+        // Machine on: both keyed under it.
+        CHECK(grant("machine"));
+        CHECK(wait_for([&] { return s.core->answer_bursts() == 0; }, 5000));
+        CHECK(f.count("key") == 2);
+        {
+            std::lock_guard<std::mutex> g(f.mu);
+            for (auto& r : f.got) {
+                if (str(r, "cmd") != "key") continue;
+                CHECK(str(r, "standing") == "machine" && str(r, "control") == "automatic" && str(r, "world") == "mars" &&
+                      str(r, "channel") == "P1" && !r.get("token"));
+            }
+        }
+        const std::string ev = s.events_text();
+        CHECK(ev.find("ack to FARSTN written to the outbox") != std::string::npos);
+        CHECK(ev.find("orderwire to FARSTN written to the outbox") != std::string::npos);
+        CHECK(ev.find(") keyed by gale-key") != std::string::npos);
+        CHECK(answers() == 0);
+        // Its result changes no message: the one acked stays as it was.
+        auto heard = s.core->get("FARSTN-7");
+        CHECK(heard && heard->state == "received");
+
+        // A burst to a station the book marks amateur after it was written: never asked.
+        CHECK(ok(call(*s.core, {{"cmd", "standing_off"}, {"mode", "machine"}})));
+        CHECK(s.core->orderwire("TESTAM-Y", "QRV", &err));
+        CHECK(wait_for([&] { return s.core->answer_bursts() == 1; }, 10000));
+        CHECK(ok(call(*s.core, {{"cmd", "book_put"}, {"name", "TEST AM Y"}, {"call", "TESTAM-Y"}, {"world", "amateur"}})));
+        CHECK(grant("machine"));
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+        CHECK(f.count("key") == 2 && s.core->answer_bursts() == 1);
+        CHECK(s.events_text().find("not asked of gale-key: TESTAM-Y is an amateur station") != std::string::npos);
+    }
+
+    // ---- no tuner daemon at all: tuner_channel still sets the channel gale-key keys on
+    {
+        FakeGaleKey f;
+        f.sock = sock;
+        Station s(base / "G", "GGG", sock, nullptr, 2000, /*set_tuner=*/false);
+        f.outbox = s.gc.outbox_dir;
+        f.start();
+        CHECK(ok(call(*s.core, {{"cmd", "channel_put"}, {"name", "P1"}, {"frequency", "5000"}})));
+        // Nothing set since start: radio_channel is all null but its source.
+        auto radio = [](const JsonValue& v, const char* k) -> JsonValue {
+            const JsonValue* x = v.is_object() ? v.get(k) : nullptr;
+            return x && x->is_object() ? *x : JsonValue();
+        };
+        auto is_null = [](const JsonValue& v, const char* k) {
+            const JsonValue* x = v.get(k);
+            return x && x->type == JsonValue::Type::Null;
+        };
+        JsonValue rc = radio(parsed(call(*s.core, {{"cmd", "status"}})), "radio_channel");
+        CHECK(rc.is_object() && is_null(rc, "label") && is_null(rc, "world") && is_null(rc, "since") &&
+              str(rc, "source") == "tuner_channel");
+        std::string rep = call(*s.core, {{"cmd", "tuner_channel"}, {"channel", "P1"}});
+        CHECK(ok(rep) && str(parsed(rep), "channel") == "P1" && rep.find("5000") == std::string::npos);
+        CHECK(s.core->tuner() && s.core->tuner()->current_channel() == "P1");
+        // Set: the label, its world, when, and where it came from; never a frequency.
+        std::string st = call(*s.core, {{"cmd", "status"}});
+        rc = radio(parsed(st), "radio_channel");
+        const std::string since = str(rc, "since");
+        CHECK(str(rc, "label") == "P1" && str(rc, "world") == "mars" && str(rc, "source") == "tuner_channel");
+        CHECK(since.size() == 20 && since[4] == '-' && since[10] == 'T' && since.back() == 'Z');
+        CHECK(st.find("5000") == std::string::npos);
+        std::string ks = call(*s.core, {{"cmd", "key_status"}});
+        JsonValue kc = radio(radio(parsed(ks), "station"), "channel");
+        CHECK(str(kc, "label") == "P1" && str(kc, "world") == "mars" && str(kc, "since") == since &&
+              str(kc, "source") == "tuner_channel");
+        CHECK(ks.find("5000") == std::string::npos);
+        CHECK(str(parsed(call(*s.core, {{"cmd", "tuner_bypass"}})), "code") == "no-tuner");
+        const std::string id = s.written("FARSTN", "CHANNEL FROM GALE-RX");
+        const std::string pid = str(parsed(call(*s.core, {{"cmd", "key_prepare"}, {"msg_id", id}})), "prepare_id");
+        CHECK(!pid.empty());
+        s.now = s.now + 2;
+        CHECK(ok(call(*s.core, {{"cmd", "key_confirm"}, {"prepare_id", pid}, {"confirm", "Y"}})));
+        CHECK(f.last("key") && str(*f.last("key"), "channel") == "P1");
+        CHECK(wait_for([&] { return s.state(id) == "sent"; }, 5000));
+    }
+
+    // ---- a tuner daemon: pre_tx before every key, the key only on ok, post_tx after
+    {
+        FakeGaleKey f;
+        f.sock = sock;
+        auto ft = std::make_shared<FakeTuner>();
+        Station s(base / "H", "HHH", sock, ft);
+        f.outbox = s.gc.outbox_dir;
+        f.start();
+        s.set_channel("P1");
+        auto confirm_new = [&](const std::string& body, std::string* id_out) {
+            const std::string id = s.written("FARSTN", body);
+            if (id_out) *id_out = id;
+            const std::string pid = str(parsed(call(*s.core, {{"cmd", "key_prepare"}, {"msg_id", id}})), "prepare_id");
+            CHECK(!pid.empty());
+            s.now = s.now + 2;
+            return call(*s.core, {{"cmd", "key_confirm"}, {"prepare_id", pid}, {"confirm", "Y"}});
+        };
+        const std::vector<std::string> seq = {"tuner_pre_tx", "gale-key key", "tuner_post_tx"};
+
+        // The operator's y.
+        std::string id;
+        order_clear();
+        CHECK(ok(confirm_new("TUNED ONE", &id)));
+        CHECK(order_now() == seq);
+        CHECK(wait_for([&] { return s.state(id) == "sent"; }, 5000));
+
+        // pre_tx refused: gale-key isn't asked, the burst stays written, the reason is shown.
+        ft->codes["tuner_pre_tx"] = {"refused-no-channel"};
+        const int keys = f.count("key");
+        std::string rep = confirm_new("PRE TX REFUSED", &id);
+        CHECK(!ok(rep));
+        const std::string why = str(parsed(rep), "error");
+        CHECK(why.find("tuner_pre_tx refused-no-channel") != std::string::npos &&
+              why.find("stays written") != std::string::npos);
+        CHECK(f.count("key") == keys && s.state(id) == "written" && ft->count("tuner_post_tx") == 1);
+        // Asked again once pre_tx is ok.
+        const std::string p2 = str(parsed(call(*s.core, {{"cmd", "key_prepare"}, {"msg_id", id}})), "prepare_id");
+        s.now = s.now + 2;
+        CHECK(ok(call(*s.core, {{"cmd", "key_confirm"}, {"prepare_id", p2}, {"confirm", "Y"}})));
+        CHECK(wait_for([&] { return s.state(id) == "sent"; }, 5000));
+
+        // post_tx refused-keyed: retried until taken.
+        ft->codes["tuner_post_tx"] = {"refused-keyed", "refused-keyed"};
+        const int posts = ft->count("tuner_post_tx");
+        CHECK(ok(confirm_new("POST TX RETRIED", &id)));
+        CHECK(ft->count("tuner_post_tx") == posts + 3);
+        // Never taken: keyed all the same, and the log says the antenna didn't go back.
+        ft->codes["tuner_post_tx"] = std::deque<std::string>(20, "refused-keyed");
+        CHECK(ok(confirm_new("POST TX NEVER", &id)));
+        CHECK(wait_for([&] { return s.state(id) == "sent"; }, 5000));
+        CHECK(s.events_text().find("the tuner didn't go back to the RX antenna") != std::string::npos);
+        ft->codes["tuner_post_tx"].clear();
+
+        // A standing key: the same sequence.
+        auto grant = [&](const std::string& mode) {
+            std::string pr = call(*s.core, {{"cmd", "standing_prepare"}, {"mode", mode}});
+            const std::string pid = str(parsed(pr), "prepare_id");
+            s.now = s.now + 2;
+            return ok(call(*s.core, {{"cmd", "key_confirm"}, {"prepare_id", pid}, {"confirm", "Y"}}));
+        };
+        CHECK(grant("routing"));
+        order_clear();
+        const std::string r1 = s.written("FARSTN", "ROUTED AND TUNED");
+        s.core->set_key_mode(r1, "routing");
+        CHECK(wait_for([&] { return s.state(r1) == "sent"; }, 5000));
+        CHECK(order_now() == seq);
+        // A standing key whose pre_tx is refused: not keyed, still written, the reason in its log.
+        ft->codes["tuner_pre_tx"] = {"refused-antenna"};
+        const int keys2 = f.count("key");
+        const std::string r2 = s.written("FARSTN", "ROUTED, ANTENNA REFUSED");
+        s.core->set_key_mode(r2, "routing");
+        CHECK(wait_for([&] { return s.events_text().find("tuner_pre_tx refused-antenna") != std::string::npos; }, 5000));
+        std::this_thread::sleep_for(std::chrono::milliseconds(300));
+        CHECK(f.count("key") == keys2 && s.state(r2) == "written");
+        CHECK(s.events_text().find("not asked, the burst stays written") != std::string::npos);
+    }
+
+    // ---- gale-key answers after the timeout (it is still keying): post_tx waits
+    // until its status says the key has ended
+    {
+        FakeGaleKey f;
+        f.sock = sock;
+        f.key_ms = 900;
+        auto ft = std::make_shared<FakeTuner>();
+        Station s(base / "I", "III", sock, ft, 300);
+        f.outbox = s.gc.outbox_dir;
+        f.start();
+        s.set_channel("P1");
+        const std::string id = s.written("FARSTN", "A LONG KEY");
+        const std::string pid = str(parsed(call(*s.core, {{"cmd", "key_prepare"}, {"msg_id", id}})), "prepare_id");
+        s.now = s.now + 2;
+        order_clear();
+        std::string rep = call(*s.core, {{"cmd", "key_confirm"}, {"prepare_id", pid}, {"confirm", "Y"}});
+        JsonValue v = parsed(rep);
+        CHECK(flag(v, "ok") && v.get("gale_key") && flag(*v.get("gale_key"), "reached") &&
+              !flag(*v.get("gale_key"), "answered"));
+        auto o = order_now();
+        auto at = [&](const std::string& e) {
+            auto it = std::find(o.begin(), o.end(), e);
+            return it == o.end() ? -1 : static_cast<int>(it - o.begin());
+        };
+        CHECK(at("tuner_pre_tx") == 0 && at("gale-key key") == 1);
+        CHECK(at("gale-key key ended") > 1 && at("tuner_post_tx") > at("gale-key key ended"));
+        CHECK(at("gale-key status") > at("gale-key key ended"));
+        CHECK(ft->count("tuner_post_tx") == 1);
+        CHECK(wait_for([&] { return s.state(id) == "sent"; }, 5000));
     }
 
     // ---- a station with no gale-key at all: the calls say so, status says why

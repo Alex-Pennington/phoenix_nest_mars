@@ -12,21 +12,26 @@
 //     them, with the channel's frequency, in tuner_channel on a channel change.
 //     The frequency goes only to that local socket: never into a reply, the
 //     log or the air. The API names a channel by its designator.
-//  3. Runs the tuner sequence around every keying the core does (section 5.7),
-//     because gale-key can't call the tuner:
-//       tuner_pre_tx, RF off; key only on ok
-//       key and transmit (a tune: a carrier of 25 W or less, tuner_tune,
-//         tuner_store, all on ant_tx)
-//       once the keying process and its watchdog have exited and RF is off,
-//         tuner_post_tx, retried on refused-keyed with a bounded backoff
+//  3. Runs the tuner sequence around every key the core asks of gale-key
+//     (section 5.7), because gale-key can't call the tuner (around_key):
+//       tuner_pre_tx, RF off (switch to the channel's ant_tx); gale-key is
+//         sent `key` only on ok
+//       gale-key keys and transmits, and answers when its key has ended
+//       once gale-key's key has ended (its reply, or its status no longer
+//         keyed), tuner_post_tx (back to ant_rx), retried on refused-keyed
+//         with a bounded backoff
+//     A tune (a carrier of 25 W or less, tuner_tune, tuner_store, all on
+//     ant_tx) runs the same sequence through a Keyer.
 //
 // Keying is by CAT or a hardware PTT line only. VOX is forbidden (Alex), so a
 // keyer that says it keys any other way is refused before anything is sent.
 //
-// Transmit is pinned to gale-tx/WAV: the core writes bursts and keys nothing,
-// so the core holds no keyer and refuses tuner_tune. Only Alex unpins it; no
-// call, setting or file does. With no tuner daemon there at all (no socket set,
-// or nothing listening on it), keying behaves exactly as it would without one.
+// The core keys nothing itself: gale-key (gale_key.h) is the station's one
+// keying service, so the core holds no keyer and refuses tuner_tune while
+// transmit is pinned. Only Alex unpins it; no call, setting or file does. With
+// no tuner daemon there at all (no socket set, or nothing listening on it),
+// gale-key's keys go exactly as they would without one, and tuner_channel
+// still records the channel the radio is on.
 #pragma once
 
 #include "channels.h"
@@ -106,6 +111,9 @@ struct TunerTiming {
     int post_tries = 8;        // tuner_post_tx tries on refused-keyed or busy
     int post_first_ms = 250;   // first backoff, doubled each try
     int post_max_ms = 4000;    // backoff ceiling
+    // How long to wait for gale-key's key to end before post_tx: its key
+    // time is capped at 120 s (greybeard-ale docs/gale-tx.md), plus margin.
+    int key_end_wait_ms = 130000;
     int status_ms = 1500;          // the core's status call: tuner_status read timeout
     int status_max_age_ms = 1000;  // and how long one read serves
 };
@@ -146,6 +154,13 @@ public:
     // channel's designator. With no tuner, ok with tuner=false.
     TunerOutcome channel(const Channel& c);
     std::string current_channel() const;
+    // The channel the radio was last set to, for clients that show it (status
+    // radio_channel): the designator, its world and when (UTC, ISO 8601 Z).
+    // Never a frequency. nullopt when none has been set since start.
+    struct RadioChannel {
+        std::string label, world, since;
+    };
+    std::optional<RadioChannel> radio_channel() const;
 
     // The daemon's status block, as JSON text, for the core's status call:
     // tuner_status read at most once a second, passed through unchanged.
@@ -166,9 +181,18 @@ public:
     // retried with a bounded backoff on refused-keyed and busy.
     TunerOutcome post_tx(Keyer* k);
 
+    // Around one key the core asks of gale-key. With a tuner daemon:
+    // tuner_pre_tx, and key() is called only on ok; then, once ended() says
+    // gale-key's key is over (or key_end_wait_ms passes), tuner_post_tx with
+    // the bounded retry. key() runs whether gale-key keys or refuses; post_tx
+    // follows either way. With no daemon (none set, or none answering), key()
+    // is called as it would be without a tuner. *asked says whether key() ran.
+    TunerOutcome around_key(const std::function<void()>& key, const std::function<bool()>& ended, bool* asked);
+
 private:
     TunerOutcome tune_with(Keyer& k, const std::string& kind, const std::string& confirm, int watts, bool store);
     TunerReply call(const std::string& cmd, const std::string& args = "");
+    TunerOutcome post_tx_when(const std::function<bool()>& idle, int wait_ms, const char* what);
     void log(const std::string& s);
 
     std::shared_ptr<TunerLink> link_;
@@ -177,6 +201,7 @@ private:
     bool pinned_ = true;
     std::shared_ptr<Keyer> keyer_;
     std::string channel_;
+    std::string channel_since_;  // when channel_ was set, ISO 8601 Z; "" none
     std::function<void(const std::string&)> log_;
     std::mutex seq_mu_;  // one sequence at a time
     std::mutex status_mu_;

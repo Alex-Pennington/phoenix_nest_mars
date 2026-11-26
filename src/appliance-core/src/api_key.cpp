@@ -3,6 +3,7 @@
 #include "core.h"
 #include "gale_key.h"
 #include "json.h"
+#include "tuner.h"
 
 #include <filesystem>
 
@@ -36,7 +37,8 @@ void write_keying(JsonWriter& w, Core& core) {
     w.begin_object("keying");
     if (!gk) {
         w.field("gale_key", "none").field("why", "no gale-key is set up for this station: nothing is keyed");
-        w.begin_array("standing").end_array().field("held", 0).end_object();
+        w.begin_array("standing").end_array().field("held", 0);
+        w.field("answers_written", static_cast<long long>(core.answer_bursts())).end_object();
         return;
     }
     std::string why;
@@ -52,7 +54,23 @@ void write_keying(JsonWriter& w, Core& core) {
     w.field("gale_key", state).field("socket", where).field("why", no_frequency(why));
     w.begin_array("standing");
     for (auto& m : gk->standing()) w.field("", m);
-    w.end_array().field("held", static_cast<long long>(gk->held())).end_object();
+    w.end_array().field("held", static_cast<long long>(gk->held()));
+    // ACK and orderwire bursts in the outbox with no result yet (keyed under machine only).
+    w.field("answers_written", static_cast<long long>(core.answer_bursts())).end_object();
+}
+
+void write_radio_channel(JsonWriter& w, const char* key, Core& core) {
+    TunerKeying* tk = core.tuner();
+    auto rc = tk ? tk->radio_channel() : std::nullopt;
+    w.begin_object(key);
+    if (rc) {
+        w.field("label", rc->label).field("world", rc->world);
+        if (rc->since.empty()) w.field_null("since");
+        else w.field("since", rc->since);
+    } else {
+        w.field_null("label").field_null("world").field_null("since");
+    }
+    w.field("source", "tuner_channel").end_object();
 }
 
 std::optional<std::string> handle_key(Core& core, const std::string& cmd, std::map<std::string, std::string>& req) {
@@ -172,7 +190,9 @@ std::optional<std::string> handle_key(Core& core, const std::string& cmd, std::m
         if (const JsonValue* x = r.body.get("grants"); x && x->is_object())
             for (auto& [m, v] : x->obj)
                 if (m == "machine" || m == "routing" || m == "auto_qsl" || m == "amateur_auto") w.field("", m);
-        w.end_array().end_object();
+        w.end_array();
+        write_radio_channel(w, "channel", core);
+        w.end_object();
     }
     w.end_object();
     return w.str();
