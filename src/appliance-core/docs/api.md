@@ -296,7 +296,9 @@ standard's structure and names, not its on-air protocols (no AME headers, CONEX 
 MARS traffic stays in its own formats.
 
 The station works one or more services, such as amateur and MARS. Each service is one network,
-named by a service table (greybeard-ale `docs/services.md`). The core names no service in code:
+named by a service table (greybeard-ale `docs/services.md`). The core reads the table files
+itself, under that document's loader contract, with no IPC to the loader. It is tested against
+the fixture tables shipped by the loader's tests. The core names no service in code:
 a service is valid when it has a table, and a value no table defines is refused, never treated
 as MARS. Alex's hard rule stands: there is no forward or auto-copy route between services, ever.
 **Routing is the only guard between services.** Nothing else refuses a message for its service.
@@ -978,7 +980,7 @@ The new rows (asks 35, 36):
 | `world` | `mars`, `amateur`, `both` (default: GALE-DIR/world, else mars with GALE-DIR/net_plans, else amateur) | now |
 | `tx-world` | retires: a send carries its own service (see Services) | now |
 | `ptt-line` | `RTS` or `DTR`; must match switch S1001 in the SCU-17; unset until chosen | now |
-| `cat-ptt` | `yes`/`no`, default `no`; turning it on needs the operator's yes (a PTT-line kill switch won't stop it) | now |
+| `cat-ptt` | retires: PTT is the hardware line only, and gale-key refuses to start with it on (greybeard-ale `docs/station-controller.md`) | now |
 | `engineering-readouts` | `yes`/`no`, default `no` | now |
 | `book-auto-add-heard` (group Book, ask 30) | `yes`/`no`, default `no`: MARS stations heard are added to the book | now |
 
