@@ -225,7 +225,8 @@ static const JsonValue* field_of(const JsonValue& form, const std::string& key) 
 }
 
 static void channel_form(const fs::path& dir) {
-    // The template itself: two choices, 1 or 2, default 1, with guide text.
+    // The template itself: two choices, 1 or 2, no default (a blank port is
+    // not sent, so the channel keeps the one it holds), with guide text.
     forms::Template t;
     std::string err;
     bool found = false;
@@ -239,8 +240,9 @@ static void channel_form(const fs::path& dir) {
         CHECK(f != t.fields.end());
         if (f == t.fields.end()) continue;
         CHECK(f->kind == "choice" && f->choices.size() == 2 && f->choices[0].value == "1" && f->choices[1].value == "2");
-        CHECK(f->def == "1" && !f->required);
-        CHECK(contains(f->help, "1 or 2") && contains(f->help, "RF off") && contains(f->help, "Blank means 1"));
+        CHECK(f->def.empty() && !f->required && !f->fill);
+        CHECK(contains(f->help, "1 or 2") && contains(f->help, "RF off") &&
+              contains(f->help, "Blank keeps the port the channel has (1 for a new one)"));
     }
 
     auto core = std::make_unique<Core>(CoreConfig{"STA-A", (dir / "STA-A.db").string(), 3, 1, true},
@@ -248,16 +250,23 @@ static void channel_form(const fs::path& dir) {
     auto ops = std::make_shared<Ops>("STA-A", (dir / "STA-A.db").string());
     core->set_ops(ops);
 
-    // The form as drawn: both fields, 1 by default.
+    // The form as drawn: both fields.
     JsonValue r = api(*core, R"({"cmd":"form_get","form":"CHANNEL"})");
     CHECK(okv(r) && field_of(r, "ant_rx") && field_of(r, "ant_tx"));
     if (field_of(r, "ant_tx")) CHECK(contains(str(*field_of(r, "ant_tx"), "help"), "Tunes and tuner memories"));
 
-    // Left out: 1 and 1.
+    // Left out on a channel the plan holds (plan_file left P1 on RX 1, TX 2):
+    // kept. Left out on a new channel: 1 and 1.
+    CHECK(ops->channels().get("P1") && ops->channels().get("P1")->ant_tx == 2);
     r = api(*core, R"({"cmd":"form_submit","form":"CHANNEL","name":"P1","frequency":"5000"})");
     CHECK(okv(r));
-    CHECK(ops->channels().get("P1") && ops->channels().get("P1")->ant_rx == 1 && ops->channels().get("P1")->ant_tx == 1);
-    // RX on 1, TX on 2.
+    CHECK(ops->channels().get("P1") && ops->channels().get("P1")->ant_rx == 1 && ops->channels().get("P1")->ant_tx == 2);
+    r = api(*core, R"({"cmd":"form_submit","form":"CHANNEL","name":"P5","frequency":"7000"})");
+    CHECK(okv(r));
+    CHECK(ops->channels().get("P5") && ops->channels().get("P5")->ant_rx == 1 && ops->channels().get("P5")->ant_tx == 1);
+    // RX on 1, TX on 1, then TX on 2.
+    r = api(*core, R"({"cmd":"form_submit","form":"CHANNEL","name":"P1","frequency":"5000","ant_rx":"1","ant_tx":"1"})");
+    CHECK(okv(r) && num(sub(r, "result"), "ant_tx") == 1 && str(sub(r, "result"), "result") == "replaced");
     r = api(*core, R"({"cmd":"form_submit","form":"CHANNEL","name":"P1","frequency":"5000","ant_rx":"1","ant_tx":"2"})");
     CHECK(okv(r) && num(sub(r, "result"), "ant_tx") == 2 && str(sub(r, "result"), "result") == "replaced");
     CHECK(ops->channels().get("P1")->ant_tx == 2);
@@ -268,9 +277,9 @@ static void channel_form(const fs::path& dir) {
         CHECK(!okv(r) && !sub(r, "problems").arr.empty() && str(sub(r, "problems").arr[0], "field") == "ant_tx");
     }
     CHECK(ops->channels().get("P1")->ant_tx == 2);
-    // Blank means 1.
+    // Blank on the form keeps the port held.
     r = api(*core, R"({"cmd":"form_submit","form":"CHANNEL","name":"P1","frequency":"5000","ant_rx":"","ant_tx":""})");
-    CHECK(okv(r) && ops->channels().get("P1")->ant_tx == 1);
+    CHECK(okv(r) && ops->channels().get("P1")->ant_tx == 2 && ops->channels().get("P1")->ant_rx == 1);
     // Opening the channel again shows its ports, never its frequency.
     api(*core, R"({"cmd":"channel_put","name":"P2","frequency":"10000","ant_rx":"2","ant_tx":"2"})");
     r = api(*core, R"({"cmd":"form_get","form":"CHANNEL","name":"P2"})");
