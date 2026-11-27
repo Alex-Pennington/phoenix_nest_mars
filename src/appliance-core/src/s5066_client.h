@@ -24,8 +24,10 @@
 #include <chrono>
 #include <functional>
 #include <map>
+#include <memory>
 #include <mutex>
 #include <string>
+#include <deque>
 #include <thread>
 #include <vector>
 
@@ -102,6 +104,115 @@ private:
     std::atomic<bool> bound_{false};
     std::atomic<bool> sending_{false};
     std::atomic<bool> flow_off_{false};
+    std::atomic<bool> running_{false};
+    std::thread worker_;
+};
+
+// ---- link = controller ----------------------------------------------------
+// The core as the networking controller over STANAG 5066 SIS to greybeard-ale's
+// station controller, the link controller (MIL-STD-188-141B D.4.2.8.3; docs/api.md,
+// "Keying"; decision D11, "lean SIS"). The primitives and their encoding are
+// STANAG 5066 Annex A v1.2, A.2.1 and A.2.2; the codec is s5066.h.
+//
+//  - One Unix socket per service, DIR/sis-<service>.sock. The transport is the
+//    only departure: the controller checks the core's unit by SO_PEERCRED,
+//    which a TCP peer has not got. Framing is Annex A A.2.2.2.
+//  - On each service's socket the operator's sender binds SAP 13 and, where
+//    the service has automatic modes, the automatic sender binds SAP 14, each
+//    on its own connection (S_BIND_REQUEST, A.2.1.1 and A.2.2.3). The service
+//    type is non-ARQ (Transmission Mode 0010), no delivery confirmation, in
+//    order, no retransmission (Figure A-3).
+//  - One frame per S_UNIDATA_REQUEST (A.2.1.6, Figure A-20), to the all-stations
+//    address as a group address (A.2.2.28.1), with the same delivery mode
+//    given explicitly (Figure A-29). A U_PDU over the MTU of S_BIND_ACCEPTED
+//    (A.2.1.3: 2048 for a general-purpose node) is never submitted.
+//  - Every request waits for its one answer, S_UNIDATA_REQUEST_CONFIRM (A.2.1.7)
+//    or S_UNIDATA_REQUEST_REJECTED (A.2.1.8). Annex A issues these only when
+//    confirmation was asked; the controller departs and answers every request,
+//    after the key ends. The answer names its U_PDU by a copy of its first
+//    bytes (A.2.1.7 (7)), which matches it to its request. No answer within the
+//    time to live plus a grace, or a dropped connection, is a failure.
+//  - S_KEEP_ALIVE (A.2.1.17) is answered in kind.
+struct SisLinkConfig {
+    std::string dir = "/run/gale-rx";  // --controller-sis-dir: DIR/sis-<service>.sock
+    uint8_t sap_operator = 13;
+    uint8_t sap_automatic = 14;
+    uint32_t ttl_seconds = 600;        // s5066-ttl, per U_PDU (A.2.1.6 (6))
+    int answer_grace_s = 30;           // waited past the TTL for the answer
+    int reconnect_ms = 3000;
+    uint16_t mtu = 2048;               // A.2.1.3 (7), and the controller's
+};
+
+constexpr size_t kSisMtu = 2048;
+
+// One frame handed down.
+struct SisSend {
+    std::string service, burst, msg_id, frame, sha256;
+    bool automatic = false;  // SAP 14, else SAP 13
+    uint8_t priority = 0;    // 0-15 (A.2.1.6 (2))
+};
+
+class SisControllerLink {
+public:
+    // confirmed: S_UNIDATA_REQUEST_CONFIRM. Otherwise reason is the
+    // REJECTED reason (A.2.1.8), or 0 with why for no answer or a drop.
+    using Result = std::function<void(const SisSend& s, bool confirmed, uint8_t reason, const std::string& why)>;
+
+    explicit SisControllerLink(SisLinkConfig cfg);
+    ~SisControllerLink();
+    SisControllerLink(const SisControllerLink&) = delete;
+    SisControllerLink& operator=(const SisControllerLink&) = delete;
+
+    // Before start: a connection for this service's operator sender, and one
+    // for its automatic sender when automatic is set.
+    void add(const std::string& service, bool automatic);
+    void start(Result on_result, std::function<void(const std::string&)> log);
+    void stop();
+
+    // Writes one S_UNIDATA_REQUEST. False with *why when it was not written:
+    // no such connection, not bound, or a U_PDU over the MTU.
+    bool submit(const SisSend& s, std::string* why);
+    bool bound(const std::string& service, bool automatic) const;
+    bool has(const std::string& service, bool automatic) const;
+    size_t outstanding() const;
+    std::string path_for(const std::string& service) const;
+    const SisLinkConfig& config() const { return cfg_; }
+
+private:
+    struct Pending {
+        SisSend send;
+        std::chrono::steady_clock::time_point deadline;
+    };
+    struct Conn {
+        std::string service;
+        bool automatic = false;
+        uint8_t sap = 0;
+        int fd = -1;
+        bool bound = false;
+        uint16_t mtu = 0;
+        s5066::Reader reader;
+        std::deque<Pending> pending;
+        std::chrono::steady_clock::time_point next_try{};
+        std::string told;  // the last state logged, so it is said once
+    };
+    struct Done {
+        SisSend send;
+        bool confirmed = false;
+        uint8_t reason = 0;
+        std::string why;
+    };
+    void run();
+    void open(Conn& c, std::vector<std::string>& notes);  // caller holds mu_
+    void drop(Conn& c, const std::string& why, std::vector<Done>& done, std::vector<std::string>& notes);
+    void handle(Conn& c, const s5066::Prim& p, std::vector<Done>& done, std::vector<std::string>& notes);
+    Conn* find(const std::string& service, bool automatic);
+    const Conn* find(const std::string& service, bool automatic) const;
+
+    SisLinkConfig cfg_;
+    Result on_result_;
+    std::function<void(const std::string&)> log_;
+    mutable std::mutex mu_;
+    std::vector<std::unique_ptr<Conn>> conns_;
     std::atomic<bool> running_{false};
     std::thread worker_;
 };

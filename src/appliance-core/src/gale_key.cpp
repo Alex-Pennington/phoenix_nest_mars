@@ -1,6 +1,9 @@
 #include "gale_key.h"
 
 #include "compose.h"
+#include "frame.h"
+#include "s5066.h"
+#include "s5066_client.h"
 #include "sha256.h"
 
 #include <algorithm>
@@ -211,9 +214,11 @@ void GaleKey::halt() {
         std::lock_guard<std::mutex> g(mu_);
         stop_ = true;
         jobs_.clear();
+        sis_result_ = nullptr;  // no SIS answer reaches a core going away
     }
     cv_.notify_all();
     if (thread_.joinable() && thread_.get_id() != std::this_thread::get_id()) thread_.join();
+    if (sis_) sis_->stop();
 }
 
 void GaleKey::set_clock(std::function<double()> clock) {
@@ -237,8 +242,12 @@ GaleKeyReply GaleKey::send_key(const KeyItem& it, const std::string& request) {
         std::lock_guard<std::mutex> g(mu_);
         a = around_;
     }
-    if (!a) return ask(request);
-    return a(it, [this, &request] { return ask(request); });
+    // link = controller: request is empty for the operator's send (SAP 13)
+    // and "automatic" for an automatic one (SAP 14).
+    std::function<GaleKeyReply()> send = [this, &request] { return ask(request); };
+    if (sis_) send = [this, &it, &request] { return submit_sis(it, request == "automatic"); };
+    if (!a) return send();
+    return a(it, send);
 }
 
 void GaleKey::note(const std::string& msg_id, const std::string& text) {
@@ -316,6 +325,7 @@ size_t GaleKey::held() {
 }
 
 GaleKey::Prepared GaleKey::prepare(const KeyItem& it) {
+    if (sis_) return prepare_sis(it);
     Prepared p;
     // gale-key binds its token to the WAV's bytes, so a prepare is only for a
     // burst already whole in the outbox, never for the next one written.
@@ -410,6 +420,36 @@ GaleKey::Prepared GaleKey::prepare_standing(const std::string& mode, const std::
     if (service != "mars") {
         p.error = "service " + (service.empty() ? std::string("not given") : no_frequency(service)) +
                   ": until stage 5 the core turns on automatic sends in MARS only";
+        return p;
+    }
+    if (sis_) {
+        // link = controller: the y is the core's own. No prepare goes to the
+        // controller; key_confirm sends `grant` (docs/api.md, standing_prepare).
+        JsonWriter w;
+        w.begin_object()
+            .field("kind", "standing")
+            .field("mode", mode)
+            .field("service", service)
+            .field("world", service)
+            .end_object();
+        Held h;
+        h.kind = "standing";
+        h.mode = mode;
+        h.service = service;
+        h.conn = KeyConnection::current();
+        {
+            std::lock_guard<std::mutex> g(mu_);
+            drop_expired();
+            h.id = new_id();
+            h.at = clock_();
+            h.until = h.at + kGaleKeyTokenS;
+            held_[h.id] = h;
+        }
+        p.ok = true;
+        p.prepare_id = h.id;
+        p.expires_s = static_cast<int>(kGaleKeyTokenS);
+        p.confirm = w.str();
+        note("", "standing " + mode + " (" + service + ") waits for the operator's y");
         return p;
     }
     JsonWriter w0;
@@ -530,6 +570,13 @@ bool GaleKey::unchanged(const Held& h, std::string* error) const {
 }
 
 GaleKeyReply GaleKey::key(const Held& h) {
+    if (sis_) {
+        GaleKeyReply r = send_key(h.item, "");
+        note(h.item.msg_id, "handed " + h.item.burst + " (" + h.item.service + ") to the station controller on SAP 13 " +
+                                "on the operator's y, for " + h.item.channel + ": " +
+                                (r.reached ? std::string("its SIS answer decides") : no_frequency(r.reason)));
+        return r;
+    }
     JsonWriter t;
     t.begin_object().field("token", h.token).end_object();
     const std::string tok = t.str().substr(1, t.str().size() - 2);  // "token":"..."
@@ -547,9 +594,9 @@ GaleKeyReply GaleKey::grant(const Held& h) {
     w.begin_object()
         .field("cmd", "grant")
         .field("mode", h.mode)
-        .field("service", h.service)
-        .field("token", h.token)
-        .end_object();
+        .field("service", h.service);
+    if (!h.token.empty()) w.field("token", h.token);
+    w.end_object();
     GaleKeyReply r = ask(w.str());
     if (r.answered && r.ok) {
         std::lock_guard<std::mutex> g(mu_);
@@ -596,6 +643,14 @@ std::vector<std::string> GaleKey::standing() {
 
 GaleKeyReply GaleKey::key_standing_now(const KeyItem& it, const std::string& mode) {
     if (!core_standing_mode(mode) || !standing_on(mode)) return not_reached("standing " + mode + " is off");
+    if (sis_) {
+        GaleKeyReply r = send_key(it, "automatic");
+        note(it.msg_id, "handed " + it.burst + " (" + it.service + ") to the station controller on SAP 14 under standing " +
+                            mode + ": " +
+                            (r.reached ? std::string("its SIS answer decides")
+                                       : no_frequency(r.reason) + "; not handed down, it stays written"));
+        return r;
+    }
     JsonWriter t;
     t.begin_object().field("standing", mode).end_object();
     const std::string st = t.str().substr(1, t.str().size() - 2);
@@ -695,6 +750,155 @@ GaleKeyReply GaleKey::status() {
     GaleKeyReply r = ask(R"({"cmd":"status"})");
     take_radio(r);
     return r;
+}
+
+// ------------------------------------------------------------------ link = controller
+
+void GaleKey::set_sis(std::shared_ptr<SisControllerLink> sis) {
+    sis_ = std::move(sis);
+    if (!sis_) return;
+    sis_->start(
+        [this](const SisSend& s, bool confirmed, uint8_t, const std::string& why) {
+            on_sis(s.burst, s.sha256, confirmed, why);
+        },
+        [this](const std::string& text) { note("", text); });
+}
+
+void GaleKey::set_sis_result(SisResult r) {
+    std::lock_guard<std::mutex> g(mu_);
+    sis_result_ = std::move(r);
+}
+
+std::string GaleKey::send_channel(const std::string& service, std::string* why) {
+    // station-controller.md, status: "send_channel":{"S":"<LABEL>"|null}.
+    GaleKeyReply r = status();
+    if (!r.answered) {
+        if (why) *why = "the station controller's status: " + no_frequency(r.reason);
+        return "";
+    }
+    const JsonValue* sc = member(r.body, "send_channel");
+    if (sc && sc->is_object())
+        if (const JsonValue* c = sc->get(service); c && c->type == JsonValue::Type::String && !c->s.empty())
+            return no_frequency(c->s);
+    std::string w;
+    if (const JsonValue* x = member(r.body, "waiting"); x && x->is_array())
+        for (auto& e : x->arr)
+            if (text_of(e, "service") == service && !text_of(e, "why").empty()) {
+                w = no_frequency(text_of(e, "why"));
+                break;
+            }
+    if (why) *why = w.empty() ? "no channel for service " + service : w;
+    return "";
+}
+
+GaleKey::Prepared GaleKey::prepare_sis(const KeyItem& it) {
+    Prepared p;
+    const std::string path = wav_path(it.burst);
+    std::string bytes;
+    if (it.burst.empty() || !read_whole(path, bytes) || bytes.empty()) {
+        p.error = (it.burst.empty() ? std::string("no frame") : it.burst) +
+                  " is not in the outbox: nothing to prepare (a prepare is only for a frame already written)";
+        return p;
+    }
+    // Annex A A.2.1.3: no U_PDU over the MTU. Refused before the y.
+    if (bytes.size() > kSisMtu) {
+        p.error = "too long for one burst: " + std::to_string(bytes.size()) + " bytes, the station controller takes " +
+                  std::to_string(kSisMtu);
+        return p;
+    }
+    std::string why;
+    const std::string ch = send_channel(it.service, &why);
+    if (ch.empty()) {
+        p.error = "not prepared: " + why;
+        return p;
+    }
+    KeyItem item = it;
+    item.channel = ch;
+    JsonWriter w;
+    w.begin_object()
+        .field("kind", "air")
+        .field("service", it.service)
+        .field("world", it.service)
+        .field("channel", ch)
+        .field("id", it.station_id)
+        .field("msg_id", it.msg_id)
+        .field("burst", it.burst)
+        .end_object();
+    Held h;
+    h.kind = "air";
+    h.item = item;
+    h.wav = path;
+    h.sha256 = sha256_hex(bytes);
+    h.conn = KeyConnection::current();
+    {
+        std::lock_guard<std::mutex> g(mu_);
+        drop_expired();
+        for (auto x = held_.begin(); x != held_.end();) {
+            if (x->second.kind == "air" && x->second.item.burst == it.burst) x = held_.erase(x);
+            else ++x;
+        }
+        h.id = new_id();
+        h.at = clock_();
+        h.until = h.at + kGaleKeyTokenS;
+        held_[h.id] = h;
+    }
+    p.ok = true;
+    p.prepare_id = h.id;
+    p.expires_s = static_cast<int>(kGaleKeyTokenS);
+    p.confirm = w.str();
+    note(it.msg_id, it.burst + " (" + it.service + ") on " + ch + " waits for the operator's y");
+    return p;
+}
+
+GaleKeyReply GaleKey::submit_sis(const KeyItem& it, bool automatic) {
+    GaleKeyReply r;
+    std::string bytes;
+    if (!read_whole(wav_path(it.burst), bytes) || bytes.empty()) {
+        r.reason = it.burst + " is no longer in the outbox";
+        return r;
+    }
+    SisSend s;
+    s.service = it.service;
+    s.burst = it.burst;
+    s.msg_id = it.msg_id;
+    s.frame = bytes;
+    s.sha256 = sha256_hex(bytes);
+    s.automatic = automatic;
+    // The 5066 priority from the precedence the frame's header carries (Z 15,
+    // O 10, P 5, R 0); a plain frame, with no header, goes at 0.
+    {
+        FrameParser fp;
+        auto frames = fp.feed(bytes);
+        s.priority = frames.size() == 1 ? s5066::priority_for(frames.front().prec) : 0;
+    }
+    std::string why;
+    if (!sis_->submit(s, &why)) {
+        r.reason = why;
+        return r;
+    }
+    // Handed down: only its SIS answer decides what became of it.
+    r.reached = r.answered = r.ok = r.accepted = true;
+    return r;
+}
+
+void GaleKey::on_sis(const std::string& burst, const std::string& sha256, bool confirmed, const std::string& why) {
+    // The controller's sentence is in status.last under the frame's sha256,
+    // because SIS carries only a reason code (station-controller.md, part 3).
+    std::string said = confirmed ? std::string() : why, channel;
+    GaleKeyReply st = status();
+    if (const JsonValue* last = member(st.body, "last"); st.answered && last && last->is_array())
+        for (auto& e : last->arr)
+            if (text_of(e, "sha256") == sha256) {
+                channel = no_frequency(text_of(e, "channel"));
+                if (!confirmed && !text_of(e, "why").empty()) said = no_frequency(text_of(e, "why"));
+                break;
+            }
+    SisResult f;
+    {
+        std::lock_guard<std::mutex> g(mu_);
+        f = sis_result_;
+    }
+    if (f) f(burst, confirmed, confirmed ? channel : said);
 }
 
 }  // namespace pna

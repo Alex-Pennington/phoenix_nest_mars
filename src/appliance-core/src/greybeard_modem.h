@@ -56,6 +56,11 @@ struct GreybeardConfig {
     // The outbox write-back: a burst is "written", not "sent", until gale-key
     // leaves BURST.key.json beside it saying it keyed it (or refused to).
     bool await_key = true;
+    // link = controller (docs/api.md, "Transmit"): no gale-tx here. Each frame
+    // is written to the outbox whole as BURST.frame, and the station
+    // controller builds the burst from it once it is handed down over SIS.
+    // Its answer is the result, so no BURST.key.json is read.
+    bool frames_only = false;
 };
 
 class GreybeardModem : public ModemDriver {
@@ -65,7 +70,7 @@ public:
 
     void start(Callbacks cb) override;
     void stop() override;
-    bool ready() const override { return running_ && !cfg_.mode.empty(); }
+    bool ready() const override { return running_ && (cfg_.frames_only || !cfg_.mode.empty()); }
     bool busy() const override { return sending_; }
     bool send(const std::string& bytes) override;
     std::string describe() const override;

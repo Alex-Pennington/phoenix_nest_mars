@@ -93,6 +93,16 @@ void usage() {
         "  --s5066-confirm WHAT  node or client delivery confirmation (default node)\n"
         "  --s5066-broadcast HOW each: a copy to every station in the peers file\n"
         "                        (default); group: one copy to the all-stations address\n\n"
+        "One station, through greybeard-ale's station controller over STANAG 5066 SIS:\n"
+        "  --station NAME        this station's call\n"
+        "  --link controller     write each frame and hand it down over SIS, one Unix\n"
+        "                        socket per service that transmits: SAP 13 for the\n"
+        "                        operator's y, SAP 14 for automatic sends (MARS only).\n"
+        "                        The controller runs gale-tx: no --tx-mode or --tx-cmd.\n"
+        "                        Needs --captures and --controller-socket (its status,\n"
+        "                        grant and revoke)\n"
+        "  --controller-sis-dir DIR  where sis-<service>.sock are (default /run/gale-rx)\n"
+        "  --s5066-ttl SEC       time to live per frame (default 600)\n\n"
         "One station, straight to the modem over 110D Appendix A (no 5066 node):\n"
         "  --station NAME        this station's call\n"
         "  --link appa           be the modem's DTE on its Appendix A TCP data socket\n"
@@ -355,6 +365,7 @@ int main(int argc, char** argv) {
     bool link_gate = false;
     std::string link_kind = "burst";
     S5066Config s5066;
+    SisLinkConfig sis;
     AppaConfig appa;
 
     bool check_only = false;
@@ -497,6 +508,7 @@ int main(int argc, char** argv) {
             else if (a == "--link-poll-ms") link_poll_ms = std::stoi(next());
             else if (a == "--link-gate") link_gate = true;
             else if (a == "--link") link_kind = next();
+            else if (a == "--controller-sis-dir") sis.dir = next();
             else if (a == "--s5066-peers") s5066.peers_file = next();
             else if (a == "--appa-port") appa.port = static_cast<uint16_t>(std::stoi(next()));
             else if (a == "--s5066-port") s5066.port = static_cast<uint16_t>(std::stoi(next()));
@@ -507,7 +519,7 @@ int main(int argc, char** argv) {
                     return 2;
                 }
                 s5066.sap = static_cast<uint8_t>(v);
-            } else if (a == "--s5066-ttl") s5066.ttl_seconds = static_cast<uint32_t>(std::stoul(next()));
+            } else if (a == "--s5066-ttl") sis.ttl_seconds = s5066.ttl_seconds = static_cast<uint32_t>(std::stoul(next()));
             else if (a == "--s5066-confirm") {
                 std::string v = next();
                 if (v == "node") s5066.confirm = s5066::kNodeConfirm;
@@ -535,9 +547,16 @@ int main(int argc, char** argv) {
         }
     }
 
-    if (link_kind != "burst" && link_kind != "s5066" && link_kind != "appa") {
-        std::cerr << "--link: burst, s5066 or appa\n";
+    if (link_kind != "burst" && link_kind != "controller" && link_kind != "s5066" && link_kind != "appa") {
+        std::cerr << "--link: burst, controller, s5066 or appa\n";
         return 2;
+    }
+    // --rx-service is for a link that names no channel. A burst or controller
+    // link's traffic takes its capture's channel's service.
+    if (!g_rx_service.empty() && (link_kind == "burst" || link_kind == "controller")) {
+        std::cerr << "rx-service: ignored on link " << link_kind
+                  << " (heard traffic takes the service of its capture's channel)\n";
+        g_rx_service.clear();
     }
     if (link_gate && link_socket.empty()) {
         if (op_map.count("link-gate")) {
@@ -647,6 +666,23 @@ int main(int argc, char** argv) {
                 else if (!s5066::read_peers(s5066.peers_file, peers, &perr)) problems.push_back("s5066-peers: " + perr);
                 else std::cout << "  5066 peers     " << peers.size() << " stations in " << s5066.peers_file << "\n";
                 notes.push_back("the 5066 node is looked for at start and every few seconds after; it needn't be up now");
+            } else if (link_kind == "controller") {
+                std::cout << "  link           the station controller over STANAG 5066 SIS, " << sis.dir
+                          << "/sis-<service>.sock (SAP 13 operator, SAP 14 automatic)\n";
+                if (!tx_mode.empty() || tx_prog != "gale-tx")
+                    notes.push_back("tx-mode and tx-cmd are not used with link controller: the controller runs gale-tx");
+                for (const Service* x : g_services->all())
+                    if (x->transmit) {
+                        std::error_code sec;
+                        std::string sp = sis.dir + "/sis-" + x->name + ".sock";
+                        if (!fs::exists(sp, sec))
+                            notes.push_back("no SIS socket at " + sp + " yet: until the controller serves it, " + x->name +
+                                            " frames stay written");
+                    }
+                std::cout << "  captures       " << (captures.empty() ? "(not set)" : captures) << "\n";
+                std::error_code ec;
+                if (captures.empty()) problems.push_back("captures isn't set (greybeard-ale's capture directory)");
+                else if (!fs::is_directory(captures, ec)) problems.push_back("captures: " + captures + " isn't a directory");
             } else if (link_kind == "appa") {
                 std::cout << "  link           110D Appendix A modem at 127.0.0.1:" << appa.port
                           << " (the waveform is the modem's setting)\n";
@@ -818,6 +854,37 @@ int main(int argc, char** argv) {
                 modem = std::make_unique<S5066Client>(s5066);
             } else if (link_kind == "appa") {
                 modem = std::make_unique<AppaModem>(appa);
+            } else if (link_kind == "controller") {
+                // The station controller over SIS (docs/api.md, "Keying"). The core
+                // writes frames, never bursts, and the modems' captures still come in.
+                if (captures.empty()) {
+                    std::cerr << "--link controller needs --captures (try --help)\n";
+                    return 2;
+                }
+                GreybeardConfig g;
+                g.frames_only = true;
+                g.captures_dir = captures;
+                g.captures_fallback_dir = captures_fallback;
+                g.work_dir = db_dir + "/" + station + "-work";
+                g.outbox_dir = outbox.empty() ? db_dir + "/" + station + "-outbox" : outbox;
+                g.state_file = db_dir + "/" + station + "-captures-seen.txt";
+                modem = std::make_unique<GreybeardModem>(g);
+                if (g_gale_key_socket.empty() || g_gale_key_socket == "none") {
+                    std::cerr << "--link controller needs the controller's local socket (--controller-socket)\n";
+                    return 2;
+                }
+                // One SIS connection per service whose table transmits: SAP 13,
+                // and SAP 14 where automatic modes run (MARS only until stage 5).
+                auto link = std::make_shared<SisControllerLink>(sis);
+                for (const Service* x : g_services->all())
+                    if (x->transmit) {
+                        link->add(x->name, false);
+                        if (x->name == "mars") link->add(x->name, true);
+                    }
+                g_gale_key = std::make_shared<GaleKey>(
+                    std::make_shared<GaleKeySocket>(g_gale_key_socket, g_gale_key_timeout_ms), g.outbox_dir);
+                g_gale_key->set_poll_ms(2000);
+                g_gale_key->set_sis(link);
             } else {
                 if (tx_mode.empty() || captures.empty()) {
                     std::cerr << "--station needs --tx-mode and --captures (try --help)\n";

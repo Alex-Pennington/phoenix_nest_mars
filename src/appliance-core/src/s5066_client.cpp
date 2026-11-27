@@ -2,6 +2,7 @@
 
 #include "frame.h"
 
+#include <algorithm>
 #include <arpa/inet.h>
 #include <cerrno>
 #include <cstring>
@@ -10,6 +11,7 @@
 #include <poll.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
+#include <sys/un.h>
 #include <unistd.h>
 
 namespace pna {
@@ -350,6 +352,297 @@ void S5066Client::run() {
         mu_.unlock();
         for (auto& a : after) a();
         mu_.lock();
+    }
+}
+
+}  // namespace pna
+
+// ---- link = controller ----------------------------------------------------
+
+namespace pna {
+
+namespace {
+
+// Figure A-3 and Figure A-29: Transmission Mode 0010 (non-ARQ), Delivery
+// Confirmation 00 (none), Delivery Order 0 (in order), no retransmission.
+s5066::ServiceType controller_service_type() {
+    s5066::ServiceType st;
+    st.tx_mode = s5066::kNonArqBroadcast;
+    st.confirm = s5066::kNoConfirm;
+    st.as_they_arrive = false;
+    st.retries = 0;
+    return st;
+}
+
+bool write_fd(int fd, const std::string& bytes) {
+    size_t off = 0;
+    while (off < bytes.size()) {
+        ssize_t n = ::send(fd, bytes.data() + off, bytes.size() - off, MSG_NOSIGNAL);
+        if (n < 0 && errno == EINTR) continue;
+        if (n <= 0) return false;
+        off += static_cast<size_t>(n);
+    }
+    return true;
+}
+
+std::string sender_name(bool automatic) { return automatic ? "automatic sender" : "operator's sender"; }
+
+}  // namespace
+
+SisControllerLink::SisControllerLink(SisLinkConfig cfg) : cfg_(std::move(cfg)) {}
+
+SisControllerLink::~SisControllerLink() { stop(); }
+
+std::string SisControllerLink::path_for(const std::string& service) const {
+    return cfg_.dir + "/sis-" + service + ".sock";
+}
+
+void SisControllerLink::add(const std::string& service, bool automatic) {
+    std::lock_guard<std::mutex> g(mu_);
+    if (find(service, automatic)) return;
+    auto c = std::make_unique<Conn>();
+    c->service = service;
+    c->automatic = automatic;
+    c->sap = automatic ? cfg_.sap_automatic : cfg_.sap_operator;
+    conns_.push_back(std::move(c));
+}
+
+SisControllerLink::Conn* SisControllerLink::find(const std::string& service, bool automatic) {
+    for (auto& c : conns_)
+        if (c->service == service && c->automatic == automatic) return c.get();
+    return nullptr;
+}
+
+const SisControllerLink::Conn* SisControllerLink::find(const std::string& service, bool automatic) const {
+    for (auto& c : conns_)
+        if (c->service == service && c->automatic == automatic) return c.get();
+    return nullptr;
+}
+
+bool SisControllerLink::has(const std::string& service, bool automatic) const {
+    std::lock_guard<std::mutex> g(mu_);
+    return find(service, automatic) != nullptr;
+}
+
+bool SisControllerLink::bound(const std::string& service, bool automatic) const {
+    std::lock_guard<std::mutex> g(mu_);
+    const Conn* c = find(service, automatic);
+    return c && c->bound;
+}
+
+size_t SisControllerLink::outstanding() const {
+    std::lock_guard<std::mutex> g(mu_);
+    size_t n = 0;
+    for (auto& c : conns_) n += c->pending.size();
+    return n;
+}
+
+void SisControllerLink::start(Result on_result, std::function<void(const std::string&)> log) {
+    if (running_) return;
+    on_result_ = std::move(on_result);
+    log_ = std::move(log);
+    running_ = true;
+    worker_ = std::thread([this] { run(); });
+}
+
+void SisControllerLink::stop() {
+    if (!running_.exchange(false)) return;
+    if (worker_.joinable()) worker_.join();
+    std::lock_guard<std::mutex> g(mu_);
+    for (auto& c : conns_) {
+        if (c->fd >= 0) {
+            // S_UNBIND_REQUEST (A.2.1.2): the controller drops what it holds unkeyed.
+            (void)write_fd(c->fd, s5066::unbind_request());
+            ::close(c->fd);
+        }
+        c->fd = -1;
+        c->bound = false;
+        c->pending.clear();  // nothing is told to a core going away
+    }
+}
+
+bool SisControllerLink::submit(const SisSend& s, std::string* why) {
+    auto fail = [&](const std::string& w) {
+        if (why) *why = w;
+        return false;
+    };
+    std::lock_guard<std::mutex> g(mu_);
+    Conn* c = find(s.service, s.automatic);
+    if (!c)
+        return fail("no SIS " + sender_name(s.automatic) + " for the " + s.service + " service (" +
+                    (s.automatic ? "it has no automatic modes" : "its table does not transmit") + ")");
+    if (!c->bound || c->fd < 0)
+        return fail("the station controller isn't bound for " + s.service + " on SAP " + std::to_string(c->sap) +
+                    " (" + path_for(s.service) + ")");
+    const size_t mtu = std::min<size_t>(c->mtu ? c->mtu : cfg_.mtu, std::min<size_t>(cfg_.mtu, kSisMtu));
+    if (s.frame.size() > mtu)
+        return fail("too long for one burst: " + std::to_string(s.frame.size()) +
+                    " bytes, the station controller takes " + std::to_string(mtu));
+    // A.2.1.6: priority, destination SAP (the same client application at the
+    // far station), the all-stations address, delivery mode, TTL, the U_PDU.
+    const std::string req = s5066::unidata_request(s.priority & 0x0F, c->sap, s5066::kBroadcastAddress,
+                                                   controller_service_type(), cfg_.ttl_seconds, s.frame);
+    if (!write_fd(c->fd, req)) return fail("the request didn't reach the station controller");
+    Pending p;
+    p.send = s;
+    p.deadline = std::chrono::steady_clock::now() + std::chrono::seconds(cfg_.ttl_seconds + cfg_.answer_grace_s);
+    c->pending.push_back(std::move(p));
+    return true;
+}
+
+// Caller holds mu_.
+void SisControllerLink::open(Conn& c, std::vector<std::string>& notes) {
+    const std::string path = path_for(c.service);
+    sockaddr_un a{};
+    auto said = [&](const std::string& w) {
+        if (c.told != w) notes.push_back(w);
+        c.told = w;
+    };
+    if (path.size() >= sizeof a.sun_path) {
+        said("SIS " + c.service + ": the socket path is too long for a Unix socket: " + path);
+        return;
+    }
+    int fd = ::socket(AF_UNIX, SOCK_STREAM, 0);
+    if (fd < 0) return;
+    a.sun_family = AF_UNIX;
+    std::memcpy(a.sun_path, path.c_str(), path.size());
+    if (::connect(fd, reinterpret_cast<sockaddr*>(&a), sizeof a) != 0) {
+        ::close(fd);
+        said("SIS " + c.service + " SAP " + std::to_string(c.sap) + ": the station controller isn't answering on " +
+             path + "; nothing of " + c.service + " is handed down until it is");
+        return;
+    }
+    // A.2.1.1: S_BIND_REQUEST(SAP ID, rank, service type). Rank 0.
+    if (!write_fd(fd, s5066::bind_request(c.sap, 0, controller_service_type()))) {
+        ::close(fd);
+        return;
+    }
+    c.fd = fd;
+    c.bound = false;
+    c.reader = s5066::Reader();
+}
+
+// Caller holds mu_. Every request without its answer fails.
+void SisControllerLink::drop(Conn& c, const std::string& why, std::vector<Done>& done,
+                             std::vector<std::string>& notes) {
+    if (c.fd >= 0) ::close(c.fd);
+    c.fd = -1;
+    const bool was = c.bound;
+    c.bound = false;
+    c.next_try = std::chrono::steady_clock::now() + std::chrono::milliseconds(cfg_.reconnect_ms);
+    for (auto& p : c.pending) done.push_back(Done{p.send, false, 0, why});
+    c.pending.clear();
+    if (was) {
+        const std::string w = "SIS " + c.service + " SAP " + std::to_string(c.sap) + ": " + why;
+        notes.push_back(w);
+        c.told = w;
+    }
+}
+
+// Caller holds mu_.
+void SisControllerLink::handle(Conn& c, const s5066::Prim& p, std::vector<Done>& done,
+                               std::vector<std::string>& notes) {
+    switch (p.type) {
+    case s5066::kBindAccepted:
+        // A.2.1.3: the SAP is ours; the MTU bounds every U_PDU after it.
+        c.bound = true;
+        c.mtu = p.mtu;
+        c.told = "bound";
+        notes.push_back("SIS " + c.service + ": the " + sender_name(c.automatic) + " is bound on SAP " +
+                        std::to_string(c.sap) + ", MTU " + std::to_string(p.mtu));
+        return;
+    case s5066::kBindRejected:
+        // A.2.1.4: try again later; the reason is said once.
+    {
+        const std::string w = "SIS " + c.service + " SAP " + std::to_string(c.sap) + ": bind rejected: " +
+                              s5066::bind_rejected_text(p.reason);
+        drop(c, "bind rejected: " + s5066::bind_rejected_text(p.reason), done, notes);
+        if (c.told != w) notes.push_back(w);
+        c.told = w;
+        return;
+    }
+    case s5066::kUnbindIndication:
+        drop(c, "the station controller unbound it: " + s5066::unbind_text(p.reason), done, notes);
+        return;
+    case s5066::kKeepAlive:
+        (void)write_fd(c.fd, s5066::keep_alive());  // A.2.1.17
+        return;
+    case s5066::kUnidataRequestConfirm:
+    case s5066::kUnidataRequestRejected: {
+        // A.2.1.7 (7): the copy of the U_PDU (or its first bytes) names the
+        // request; an empty copy is the oldest one waiting.
+        auto it = c.pending.begin();
+        if (!p.data.empty())
+            for (; it != c.pending.end(); ++it)
+                if (it->send.frame.compare(0, p.data.size(), p.data) == 0) break;
+        if (it == c.pending.end()) {
+            notes.push_back("SIS " + c.service + ": an answer for no request waiting; ignored");
+            return;
+        }
+        Done d{it->send, p.type == s5066::kUnidataRequestConfirm, p.reason, ""};
+        if (!d.confirmed) d.why = s5066::unidata_rejected_text(p.reason);
+        c.pending.erase(it);
+        done.push_back(std::move(d));
+        return;
+    }
+    default:
+        return;  // nothing else is ours to read on this link
+    }
+}
+
+void SisControllerLink::run() {
+    while (running_) {
+        std::vector<Done> done;
+        std::vector<std::string> notes;
+        std::vector<pollfd> fds;
+        std::vector<Conn*> who;
+        {
+            std::lock_guard<std::mutex> g(mu_);
+            const auto now = std::chrono::steady_clock::now();
+            for (auto& cp : conns_) {
+                Conn& c = *cp;
+                if (c.fd < 0 && now >= c.next_try) {
+                    open(c, notes);
+                    if (c.fd < 0) c.next_try = now + std::chrono::milliseconds(cfg_.reconnect_ms);
+                }
+                // The time to live plus the grace, and no answer: failed.
+                while (!c.pending.empty() && now >= c.pending.front().deadline) {
+                    done.push_back(Done{c.pending.front().send, false, 0,
+                                        "no answer from the station controller within " +
+                                            std::to_string(cfg_.ttl_seconds + cfg_.answer_grace_s) + " s"});
+                    c.pending.pop_front();
+                }
+                if (c.fd >= 0) {
+                    fds.push_back(pollfd{c.fd, POLLIN, 0});
+                    who.push_back(&c);
+                }
+            }
+        }
+        if (!fds.empty()) ::poll(fds.data(), fds.size(), 100);
+        else std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        {
+            std::lock_guard<std::mutex> g(mu_);
+            for (size_t i = 0; i < fds.size(); ++i) {
+                Conn& c = *who[i];
+                if (c.fd != fds[i].fd || !(fds[i].revents & (POLLIN | POLLHUP | POLLERR))) continue;
+                char buf[8192];
+                ssize_t n = ::recv(c.fd, buf, sizeof buf, MSG_DONTWAIT);
+                if (n < 0 && (errno == EAGAIN || errno == EINTR)) continue;
+                if (n <= 0) {
+                    drop(c, "the connection to the station controller dropped", done, notes);
+                    continue;
+                }
+                for (auto& raw : c.reader.feed(std::string(buf, static_cast<size_t>(n)))) {
+                    s5066::Prim p;
+                    if (s5066::parse(raw, p)) handle(c, p, done, notes);
+                    if (c.fd < 0) break;
+                }
+            }
+        }
+        if (log_)
+            for (auto& n : notes) log_(n);
+        if (on_result_)
+            for (auto& d : done) on_result_(d.send, d.confirmed, d.reason, d.why);
     }
 }
 

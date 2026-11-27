@@ -1,5 +1,7 @@
 #include "core.h"
 
+#include "s5066_client.h"
+
 #include "acp201.h"
 #include "codress.h"
 #include "crypto.h"
@@ -147,6 +149,8 @@ std::string Core::submit(const std::string& to, char prec, const std::string& bo
     if (body.empty()) return fail("message is empty");
     if (body.size() > kMaxBody) return fail("message is longer than " + std::to_string(kMaxBody) + " bytes");
     if (!o.link.empty() && o.link != "plain") return fail("link must be plain or left out");
+    // link = controller: channel selection is the link controller's (D.4.2.8.2).
+    if (sis_link() && !o.channel.empty()) return fail("refused: the station controller chooses the channel");
     // The one route function: the message's service, or the crossing refused.
     Route rt = route_for(o.service, to, o.channel, o.route_service);
     if (!rt.ok) return fail(rt.refusal);
@@ -693,8 +697,17 @@ void Core::tick() {
     f.prec = next->prec;
     f.body = next->body;
     const bool plain = next->link == "plain" || (!is_broadcast(f.dst) && store_.link_format(f.dst) == "plain");
+    const std::string bytes = plain ? f.body : encode(f);
+    if (sis_link() && bytes.size() > kSisMtu) {
+        // One frame is one U_PDU and one burst: never cut, so refused before the y.
+        const std::string why = "too long for one burst: " + std::to_string(bytes.size()) +
+                                " bytes, the station controller takes " + std::to_string(kSisMtu);
+        store_.set_state(f.id, "failed", why);
+        log(f.id, "refused: " + why);
+        return;
+    }
     store_.mark_sending(f.id);
-    if (modem_->send(plain ? f.body : encode(f))) {
+    if (modem_->send(bytes)) {
         on_air_ = f;
         on_air_plain_ = plain;
         log(f.id, std::string(plain ? "sending as plain text" : "sending") + ", attempt " +
@@ -738,7 +751,7 @@ void Core::handle_tx_done(bool ok, const std::string& err) {
             a.dst = f.dst;
             auto m = ow ? std::nullopt : store_.get(f.id);
             a.world = m ? m->world : route_for("", f.dst).service;
-            a.channel = radio_label_locked();
+            a.channel = sis_link() ? std::string() : radio_label_locked();  // the controller chooses it
             answer_bursts_[burst] = a;
             log(a.about, a.what + " written to the outbox as " + burst +
                              "; not on the air until gale-key keys it (under standing machine)");
@@ -759,7 +772,10 @@ void Core::handle_tx_done(bool ok, const std::string& err) {
             // the one the controller reports the radio on (docs/api.md, "A
             // send's channel"); the route function checks it before it is
             // handed down.
-            const std::string ch = now_m && !now_m->channel.empty() ? now_m->channel : radio_label_locked();
+            // link = controller: none; the controller chooses it, and the y shows it.
+            const std::string ch = sis_link() ? std::string()
+                                   : now_m && !now_m->channel.empty() ? now_m->channel
+                                                                      : radio_label_locked();
             store_.mark_written(f.id, burst, ch);
             log(f.id, "written to the outbox as " + burst + "; not on the air until the controller keys it");
             return;
@@ -796,17 +812,24 @@ void Core::set_gale_key(std::shared_ptr<GaleKey> g) {
     });
     // No tuner sequence here: the controller tells the tuner daemon the
     // channel as part of its own sequence (docs/api.md, Keying).
+    // link = controller: the SIS answer is the result (docs/api.md, Transmit).
+    gk_->set_sis_result([this](const std::string& burst, bool keyed, const std::string& why) {
+        handle_key_result(burst, keyed, why, "the station controller");
+    });
 }
 
-bool Core::key_checks(const Store::KeyRow& r, std::string* error) {
+bool Core::key_checks(const Store::KeyRow& r, std::string* error, const std::string* channel) {
     auto fail = [&](const std::string& why) {
         if (error) *error = why;
         return false;
     };
     if (r.state != "written" || r.burst.empty())
         return fail(r.id + " is " + r.state + ", not a burst written to the outbox waiting for its key");
-    if (r.asked) return fail("the controller already has " + r.burst + "; its BURST.key.json decides");
-    if (r.channel.empty())
+    const bool sis = sis_link();
+    if (r.asked)
+        return fail("the controller already has " + r.burst + (sis ? "; its SIS answer decides" : "; its BURST.key.json decides"));
+    const std::string& ch = channel ? *channel : r.channel;
+    if (!sis && r.channel.empty())
         return fail(r.burst + " has no channel (none picked, and the controller reported none when it was "
                               "written): never handed down; requeue it once one is set");
     if (!r.mode.empty()) {
@@ -819,7 +842,7 @@ bool Core::key_checks(const Store::KeyRow& r, std::string* error) {
     }
     // The route function: the burst's, the message's, the destination's and
     // the channel's services are one.
-    if (Route rt = route_for(r.world.empty() ? std::string("(none)") : r.world, r.dst, r.channel); !rt.ok)
+    if (Route rt = route_for(r.world.empty() ? std::string("(none)") : r.world, r.dst, ch); !rt.ok)
         return fail("not keyed: " + rt.refusal);
     if (emcon_) return fail("EMCON is on: nothing is handed to the controller until it is off");
     return true;
@@ -843,6 +866,8 @@ bool Core::key_item(const std::string& msg_id, const std::string& burst, KeyItem
     }
     if (!key_checks(*r, error)) return false;
     it = KeyItem{r->id, r->burst, r->world, r->channel, r->dst};
+    if (const Services* sv = services())
+        if (const Service* t = sv->find(r->world)) it.station_id = t->station_id;
     return true;
 }
 
@@ -853,11 +878,13 @@ bool Core::claim_key(const KeyItem& it, std::string* error) {
         if (error) *error = "no outgoing message " + it.msg_id;
         return false;
     }
-    if (r->burst != it.burst || r->channel != it.channel || r->world != it.service) {
+    // link = controller: the row holds no channel; the y's is the controller's send_channel.
+    const bool sis = sis_link();
+    if (r->burst != it.burst || (!sis && r->channel != it.channel) || r->world != it.service) {
         if (error) *error = it.msg_id + "'s burst changed since the y dialog opened: open it again";
         return false;
     }
-    if (!key_checks(*r, error)) return false;
+    if (!key_checks(*r, error, sis ? &it.channel : nullptr)) return false;
     if (!store_.claim_key(it.msg_id, it.burst)) {
         if (error) *error = "the controller already has " + it.burst;
         return false;
@@ -903,7 +930,7 @@ void Core::key_answers(bool machine_on) {
             why = "it is of the " + a.world + " service: until stage 5 the core keys automatic sends in MARS only";
         else if (std::string w = world_refusal(a.dst); !w.empty())
             why = w + " (ask 40)";
-        else if (a.channel.empty())
+        else if (a.channel.empty() && !sis_link())
             why = "the controller reported no channel when it was written: never handed down";
         else if (Route rt = route_for(a.world, a.dst, a.channel); !rt.ok)
             why = rt.refusal;
@@ -998,11 +1025,14 @@ void Core::key_automatic() {
     }
 }
 
-void Core::handle_key_result(const std::string& burst, bool keyed, const std::string& why) {
+void Core::handle_key_result(const std::string& burst, bool keyed, const std::string& why, const std::string& by) {
     std::lock_guard<std::mutex> g(mu_);
     auto id = store_.id_by_burst(burst);
     auto m = id ? store_.get(*id) : std::nullopt;
-    const std::string said = keyed ? "keyed by gale-key" : "not keyed by gale-key: " + (why.empty() ? "no reason given" : why);
+    // From the station controller a keyed result's why names the channel it keyed on.
+    const bool sis = by != "gale-key";
+    const std::string kd = "keyed by " + by + (sis && keyed && !why.empty() ? " on " + why : std::string());
+    const std::string said = keyed ? kd : "not keyed by " + by + ": " + (why.empty() ? "no reason given" : why);
     if (auto a = answer_bursts_.find(burst); a != answer_bursts_.end() && !m) {
         // An ACK or orderwire: its result is logged only.
         log(a->second.about, a->second.what + " (" + burst + ") " + said);
@@ -1028,7 +1058,7 @@ void Core::handle_key_result(const std::string& burst, bool keyed, const std::st
             log("", "standing " + row->mode +
                         " OFF: gale-key holds no grant for it any more; the operator's y turns it on again");
         }
-        store_.set_state(m->id, "failed", "not keyed: " + (why.empty() ? "gale-key gave no reason" : why));
+        store_.set_state(m->id, "failed", "not keyed: " + (why.empty() ? by + " gave no reason" : why));
         log(m->id, burst + " " + said + "; failed (requeue to try again)");
         return;
     }
@@ -1036,9 +1066,10 @@ void Core::handle_key_result(const std::string& burst, bool keyed, const std::st
     const bool cp_chat = plain && m->body.compare(0, 5, "chat|") == 0;
     const bool awaits = !is_broadcast(m->dst) && cfg_.send_acks && (!plain || cp_chat);
     store_.mark_sent(m->id, awaits && cfg_.ack_timeout_s > 0 ? now_utc() + cfg_.ack_timeout_s : 0);
-    if (is_broadcast(m->dst)) log(m->id, burst + " keyed by gale-key: sent to all stations, no ack expected");
-    else if (plain && !cp_chat) log(m->id, burst + " keyed by gale-key: sent as plain text; this link has no ack on the air");
-    else log(m->id, burst + (awaits ? " keyed by gale-key: sent, waiting for ack" : " keyed by gale-key: sent"));
+    // The Transport ack clock (QSL, resend) starts here, at the key's result.
+    if (is_broadcast(m->dst)) log(m->id, burst + " " + kd + ": sent to all stations, no ack expected");
+    else if (plain && !cp_chat) log(m->id, burst + " " + kd + ": sent as plain text; this link has no ack on the air");
+    else log(m->id, burst + " " + kd + (awaits ? ": sent, waiting for ack" : ": sent"));
 }
 
 // Every byte of a burst, as text that hides none: printable ASCII and line

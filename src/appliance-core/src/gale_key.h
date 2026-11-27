@@ -133,7 +133,10 @@ private:
 // it goes on, and the link-level addressee.
 struct KeyItem {
     std::string msg_id, burst, service, channel, to;
+    bool station_id = false;  // the service's table sends a station ID (the y shows it)
 };
+
+class SisControllerLink;
 
 class GaleKey {
 public:
@@ -219,6 +222,24 @@ public:
     void halt();
     GaleKeyReply key_standing_now(const KeyItem& it, const std::string& mode);
 
+    // link = controller (docs/api.md, "Keying"): frames go down over STANAG 5066
+    // SIS on this link, never as prepare, key or cancel on the local socket,
+    // and their SIS answer is the result. The local socket keeps status, grant
+    // and revoke. Set before the core's set_gale_key; this starts the link.
+    void set_sis(std::shared_ptr<SisControllerLink> sis);
+    bool controller_link() const { return sis_ != nullptr; }
+    SisControllerLink* sis() const { return sis_.get(); }
+    // Called once per frame handed down over SIS, from the link's thread:
+    // keyed (S_UNIDATA_REQUEST_CONFIRM) or not (REJECTED, no answer, a drop),
+    // with why: the controller's sentence from status.last under the frame's
+    // sha256, else the Annex A reason. For a keyed frame, why names the
+    // channel status.last gives ("" when it gives none).
+    using SisResult = std::function<void(const std::string& burst, bool keyed, const std::string& why)>;
+    void set_sis_result(SisResult r);
+    // The controller's status.send_channel for a service: the label it would
+    // send on now. "" with *why (the controller's) when it names none.
+    std::string send_channel(const std::string& service, std::string* why);
+
     // `status`, as the controller answers it. Every status read updates radio().
     GaleKeyReply status();
     // The last report of the radio's channel (status's `radio`).
@@ -247,6 +268,13 @@ private:
     void drop_expired();  // caller holds mu_
     void note(const std::string& msg_id, const std::string& text);
     void worker();
+
+    // link = controller
+    Prepared prepare_sis(const KeyItem& it);
+    GaleKeyReply submit_sis(const KeyItem& it, bool automatic);
+    void on_sis(const std::string& burst, const std::string& sha256, bool confirmed, const std::string& why);
+    std::shared_ptr<SisControllerLink> sis_;
+    SisResult sis_result_;
 
     std::shared_ptr<GaleKeyLink> link_;
     std::string outbox_;
