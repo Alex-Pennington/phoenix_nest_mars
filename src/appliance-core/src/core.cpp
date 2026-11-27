@@ -108,6 +108,17 @@ void Core::start() {
         if (n) log("", std::to_string(n) + " interrupted message(s) put back in the queue");
         log("", "station " + cfg_.station + " starting on " + modem_->describe());
         if (emcon_) log("", "EMCON is on: nothing will be sent until it is turned off");
+        // link = controller: a row written and asked was handed down by a core
+        // that stopped before its SIS answer. Nobody waits for that answer now,
+        // so each is settled from the controller's status.last (gale_key.h).
+        std::vector<KeyItem> asked;
+        if (sis_link())
+            for (auto& r : store_.written_asked()) asked.push_back(KeyItem{r.id, r.burst, r.world, r.channel, r.dst});
+        if (!asked.empty()) {
+            log("", std::to_string(asked.size()) + " message(s) were handed to the station controller before this "
+                                                     "start and have no answer: each is settled from its status");
+            gk_->settle(asked, "the core restarted before its answer");
+        }
     }
     ModemDriver::Callbacks cb;
     cb.on_rx = [this](const std::string& b) { handle_rx(b); };
@@ -813,8 +824,9 @@ void Core::set_gale_key(std::shared_ptr<GaleKey> g) {
     // No tuner sequence here: the controller tells the tuner daemon the
     // channel as part of its own sequence (docs/api.md, Keying).
     // link = controller: the SIS answer is the result (docs/api.md, Transmit).
-    gk_->set_sis_result([this](const std::string& burst, bool keyed, const std::string& why) {
-        handle_key_result(burst, keyed, why, "the station controller");
+    gk_->set_sis_result([this](const std::string& burst, SisOutcome outcome, const std::string& why) {
+        if (outcome == SisOutcome::unknown) handle_key_unknown(burst, why);
+        else handle_key_result(burst, outcome == SisOutcome::keyed, why, "the station controller");
     });
 }
 
@@ -1081,6 +1093,32 @@ void Core::handle_key_result(const std::string& burst, bool keyed, const std::st
     if (is_broadcast(m->dst)) log(m->id, burst + " " + kd + ": sent to all stations, no ack expected");
     else if (plain && !cp_chat) log(m->id, burst + " " + kd + ": sent as plain text; this link has no ack on the air");
     else log(m->id, burst + " " + kd + (awaits ? ": sent, waiting for ack" : ": sent"));
+}
+
+void Core::handle_key_unknown(const std::string& burst, const std::string& why) {
+    std::lock_guard<std::mutex> g(mu_);
+    auto id = store_.id_by_burst(burst);
+    auto m = id ? store_.get(*id) : std::nullopt;
+    const std::string said = "the station controller does not say whether it was keyed";
+    if (auto a = answer_bursts_.find(burst); a != answer_bursts_.end() && !m) {
+        // An ACK or orderwire: logged only, as its result would be.
+        log(a->second.about, a->second.what + " (" + burst + "): " + said);
+        key_told_.erase(burst);
+        answer_bursts_.erase(a);
+        return;
+    }
+    if (!m) {
+        log("", burst + ": " + said + " (an ack, an orderwire or traffic no longer held)");
+        return;
+    }
+    if (m->state != "written") {
+        log(m->id, burst + ": " + said + " (it is " + m->state + " now, so nothing changes)");
+        return;
+    }
+    // Not "not keyed": it may be on the air already. The operator reads the
+    // log (the controller's, and the far station's answer) before a requeue.
+    store_.set_state(m->id, "failed", why);
+    log(m->id, burst + ": " + said + "; failed: " + why);
 }
 
 // Every byte of a burst, as text that hides none: printable ASCII and line

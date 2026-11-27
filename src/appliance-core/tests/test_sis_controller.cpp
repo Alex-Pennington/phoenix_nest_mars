@@ -270,6 +270,25 @@ struct FakeController {
         (void)::send(r.fd, out.data(), out.size(), MSG_NOSIGNAL);
         r.answered = true;
     }
+    // A status.last entry written by hand, newest first: what the controller holds for a frame.
+    void note_last(const std::string& frame, const std::string& service, const std::string& result,
+                   const std::string& why = "") {
+        std::lock_guard<std::mutex> g(mu);
+        JsonWriter e;
+        e.begin_object()
+            .field("send", "K-2")
+            .field("sha256", sha256_hex(frame))
+            .field("service", service)
+            .field("channel", send_channel[service])
+            .field("result", result)
+            .field("why", why)
+            .end_object();
+        last.insert(last.begin(), e.str());
+    }
+    void clear_last() {
+        std::lock_guard<std::mutex> g(mu);
+        last.clear();
+    }
     // Answers the oldest request still waiting.
     bool answer_one(bool confirm) {
         std::lock_guard<std::mutex> g(mu);
@@ -366,7 +385,8 @@ struct Station {
     std::shared_ptr<SisControllerLink> link;
     std::atomic<double> now{1000.0};
 
-    Station(const fs::path& d, const fs::path& sock_dir) : dir(d) {
+    Station(const fs::path& d, const fs::path& sock_dir, const std::function<void(SisLinkConfig&)>& tweak = {})
+        : dir(d) {
         fs::create_directories(dir);
         gc.frames_only = true;
         gc.captures_dir = (dir / "cap").string();
@@ -388,6 +408,7 @@ struct Station {
         sc.reconnect_ms = 200;
         sc.ttl_seconds = 4;
         sc.answer_grace_s = 1;
+        if (tweak) tweak(sc);
         link = std::make_shared<SisControllerLink>(sc);
         // As main.cpp: each service that transmits; SAP 14 for MARS only until stage 5.
         for (const Service* x : test_services()->all())
@@ -674,6 +695,91 @@ int main() {
             CHECK(f.unbound_sends == 0);
         }
         f.stop();
+    }
+
+    // ---- the core restarts with frames handed down and unanswered: each asked row is
+    //      settled from status.last under the frame's sha256, and nothing is sent again
+    {
+        FakeController f;
+        f.dir = base;
+        f.mode = "hold";
+        f.start({"mars", "amateur"});
+        std::string keyed, refused, gone, slow, down, stuck;
+        {
+            Station s(base / "R", base);
+            CHECK(wait_for([&] { return s.link->bound("mars", false); }, 5000));
+            keyed = s.written("FARSTN", "KEYED WHILE THE CORE WAS AWAY");
+            CHECK(flag(s.y(keyed), "asked"));
+            refused = s.written("FARSTN", "REFUSED WHILE THE CORE WAS AWAY");
+            CHECK(flag(s.y(refused), "asked"));
+            gone = s.written("FARSTN", "NOTHING KNOWN OF IT");
+            CHECK(flag(s.y(gone), "asked"));
+            slow = s.written("FARSTN", "GALE-KEY STILL HAS THE ORDER");
+            CHECK(flag(s.y(slow), "asked"));
+            CHECK(wait_for([&] { return f.count_reqs() == 4; }, 5000));
+            CHECK(s.state(keyed) == "written" && s.state(slow) == "written");
+        }
+        // What the controller made of them while the core was away.
+        f.note_last(f.req(0).p.data, "mars", "keyed");
+        f.note_last(f.req(1).p.data, "mars", "refused", "refused: the radio was not free");
+        f.note_last(f.req(3).p.data, "mars", "unknown");
+        {
+            Station s(base / "R", base);
+            CHECK(wait_for([&] { return s.state(keyed) == "sent"; }, 5000));
+            auto m = s.core->get(keyed);
+            CHECK(m && m->sends == 1 && m->next_try_at > 0);
+            CHECK(has(s.events_text(), "keyed by the station controller on P1: sent, waiting for ack"));
+            CHECK(wait_for([&] { return s.state(refused) == "failed"; }, 5000));
+            CHECK(has(s.core->get(refused)->last_error, "not keyed: refused: the radio was not free"));
+            CHECK(wait_for([&] { return s.state(gone) == "failed"; }, 5000));
+            CHECK(s.core->get(gone)->last_error == "result unknown: check the log before resending");
+            // gale-key still has the fourth's order: the row waits for its result.
+            std::this_thread::sleep_for(std::chrono::milliseconds(700));
+            CHECK(s.state(slow) == "written");
+            CHECK(!ok(call(*s.core, {{"cmd", "key_prepare"}, {"msg_id", slow}})));  // still the controller's
+            f.note_last(f.req(3).p.data, "mars", "keyed");
+            CHECK(wait_for([&] { return s.state(slow) == "sent"; }, 6000));
+            CHECK(f.count_reqs() == 4);  // nothing went down a second time
+
+            // Two more, handed down and unanswered when this core stops.
+            down = s.written("FARSTN", "THE CONTROLLER IS AWAY AT START");
+            CHECK(flag(s.y(down), "asked"));
+            stuck = s.written("FARSTN", "ITS RESULT NEVER COMES");
+            CHECK(flag(s.y(stuck), "asked"));
+            CHECK(wait_for([&] { return f.count_reqs() == 6; }, 5000));
+        }
+        const std::string frame = f.req(4).p.data, frame2 = f.req(5).p.data;
+        f.stop();
+        FakeController f2;
+        f2.dir = base;
+        f2.note_last(frame, "mars", "keyed");
+        f2.note_last(frame2, "mars", "unknown");
+        {
+            // The controller is not there when the core starts: the rows wait. They are
+            // settled when the link binds, not at the next reading (set a minute away).
+            Station s(base / "R", base, [](SisLinkConfig& c) { c.settle_retry_ms = 60000; });
+            std::this_thread::sleep_for(std::chrono::milliseconds(800));
+            CHECK(s.state(down) == "written" && s.gk->unsettled() == 2);
+            f2.start({"mars", "amateur"});
+            CHECK(wait_for([&] { return s.state(down) == "sent"; }, 5000));
+            CHECK(s.state(stuck) == "written" && s.gk->unsettled() == 1);
+        }
+        {
+            // A result that never comes: after settle_wait_s the row fails as unknown.
+            Station s(base / "R", base, [](SisLinkConfig& c) {
+                c.settle_wait_s = 1;
+                c.settle_retry_ms = 200;
+            });
+            CHECK(s.state(stuck) == "written");
+            CHECK(wait_for([&] { return s.state(stuck) == "failed"; }, 5000));
+            CHECK(s.core->get(stuck)->last_error == kSisResultUnknown);
+            CHECK(has(s.events_text(), "its status gave no result within 1 s"));
+            CHECK(s.gk->unsettled() == 0);
+        }
+        CHECK(f2.count_reqs() == 0);  // nothing went down a second time
+        f2.stop();
+        // The settle wait covers the longest key and gale-key's order timeout.
+        CHECK(SisLinkConfig().settle_wait_s >= 120 + 150);
     }
 
     // ---- no controller: nothing is handed down, the message stays written

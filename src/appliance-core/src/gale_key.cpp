@@ -680,22 +680,36 @@ void GaleKey::key_standing(const KeyItem& it, const std::string& mode, std::func
 void GaleKey::worker() {
     for (;;) {
         Job j;
-        bool poll = false;
+        bool poll = false, settle = false;
         {
             std::unique_lock<std::mutex> lk(mu_);
-            auto ready = [this] { return stop_ || !jobs_.empty(); };
-            if (poll_ms_ > 0) {
-                poll = !cv_.wait_for(lk, std::chrono::milliseconds(poll_ms_), ready);
+            auto ready = [this] { return stop_ || !jobs_.empty() || settle_now_; };
+            // The radio's channel every poll_ms_; while a frame is unsettled,
+            // status at least every settle_retry_ms_.
+            int wait_ms = poll_ms_;
+            if (!unsettled_.empty()) wait_ms = wait_ms > 0 ? std::min(wait_ms, settle_retry_ms_) : settle_retry_ms_;
+            bool timed_out = false;
+            if (wait_ms > 0) {
+                timed_out = !cv_.wait_for(lk, std::chrono::milliseconds(wait_ms), ready);
             } else {
                 // A poll interval set while waiting wakes the wait too.
-                cv_.wait(lk, [this] { return stop_ || !jobs_.empty() || poll_ms_ > 0; });
-                if (!stop_ && jobs_.empty()) continue;
+                cv_.wait(lk, [this] { return stop_ || !jobs_.empty() || settle_now_ || poll_ms_ > 0; });
+                if (!stop_ && jobs_.empty() && !settle_now_) continue;
             }
             if (stop_) return;
-            if (!poll) {
+            if (settle_now_ || (timed_out && !unsettled_.empty())) {
+                settle = true;  // its status read is the poll's too
+                settle_now_ = false;
+            } else if (timed_out) {
+                poll = true;
+            } else {
                 j = std::move(jobs_.front());
                 jobs_.pop_front();
             }
+        }
+        if (settle) {
+            settle_pass();
+            continue;
         }
         if (poll) {
             refresh_radio();
@@ -768,11 +782,121 @@ GaleKeyReply GaleKey::status() {
 void GaleKey::set_sis(std::shared_ptr<SisControllerLink> sis) {
     sis_ = std::move(sis);
     if (!sis_) return;
+    {
+        std::lock_guard<std::mutex> g(mu_);
+        settle_wait_s_ = sis_->config().settle_wait_s;
+        settle_retry_ms_ = std::max(50, sis_->config().settle_retry_ms);
+    }
     sis_->start(
         [this](const SisSend& s, bool confirmed, uint8_t, const std::string& why) {
             on_sis(s.burst, s.sha256, confirmed, why);
         },
-        [this](const std::string& text) { note("", text); });
+        [this](const std::string& text) { note("", text); },
+        // Every bind, the first and each reconnect: what is unsettled is looked up now.
+        [this](const std::string&, bool) {
+            {
+                std::lock_guard<std::mutex> g(mu_);
+                settle_now_ = true;
+            }
+            cv_.notify_all();
+        });
+}
+
+void GaleKey::settle(const std::vector<KeyItem>& asked, const std::string& because) {
+    if (!sis_ || asked.empty()) return;
+    {
+        std::lock_guard<std::mutex> g(mu_);
+        if (stop_) return;
+        const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(settle_wait_s_);
+        for (auto& it : asked) {
+            if (it.burst.empty()) continue;
+            if (std::any_of(unsettled_.begin(), unsettled_.end(),
+                            [&](const Unsettled& u) { return u.burst == it.burst; }))
+                continue;
+            unsettled_.push_back(Unsettled{it.burst, it.msg_id, "", because, until});
+        }
+        settle_now_ = true;
+    }
+    cv_.notify_all();
+}
+
+size_t GaleKey::unsettled() {
+    std::lock_guard<std::mutex> g(mu_);
+    return unsettled_.size();
+}
+
+void GaleKey::settle_pass() {
+    std::vector<Unsettled> items;
+    {
+        std::lock_guard<std::mutex> g(mu_);
+        items.assign(unsettled_.begin(), unsettled_.end());
+    }
+    if (items.empty()) return;
+    // station-controller.md, status: "last":[{"send","sha256","service","channel",
+    // "result":"keyed"|"refused"|"unknown","why"}, ...], the last 20 sends, newest first.
+    GaleKeyReply st = status();
+    const JsonValue* last = st.answered ? member(st.body, "last") : nullptr;
+    const auto now = std::chrono::steady_clock::now();
+    struct Verdict {
+        Unsettled u;
+        SisOutcome outcome;
+        std::string why, how;
+    };
+    std::vector<Verdict> out;
+    for (auto& u : items) {
+        if (u.sha256.empty()) {
+            std::string bytes;
+            if (read_whole(wav_path(u.burst), bytes) && !bytes.empty()) u.sha256 = sha256_hex(bytes);
+        }
+        bool decided = false;
+        Verdict v{u, SisOutcome::unknown, kSisResultUnknown, ""};
+        if (st.answered) {
+            const JsonValue* e = nullptr;
+            if (!u.sha256.empty() && last && last->is_array())
+                for (auto& x : last->arr)
+                    if (text_of(x, "sha256") == u.sha256) {
+                        e = &x;  // the newest under this sha256
+                        break;
+                    }
+            const std::string result = e ? text_of(*e, "result") : std::string();
+            if (result == "keyed") {
+                decided = true;
+                v.outcome = SisOutcome::keyed;
+                v.why = no_frequency(text_of(*e, "channel"));
+                v.how = "its status says keyed";
+            } else if (result == "refused") {
+                decided = true;
+                v.outcome = SisOutcome::refused;
+                v.why = no_frequency(text_of(*e, "why"));
+                v.how = "its status says refused";
+            } else if (!e) {
+                decided = true;
+                v.how = u.sha256.empty() ? "the frame is no longer in the outbox, so its sha256 can't be looked up"
+                                         : "its status does not name the frame's sha256";
+            }
+            // Otherwise gale-key has the order and has not answered: its result comes.
+        }
+        if (!decided && now >= u.until) {
+            decided = true;
+            v.how = std::string(st.answered ? "its status gave no result" : "its status did not answer") + " within " +
+                    std::to_string(settle_wait_s_) + " s";
+        }
+        if (decided) out.push_back(std::move(v));
+    }
+    SisResult f;
+    {
+        std::lock_guard<std::mutex> g(mu_);
+        for (auto& v : out)
+            unsettled_.erase(std::remove_if(unsettled_.begin(), unsettled_.end(),
+                                            [&](const Unsettled& u) { return u.burst == v.u.burst; }),
+                             unsettled_.end());
+        f = sis_result_;
+    }
+    for (auto& v : out) {
+        note(v.u.msg_id, v.u.burst + ": no SIS answer is waited for (" + v.u.because +
+                             "); settled from the station controller's status: " + v.how);
+        if (f) f(v.u.burst, v.outcome, v.why);
+    }
 }
 
 void GaleKey::set_sis_result(SisResult r) {
@@ -916,7 +1040,7 @@ void GaleKey::on_sis(const std::string& burst, const std::string& sha256, bool c
         std::lock_guard<std::mutex> g(mu_);
         f = sis_result_;
     }
-    if (f) f(burst, confirmed, confirmed ? channel : said);
+    if (f) f(burst, confirmed ? SisOutcome::keyed : SisOutcome::refused, confirmed ? channel : said);
 }
 
 }  // namespace pna

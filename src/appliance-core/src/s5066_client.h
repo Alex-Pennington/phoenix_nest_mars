@@ -133,6 +133,12 @@ private:
 //    bytes (A.2.1.7 (7)), which matches it to its request. No answer within the
 //    time to live plus a grace, or a dropped connection, is a failure.
 //  - S_KEEP_ALIVE (A.2.1.17) is answered in kind.
+// The controller's own bounds (greybeard-ale docs/station-controller.md and
+// tools/gale_rx.py): no claim on the radio is held past claim-max-s, and an
+// order to gale-key is waited on for the order timeout.
+constexpr int kSisClaimMaxS = 120;
+constexpr int kSisOrderTimeoutS = 150;
+
 struct SisLinkConfig {
     std::string dir = "/run/gale-rx";  // --controller-sis-dir: DIR/sis-<service>.sock
     uint8_t sap_operator = 13;
@@ -141,6 +147,12 @@ struct SisLinkConfig {
     int answer_grace_s = 30;           // waited past the TTL for the answer
     int reconnect_ms = 3000;
     uint16_t mtu = 2048;               // A.2.1.3 (7), and the controller's
+    // A frame nobody is waiting on the answer of is settled from the
+    // controller's status.last (gale_key.h, settle). How long it may wait there
+    // for a result the controller does not have yet, and how often status is
+    // read again meanwhile.
+    int settle_wait_s = kSisClaimMaxS + kSisOrderTimeoutS;
+    int settle_retry_ms = 2000;
 };
 
 constexpr size_t kSisMtu = 2048;
@@ -166,7 +178,10 @@ public:
     // Before start: a connection for this service's operator sender, and one
     // for its automatic sender when automatic is set.
     void add(const std::string& service, bool automatic);
-    void start(Result on_result, std::function<void(const std::string&)> log);
+    // on_bound: called from the link's thread at every S_BIND_ACCEPTED, the
+    // first and each one after a dropped connection.
+    using Bound = std::function<void(const std::string& service, bool automatic)>;
+    void start(Result on_result, std::function<void(const std::string&)> log, Bound on_bound = {});
     void stop();
 
     // Writes one S_UNIDATA_REQUEST. False with *why when it was not written:
@@ -205,6 +220,8 @@ private:
     void open(Conn& c, std::vector<std::string>& notes);  // caller holds mu_
     void drop(Conn& c, const std::string& why, std::vector<Done>& done, std::vector<std::string>& notes);
     void handle(Conn& c, const s5066::Prim& p, std::vector<Done>& done, std::vector<std::string>& notes);
+    std::vector<std::pair<std::string, bool>> bound_now_;  // binds accepted, not yet told (mu_)
+    Bound on_bound_;
     Conn* find(const std::string& service, bool automatic);
     const Conn* find(const std::string& service, bool automatic) const;
 

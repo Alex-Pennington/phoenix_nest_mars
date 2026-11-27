@@ -437,10 +437,11 @@ size_t SisControllerLink::outstanding() const {
     return n;
 }
 
-void SisControllerLink::start(Result on_result, std::function<void(const std::string&)> log) {
+void SisControllerLink::start(Result on_result, std::function<void(const std::string&)> log, Bound on_bound) {
     if (running_) return;
     on_result_ = std::move(on_result);
     log_ = std::move(log);
+    on_bound_ = std::move(on_bound);
     running_ = true;
     worker_ = std::thread([this] { run(); });
 }
@@ -554,6 +555,7 @@ void SisControllerLink::handle(Conn& c, const s5066::Prim& p, std::vector<Done>&
         c.told = "bound";
         notes.push_back("SIS " + c.service + ": the " + sender_name(c.automatic) + " is bound on SAP " +
                         std::to_string(c.sap) + ", MTU " + std::to_string(p.mtu));
+        bound_now_.emplace_back(c.service, c.automatic);
         return;
     case s5066::kBindRejected:
         // A.2.1.4: try again later; the reason is said once.
@@ -600,6 +602,7 @@ void SisControllerLink::run() {
         std::vector<std::string> notes;
         std::vector<pollfd> fds;
         std::vector<Conn*> who;
+        std::vector<std::pair<std::string, bool>> bound;
         {
             std::lock_guard<std::mutex> g(mu_);
             const auto now = std::chrono::steady_clock::now();
@@ -642,9 +645,12 @@ void SisControllerLink::run() {
                     if (c.fd < 0) break;
                 }
             }
+            bound.swap(bound_now_);
         }
         if (log_)
             for (auto& n : notes) log_(n);
+        if (on_bound_)
+            for (auto& b : bound) on_bound_(b.first, b.second);
         if (on_result_)
             for (auto& d : done) on_result_(d.send, d.confirmed, d.reason, d.why);
     }

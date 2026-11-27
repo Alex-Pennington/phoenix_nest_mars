@@ -36,6 +36,7 @@
 #include "json.h"
 
 #include <atomic>
+#include <chrono>
 #include <condition_variable>
 #include <deque>
 #include <functional>
@@ -138,6 +139,14 @@ struct KeyItem {
 
 class SisControllerLink;
 
+// link = controller: what became of a frame handed down over SIS.
+//  keyed    S_UNIDATA_REQUEST_CONFIRM, or status.last says keyed
+//  refused  S_UNIDATA_REQUEST_REJECTED, or status.last says refused
+//  unknown  nobody is waiting on its answer and the controller's status does
+//           not say: it may or may not have been keyed
+enum class SisOutcome { keyed, refused, unknown };
+constexpr const char* kSisResultUnknown = "result unknown: check the log before resending";
+
 class GaleKey {
 public:
     // outbox_dir: where the bursts are (gale-key is given absolute paths).
@@ -233,13 +242,25 @@ public:
     void set_sis(std::shared_ptr<SisControllerLink> sis);
     bool controller_link() const { return sis_ != nullptr; }
     SisControllerLink* sis() const { return sis_.get(); }
-    // Called once per frame handed down over SIS, from the link's thread:
-    // keyed (S_UNIDATA_REQUEST_CONFIRM) or not (REJECTED, no answer, a drop),
-    // with why: the controller's sentence from status.last under the frame's
-    // sha256, else the Annex A reason. For a keyed frame, why names the
-    // channel status.last gives ("" when it gives none).
-    using SisResult = std::function<void(const std::string& burst, bool keyed, const std::string& why)>;
+    // Called once per frame handed down over SIS, from the link's thread or
+    // this object's: keyed (S_UNIDATA_REQUEST_CONFIRM), refused (REJECTED, no
+    // answer, a drop) or unknown (settle, below), with why: the controller's
+    // sentence from status.last under the frame's sha256, else the Annex A
+    // reason. For a keyed frame, why names the channel status.last gives (""
+    // when it gives none). For unknown it is kSisResultUnknown.
+    using SisResult = std::function<void(const std::string& burst, SisOutcome outcome, const std::string& why)>;
     void set_sis_result(SisResult r);
+    // Frames handed down whose answer nobody is waiting for (the core stopped
+    // before it came): each is settled from the controller's status.last
+    // under the frame's sha256, on this object's thread, through the SIS
+    // result. keyed and refused are the controller's word. A frame status.last
+    // does not name is unknown. One it names with no result yet (gale-key has
+    // the order) waits, as does every one while status does not answer; the
+    // wait ends as unknown after settle_wait_s. Status is read at once, again
+    // at every bind of the link, and every settle_retry_ms while any waits.
+    // because: said in the log, for example "the core restarted".
+    void settle(const std::vector<KeyItem>& asked, const std::string& because);
+    size_t unsettled();
     // The controller's status.send_channel for a service: the label it would
     // send on now. "" with *why (the controller's) when it names none.
     std::string send_channel(const std::string& service, std::string* why);
@@ -283,6 +304,16 @@ private:
     void on_sis(const std::string& burst, const std::string& sha256, bool confirmed, const std::string& why);
     std::shared_ptr<SisControllerLink> sis_;
     SisResult sis_result_;
+    struct Unsettled {
+        std::string burst, msg_id;
+        std::string sha256;   // "" until read from the frame in the outbox
+        std::string because;
+        std::chrono::steady_clock::time_point until;
+    };
+    std::deque<Unsettled> unsettled_;
+    bool settle_now_ = false;
+    int settle_wait_s_ = 270, settle_retry_ms_ = 2000;  // the link's (SisLinkConfig)
+    void settle_pass();  // on the worker thread
 
     std::shared_ptr<GaleKeyLink> link_;
     std::string outbox_;

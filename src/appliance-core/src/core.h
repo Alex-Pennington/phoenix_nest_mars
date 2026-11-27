@@ -346,6 +346,10 @@ private:
     // by names who keyed it, for the log ("gale-key", "the station controller").
     void handle_key_result(const std::string& burst, bool keyed, const std::string& why,
                            const std::string& by = "gale-key");
+    // link = controller: a frame handed down whose result the controller's
+    // status does not give (gale_key.h, settle). The message fails with why,
+    // never as "not keyed": it may have been.
+    void handle_key_unknown(const std::string& burst, const std::string& why);
     // link = controller: frames go down over STANAG 5066 SIS (gale_key.h set_sis).
     bool sis_link() const { return gk_ && gk_->controller_link(); }
     // link = controller: a reject saying "no standing grant for service S"

@@ -1821,6 +1821,22 @@ That answer is the result:
 - A result for an ack or orderwire is logged only.
 - `status` counts `written`.
 
+**A frame nobody is waiting on.** A message `written` and handed down when the core stops has
+no one waiting for its SIS answer. At start the core settles each such message from the
+controller's `status.last`, under the sha256 of the frame in the outbox:
+
+- `result` `keyed`: `sent`, and the ack clock starts, as for a confirm.
+- `result` `refused`: `failed`, "not keyed: why", with the controller's `why`.
+- `result` `unknown` (gale-key has the order): the message waits, still `written`.
+- Not in `status.last`, or the frame is gone from the outbox: `failed`, with the error
+  "result unknown: check the log before resending". It may have been keyed, so it is never
+  called "not keyed", and the core sends nothing again by itself.
+
+`status` is read at start, again each time a SIS connection binds, and every 2 s while a message
+waits. While `status` does not answer, the message waits. A wait ends after 270 s (the
+controller's `claim-max-s`, 120 s, plus its order timeout, 150 s) as "result unknown". Nothing is
+handed down a second time by any of this.
+
 `link = burst`, with no controller, is unchanged: practice, test stands, and
 `tools/stub_channel.py --key-results`. The core runs gale-tx into the outbox and reads
 `BURST.key.json` beside each WAV.
