@@ -22,6 +22,7 @@
 #include <sys/un.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cstring>
@@ -603,6 +604,22 @@ int main() {
         std::this_thread::sleep_for(std::chrono::milliseconds(600));
         CHECK(f.count_reqs() == b2 + 1 && s.state(aa) == "written");
         CHECK(has(s.events_text(), "MARS only"));
+
+        // ---- the controller holds no grant for the service: the mode goes off in the core too
+        {
+            std::vector<std::string> on = s.gk->standing();
+            CHECK(std::find(on.begin(), on.end(), "routing") != on.end());
+        }
+        f.mode = "reject";
+        f.reject_why = "no standing grant for service mars";
+        const std::string ng = s.core->submit("FARSTN", 'R', "NO GRANT", &err, SendOpts::in("mars"));
+        CHECK(!ng.empty());
+        s.core->set_key_mode(ng, "routing");
+        CHECK(wait_for([&] { return s.state(ng) == "failed"; }, 8000));
+        CHECK(has(s.core->get(ng)->last_error, "no standing grant for service mars"));
+        CHECK(s.gk->standing().empty());
+        CHECK(has(s.events_text(), "standing routing OFF"));
+        f.reject_why = "refused: channel P1: passband outside the data segments of service mars";
 
         // ---- no answer within the TTL plus the grace: failed
         f.mode = "hold";

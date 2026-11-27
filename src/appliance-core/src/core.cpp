@@ -1025,6 +1025,15 @@ void Core::key_automatic() {
     }
 }
 
+void Core::no_grant_for(const std::string& service, const std::string& why) {
+    // station-controller.md, part 3: "With none granted, the message is
+    // rejected: \"no standing grant for service S\"". Its gate is per service.
+    if (!sis_link() || service.empty() || why.rfind("no standing grant for service " + service, 0) != 0) return;
+    for (auto& mode : gk_->forget_service(service))
+        log("", "standing " + mode + " OFF: the station controller holds no grant for service " + service +
+                    " any more; the operator's y turns it on again");
+}
+
 void Core::handle_key_result(const std::string& burst, bool keyed, const std::string& why, const std::string& by) {
     std::lock_guard<std::mutex> g(mu_);
     auto id = store_.id_by_burst(burst);
@@ -1036,6 +1045,7 @@ void Core::handle_key_result(const std::string& burst, bool keyed, const std::st
     if (auto a = answer_bursts_.find(burst); a != answer_bursts_.end() && !m) {
         // An ACK or orderwire: its result is logged only.
         log(a->second.about, a->second.what + " (" + burst + ") " + said);
+        if (!keyed) no_grant_for(a->second.world, why);
         key_told_.erase(burst);
         answer_bursts_.erase(a);
         return;
@@ -1058,6 +1068,7 @@ void Core::handle_key_result(const std::string& burst, bool keyed, const std::st
             log("", "standing " + row->mode +
                         " OFF: gale-key holds no grant for it any more; the operator's y turns it on again");
         }
+        no_grant_for(m->world, why);
         store_.set_state(m->id, "failed", "not keyed: " + (why.empty() ? by + " gave no reason" : why));
         log(m->id, burst + " " + said + "; failed (requeue to try again)");
         return;

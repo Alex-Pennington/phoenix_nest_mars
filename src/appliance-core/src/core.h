@@ -348,6 +348,9 @@ private:
                            const std::string& by = "gale-key");
     // link = controller: frames go down over STANAG 5066 SIS (gale_key.h set_sis).
     bool sis_link() const { return gk_ && gk_->controller_link(); }
+    // link = controller: a reject saying "no standing grant for service S"
+    // turns off every mode granted for S here too (caller holds mu_).
+    void no_grant_for(const std::string& service, const std::string& why);
     // The service of the channel a capture was heard on, from the dial its
     // name carries ("" when no channel of the plan is on that dial).
     std::string heard_service(const std::string& source);

@@ -574,6 +574,7 @@ GaleKeyReply GaleKey::grant(const Held& h) {
     if (r.answered && r.ok) {
         std::lock_guard<std::mutex> g(mu_);
         standing_[h.mode] = true;
+        standing_service_[h.mode] = h.service;
     }
     note("", r.answered && r.ok ? "standing " + h.mode + " ON: the controller granted it on the operator's y"
                                 : "standing " + h.mode + " not granted: " + no_frequency(r.reason));
@@ -583,8 +584,13 @@ GaleKeyReply GaleKey::grant(const Held& h) {
 GaleKeyReply GaleKey::revoke(const std::string& mode, const std::string& why) {
     {
         std::lock_guard<std::mutex> g(mu_);
-        if (mode == "all") standing_.clear();
-        else standing_.erase(mode);
+        if (mode == "all") {
+            standing_.clear();
+            standing_service_.clear();
+        } else {
+            standing_.erase(mode);
+            standing_service_.erase(mode);
+        }
     }
     JsonWriter w;
     w.begin_object().field("cmd", "revoke").field("mode", mode).end_object();
@@ -598,6 +604,20 @@ GaleKeyReply GaleKey::revoke(const std::string& mode, const std::string& why) {
 void GaleKey::forget(const std::string& mode) {
     std::lock_guard<std::mutex> g(mu_);
     standing_.erase(mode);
+}
+
+std::vector<std::string> GaleKey::forget_service(const std::string& service) {
+    std::lock_guard<std::mutex> g(mu_);
+    std::vector<std::string> off;
+    for (auto it = standing_service_.begin(); it != standing_service_.end();) {
+        if (it->second == service) {
+            if (standing_.erase(it->first)) off.push_back(it->first);
+            it = standing_service_.erase(it);
+        } else {
+            ++it;
+        }
+    }
+    return off;
 }
 
 bool GaleKey::standing_on(const std::string& mode) {

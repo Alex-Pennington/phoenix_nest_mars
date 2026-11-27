@@ -207,6 +207,10 @@ public:
     GaleKeyReply revoke(const std::string& mode, const std::string& why);
     // The mode goes off here only (gale-key already dropped it); nothing is sent.
     void forget(const std::string& mode);
+    // Every mode granted for this service goes off here only; nothing is sent.
+    // The controller's standing gate is per service (station-controller.md,
+    // part 3). Returns the modes turned off.
+    std::vector<std::string> forget_service(const std::string& service);
         bool standing_on(const std::string& mode);
     std::vector<std::string> standing();
 
@@ -284,6 +288,7 @@ private:
     std::mutex mu_;
     std::map<std::string, Held> held_;
     std::map<std::string, bool> standing_;
+    std::map<std::string, std::string> standing_service_;  // mode -> the service it was granted for
     std::string last_, last_why_;
     RadioReport radio_;
     int poll_ms_ = 0;
