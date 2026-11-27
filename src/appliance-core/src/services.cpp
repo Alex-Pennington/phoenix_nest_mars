@@ -18,7 +18,9 @@ namespace fs = std::filesystem;
 namespace {
 
 // The column kinds of docs/services.md, "The columns".
-enum class K { Bool, Num, Str, StrOrNull, StrList, Ranges, RangesOrNull, Sideband, StationId };
+// There is no sideband column: all digital traffic is USB, and a table that
+// still carries radio.default_sideband is refused as an unknown key.
+enum class K { Bool, Num, Str, StrOrNull, StrList, Ranges, RangesOrNull, StationId };
 
 struct Col {
     const char* key;
@@ -32,7 +34,6 @@ const std::vector<std::pair<const char*, std::vector<Col>>>& groups() {
           {"data_segments_hz", K::RangesOrNull},
           {"auto_segments_hz", K::RangesOrNull},
           {"default_mode", K::Str},
-          {"default_sideband", K::Sideband},
           {"passband_hz", K::Num},
           {"waveforms", K::StrList}}},
         {"keying",
@@ -90,6 +91,13 @@ bool is_ranges(const JsonValue& v) {
 
 bool check_cols(const JsonValue& obj, const std::vector<Col>& cols, const std::string& where, std::string* why);
 
+// An unknown key as a refusal names it: itself when it is shaped like a column
+// or a service name (so it can carry no value), else "(a key)".
+std::string key_text(const std::string& k) {
+    static const std::regex col("^[a-z][a-z_]{0,31}$");
+    return valid_service_name(k) || std::regex_match(k, col) ? k : std::string("(a key)");
+}
+
 bool check_one(const JsonValue& v, K kind, const std::string& name, std::string* why) {
     bool ok = false;
     switch (kind) {
@@ -100,7 +108,6 @@ bool check_one(const JsonValue& v, K kind, const std::string& name, std::string*
     case K::StrList: ok = is_str_list(v); break;
     case K::Ranges: ok = is_ranges(v); break;
     case K::RangesOrNull: ok = v.type == JsonValue::Type::Null || is_ranges(v); break;
-    case K::Sideband: ok = v.type == JsonValue::Type::String && (v.s == "usb" || v.s == "lsb"); break;
     case K::StationId:
         if (v.type == JsonValue::Type::Null) return true;
         if (!v.is_object()) break;
@@ -124,7 +131,7 @@ bool check_cols(const JsonValue& obj, const std::vector<Col>& cols, const std::s
     }
     for (auto& [k, _] : obj.obj)
         if (!known.count(k)) {
-            if (why) *why = "unknown key " + where + "." + (valid_service_name(k) ? k : std::string("(a key)"));
+            if (why) *why = "unknown key " + where + "." + key_text(k);
             return false;
         }
     return true;
@@ -186,7 +193,7 @@ bool parse_service_table(const std::string& stem, const std::string& text, Servi
         if (!check_cols(*x, cols, g, why)) return false;
     }
     for (auto& [k, _] : v.obj)
-        if (!known.count(k)) return fail("unknown key " + (valid_service_name(k) ? k : std::string("(a key)")));
+        if (!known.count(k)) return fail("unknown key " + key_text(k));
 
     const JsonValue& keying = *v.get("keying");
     const JsonValue& msgs = *v.get("messages");

@@ -307,6 +307,10 @@ a service is valid when it has a table, and a value no table defines is refused,
 as MARS. Alex's hard rule stands: there is no forward or auto-copy route between services, ever.
 **Routing is the only guard between services.** Nothing else refuses a message for its service.
 
+The tables have no sideband column: all digital traffic is USB. A table that still carries
+`radio.default_sideband` is refused whole, "unknown key radio.default_sideband", as
+greybeard-ale's `tools/services.py` refuses it.
+
 - `services_list {}` returns `{ok, services[]}`. Each entry has the table's columns that carry
   no frequency: `service`, `display_name`, `worked`, `transmit`, `formats`, `encryption`,
   `automatic_modes`, `listen_only` (true when the service needs a call and has none) and
