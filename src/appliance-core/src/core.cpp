@@ -1044,8 +1044,9 @@ void Core::decode_in(const ModemDecode& d) {
     // Received traffic takes the service of the channel it was heard on: the
     // plan's channel on the dial its capture's name carries. The messages the
     // same bytes hold (handle_rx, next) take it too.
+    // A decode names its channel by its capture's dial: no plan channel on
+    // that dial is no service. --rx-service is for links that name no channel.
     pending_service_ = heard_service(d.source);
-    if (pending_service_.empty()) pending_service_ = cfg_.rx_service;
     pending_decode_ = true;
     rx_service_ = pending_service_;  // the decode's own row
     if (store_.exists(id)) {

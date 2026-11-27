@@ -77,8 +77,8 @@ struct CoreConfig {
     int parts_flag_after = 2;
     // The service of traffic heard on a link that names no channel (the
     // loopback, STANAG 5066 and Appendix A links): the one network that link
-    // belongs to. "" leaves such traffic with no service. Traffic from the
-    // greybeard modem takes its capture's channel's service instead.
+    // belongs to. "" leaves such traffic with no service. Never used for a
+    // modem decode: that takes its capture's channel's service, or none.
     std::string rx_service{};
 };
 

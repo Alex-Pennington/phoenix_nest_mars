@@ -219,6 +219,29 @@ static void decode_path(const fs::path& dir) {
     CHECK(full && full->world == "mars");
     z.stop();
     air->stop();
+
+    // --rx-service is for a link that names no channel: a decode with no plan
+    // channel on its dial stays of no service, whatever the link says.
+    auto mw = std::make_unique<FakeDecoder>();
+    FakeDecoder* air_w = mw.get();
+    CoreConfig cw{"STA-W", (dir / "w.db").string(), 3, 1, true};
+    cw.rx_service = "amateur";
+    Core w(cw, std::move(mw));
+    w.set_services(test_services());
+    w.set_ops(std::make_shared<Ops>("STA-W", (dir / "w-ops.db").string()));
+    CHECK(w.ops()->channels().put(m1, &e));
+    w.start();
+    Frame f;
+    f.type = FrameType::Msg;
+    f.id = "TEST-FAR-9";
+    f.src = "TEST-FAR";
+    f.dst = "STA-W";
+    f.body = "ON NO CHANNEL OF THE PLAN";
+    air_w->hear("e_9999kHz.m110a.0.bin", encode(f));
+    CHECK(wait_for([&] { return w.get("TEST-FAR-9").has_value(); }));
+    CHECK(w.get("TEST-FAR-9") && w.get("TEST-FAR-9")->world.empty());
+    w.stop();
+    air_w->stop();
 }
 
 // ---------------------------------------------------------------- the tables
