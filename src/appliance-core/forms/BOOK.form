@@ -8,6 +8,7 @@ ACTION book_put
 PREFILL book name
 FIELD name Name(X) required upper max=40
 FIELD kind Kind(STATION,COLLECTIVE) default=STATION
+FIELD service Service(X) max=16
 FIELD call Call(X) upper max=16 check=station
 FIELD ri Routing indicator(AAAAAAA) upper
 FIELD ale ALE address(X) upper max=15
@@ -17,6 +18,10 @@ NEXT BOOK CHANNEL
 BEGIN_HELP
 Name:
 What you call this station or group in messages: NET CONTROL, STA-B.
+END
+
+Service:
+The service the station or group is worked on: mars or amateur. Every entry names one, and a message to it goes out on that service only.
 END
 
 Members:

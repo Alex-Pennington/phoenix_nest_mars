@@ -170,7 +170,7 @@ std::map<std::string, std::string> prefill(Core& core, const forms::Library& lib
         auto& es = arr(r, "entries");
         if (es.empty()) return v;
         auto& e = es[0];
-        for (auto f : {"name", "kind", "call", "ri", "ale", "note"}) v[f] = s_of(e, f);
+        for (auto f : {"name", "kind", "service", "call", "ri", "ale", "note"}) v[f] = s_of(e, f);
         for (auto& c : v["kind"]) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
         v["members"] = joined(e, "members");
     } else if (kind == "channel") {
