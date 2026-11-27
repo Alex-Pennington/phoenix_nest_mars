@@ -201,6 +201,25 @@ void channels(const fs::path& dir) {
     for (auto& e : arr(events, "events")) log += str(e, "text") + "\n";
     CHECK(log.find("channels_get_full") != std::string::npos && !leaks(log, "5000000") && !leaks(log, "15000000"));
 
+    // docs/api.md, Services: a channel carries `service` in channels_list,
+    // channels_get_full and channel_put's reply. It is the value the plan
+    // holds, as it is stored; `world` carries the same for one release.
+    for (const char* cmd : {"channels_list", "channels_get_full"}) {
+        r = api(c, {{"cmd", cmd}});
+        CHECK(ok(r) && arr(r, "channels").size() == 2);
+        for (auto& ch : arr(r, "channels")) {
+            auto held = A.ops->channels().get(str(ch, "name"));
+            CHECK(held && ch.get("service") && str(ch, "service") == held->world);
+            CHECK(ch.get("world") && str(ch, "world") == str(ch, "service"));
+        }
+    }
+    r = api(c, {{"cmd", "channel_put"}, {"name", "A2"}, {"frequency", "15100"}, {"service", "amateur"}});
+    CHECK(ok(r) && str(r, "result") == "added" && str(r, "service") == "amateur" && str(r, "world") == "amateur");
+    CHECK(A.ops->channels().get("A2") && A.ops->channels().get("A2")->world == "amateur");
+    r = api(c, {{"cmd", "channel_put"}, {"name", "P1"}, {"use", "primary"}});
+    CHECK(ok(r) && str(r, "service") == "mars" && str(r, "world") == "mars");
+    CHECK(ok(api(c, {{"cmd", "channel_remove"}, {"name", "A2"}})));
+
     // The plan's file keeps the world and label; a record written before
     // them reads as mars with no label.
     {
