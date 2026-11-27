@@ -102,6 +102,7 @@ struct FakeController {
     fs::path dir;
     std::map<std::string, std::string> send_channel{{"mars", "P1"}, {"amateur", "AMX"}};
     std::string mode = "confirm";  // confirm, reject, hold, drop
+    std::string radio_channel = "P1", radio_service = "mars";  // where the transmitting radio is
     std::string reject_why = "refused: channel P1: passband outside the data segments of service mars";
     std::mutex mu;
     std::vector<Bind> binds;
@@ -166,7 +167,31 @@ struct FakeController {
 
     std::string status_text() {
         JsonWriter w;
-        w.begin_object().field("ok", true).begin_object("send_channel");
+        w.begin_object().field("ok", true);
+        // As greybeard-ale tools/gale_rx.py req_status: the transmitting radio,
+        // and a receive-only one driven by the scanner.
+        w.begin_array("radios")
+            .begin_object()
+            .field("radio", "rsp2")
+            .field("transmit", false)
+            .field_null("radioChannel")
+            .field_null("service")
+            .field("radioKeyed", false)
+            .field_null("claim")
+            .field("driver", "ale-scan")
+            .end_object()
+            .begin_object()
+            .field("radio", "ft897d")
+            .field("transmit", true)
+            .field("radioChannel", radio_channel)
+            .field("service", radio_service)
+            .field("since", "2026-11-27T10:00:00Z")
+            .field("source", "schedule")
+            .field("radioKeyed", false)
+            .field_null("claim")
+            .end_object()
+            .end_array();
+        w.begin_object("send_channel");
         for (auto& [k, v] : send_channel)
             if (v.empty()) w.field_null(k);
             else w.field(k, v);
@@ -447,6 +472,11 @@ int main() {
             std::lock_guard<std::mutex> g(f.mu);
             for (auto& b : f.binds) CHECK(b.tx_mode == s5066::kNonArqBroadcast && b.confirm == s5066::kNoConfirm);
         }
+
+        // ---- radio_channel from the real status shape: the transmitting radio's entry in radios[]
+        s.gk->refresh_radio();
+        JsonValue rc = sub(parsed(call(*s.core, {{"cmd", "status"}})), "radio_channel");
+        CHECK(str(rc, "label") == "P1" && str(rc, "service") == "mars" && str(rc, "since") == "2026-11-27T10:00:00Z");
 
         // ---- the operator's y: send_channel shown, SAP 13, CONFIRM -> sent
         std::string prep;

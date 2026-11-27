@@ -695,10 +695,27 @@ void GaleKey::set_poll_ms(int ms) {
 }
 
 void GaleKey::take_radio(const GaleKeyReply& r) {
-    // station-controller.md, status: "radio":{"channel","service","since","source"}.
+    // station-controller.md, status: "radios":[{"radio","transmit","radioChannel","service","since",
+    // "source","radioKeyed","claim"}, ...]. The transmitting radio's entry is the radio_channel. The
+    // older "radio":{"channel","service","since","source"} is read too, for one release.
     RadioReport rr;
     if (r.answered && r.ok) {
-        const JsonValue* x = member(r.body, "radio");
+        const JsonValue* x = member(r.body, "radios");
+        if (x && x->is_array()) {
+            for (auto& e : x->arr) {
+                const JsonValue* tx = member(e, "transmit");
+                if (!(tx && tx->type == JsonValue::Type::Bool && tx->b)) continue;
+                rr.known = true;
+                rr.label = no_frequency(text_of(e, "radioChannel"));
+                rr.service = text_of(e, "service");
+                rr.since = text_of(e, "since");
+                rr.source = text_of(e, "source");
+                break;
+            }
+            x = nullptr;
+        } else {
+            x = member(r.body, "radio");
+        }
         if (x && x->is_object()) {
             rr.known = true;
             rr.label = no_frequency(text_of(*x, "channel"));
