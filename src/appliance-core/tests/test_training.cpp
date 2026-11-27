@@ -16,6 +16,7 @@
 #include "../src/station.h"
 #include "../src/station_view.h"
 #include "check.h"
+#include "services_fixture.h"
 
 #include <atomic>
 #include <chrono>
@@ -65,7 +66,9 @@ static void make_station(const fs::path& dir, Station& s) {
     s.far = s.far_owner.get();
     s.far->start({[&s](const std::string& b) { s.heard += b.size(); }, nullptr, nullptr, nullptr});
     CoreConfig cfg{"STA-T", base + ".db", 3, 1, true};
+    cfg.rx_service = "mars";  // a channel-less test link: MARS traffic
     s.core = std::make_unique<Core>(cfg, std::move(radio));
+    s.core->set_services(test_services());
     auto kr = std::make_shared<keys::Keyring>(base + ".keys");
     std::string err;
     kr->load(&err);
@@ -149,7 +152,7 @@ static void store_mode(Station& s) {
     CHECK(ok(on) && str(on, "store_mode") == "training");
     // This one still thinks it is on the real store: its send is refused.
     const size_t real_before = core.list(1000).size();
-    JsonValue r = call(core, {{"cmd", "send"}, {"to", "STA-X"}, {"body", "MEANT FOR THE AIR"}, {"expect_store", "real"}});
+    JsonValue r = call(core, {{"cmd", "send"}, {"service", "mars"}, {"to", "STA-X"}, {"body", "MEANT FOR THE AIR"}, {"expect_store", "real"}});
     CHECK(!ok(r) && str(r, "store_mode") == "training");
     CHECK(r.get("store_mismatch") && r.get("store_mismatch")->b);
     CHECK(core.list(1000).size() == real_before);
@@ -226,7 +229,7 @@ static void resend_in_training(Station& s) {
     CHECK(!ids.empty());
     int tried = 0;
     for (size_t i = 0; i < ids.size() && i < 3; ++i) {
-        JsonValue r = call(core, {{"cmd", "retransmit"}, {"id", ids[i]}, {"to", "STA-X"}, {"confirm", "Y"}});
+        JsonValue r = call(core, {{"cmd", "retransmit"}, {"service", "mars"}, {"id", ids[i]}, {"to", "STA-X"}, {"confirm", "Y"}});
         CHECK(str(r, "store_mode") == "training");
         tried += ok(r);
     }
@@ -235,7 +238,7 @@ static void resend_in_training(Station& s) {
     JsonValue out = call(core, {{"cmd", "list"}});
     if (const JsonValue* a = out.get("messages"))
         for (auto& m : a->arr) call(core, {{"cmd", "requeue"}, {"id", str(m, "id")}});
-    call(core, {{"cmd", "parts_queue_send"}, {"confirm", "Y"}});
+    call(core, {{"cmd", "parts_queue_send"}, {"service", "mars"}, {"confirm", "Y"}});
     std::this_thread::sleep_for(std::chrono::seconds(2));
     CHECK(s.heard.load() == heard_before);  // 0 bytes on the real radio
     CHECK(real_rows() == real_before);      // the real store as it was

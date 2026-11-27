@@ -7,6 +7,7 @@
 #include "../src/loopback_modem.h"
 #include "../src/ops.h"
 #include "check.h"
+#include "services_fixture.h"
 
 #include <atomic>
 #include <chrono>
@@ -103,8 +104,10 @@ int main() {
     auto mb = std::make_unique<LoopbackModem>(0);
     LoopbackModem::connect(*ma, *mb);
     std::string adb = (dir / "a.db").string(), bdb = (dir / "b.db").string();
-    Core a(CoreConfig{"NCS-A", adb, 3, 1, true}, std::move(ma));
-    Core b(CoreConfig{"STA-B", bdb, 3, 1, true}, std::move(mb));
+    Core a(on_mars_link(CoreConfig{"NCS-A", adb, 3, 1, true}), std::move(ma));
+    a.set_services(test_services());
+    Core b(on_mars_link(CoreConfig{"STA-B", bdb, 3, 1, true}), std::move(mb));
+    b.set_services(test_services());
     auto opsa = std::make_shared<Ops>("NCS-A", adb);
     opsa->set_clock(clock);
     a.set_ops(opsa);
@@ -121,7 +124,7 @@ int main() {
         "LOOP ONE,collective,,,,LOOP TWO,,\n"
         "LOOP TWO,collective,,,,LOOP ONE;STA-B,,\n"
         "BAD,station,not a call!,,,,,\n";
-    JsonValue r = call(a, {{"cmd", "book_import"}, {"csv", csv}, {"source", "test"}});
+    JsonValue r = call(a, {{"cmd", "book_import"}, {"csv", csv}, {"source", "test"}, {"service", "mars"}});
     CHECK(ok(r) && num(r, "imported") == 5);
     CHECK(first(r, "dropped_columns").s == "phone" && !str(r, "note").empty());
     CHECK(first(r, "errors").s.find("line 7") == 0);
@@ -133,9 +136,9 @@ int main() {
     CHECK(r.get("stations")->arr.size() == 1 && first(r, "loops").s == "LOOP ONE" && first(r, "unknown").s == "NOBODY");
     r = call(a, {{"cmd", "book_get"}, {"name", "RXXXB"}});  // found by RI
     CHECK(ok(r) && str(first(r, "entries"), "name") == "STA-B");
-    r = call(a, {{"cmd", "book_put"}, {"name", "STA-D"}, {"note", std::string(90, 'X')}});
+    r = call(a, {{"cmd", "book_put"}, {"world", "mars"}, {"name", "STA-D"}, {"note", std::string(90, 'X')}});
     CHECK(!ok(r) && str(r, "error").find("80") != std::string::npos);
-    CHECK(ok(call(a, {{"cmd", "book_put"}, {"name", "STA-D"}})));
+    CHECK(ok(call(a, {{"cmd", "book_put"}, {"world", "mars"}, {"name", "STA-D"}})));
     CHECK(call(a, {{"cmd", "book_export"}}).get("csv")->s.find("EXER NET,collective,,,,STA-B;STATION C") !=
           std::string::npos);
 
@@ -151,7 +154,7 @@ int main() {
 
     // STA-B calls in by radio: the net hears it and checks it in.
     std::string err;
-    std::string in_id = b.submit("NCS-A", 'R', "EXERCISE EXERCISE EXERCISE\nSTA-B CHECKING IN\n", &err);
+    std::string in_id = b.submit("NCS-A", 'R', "EXERCISE EXERCISE EXERCISE\nSTA-B CHECKING IN\n", &err, SendOpts::in("mars"));
     CHECK(!in_id.empty());
     CHECK(wait_for([&] { return num(first(call(a, {{"cmd", "net_status"}}), "net"), "checked_in") == 1; }));
     r = first(call(a, {{"cmd", "net_status"}}), "net");
@@ -167,7 +170,7 @@ int main() {
     CHECK(!r.get("checkins")->arr[2].get("in_roster")->b);
 
     // NCS sends to the whole roster by its collective name: one copy each.
-    r = call(a, {{"cmd", "send"}, {"to", "EXER NET"}, {"body", "EXERCISE EXERCISE EXERCISE\nNET TRAFFIC 1\n"}});
+    r = call(a, {{"cmd", "send"}, {"service", "mars"}, {"to", "EXER NET"}, {"body", "EXERCISE EXERCISE EXERCISE\nNET TRAFFIC 1\n"}});
     CHECK(ok(r) && r.get("ids")->arr.size() == 2);
     std::string to_b = r.get("ids")->arr[0].s;
     CHECK(wait_for([&] { return a.get(to_b) && a.get(to_b)->state == "acked"; }));

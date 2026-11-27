@@ -15,7 +15,7 @@
 // skipped with a log line, never a reason not to start. Most rows apply at
 // the next start ("applies":"restart"); the world and keying rows apply now.
 //
-// The keying rows (ptt-line, cat-ptt, world, tx-world,
+// The keying rows (ptt-line, cat-ptt, world,
 // engineering-readouts) are for gale-key, greybeard-ale's host keying
 // service: the core writes them to the keying file (keying-file, default
 // GALE-DIR/keying.json) whole, at start and on every change, and answers

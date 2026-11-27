@@ -6,6 +6,7 @@
 #include "../src/link_monitor.h"
 #include "../src/loopback_modem.h"
 #include "check.h"
+#include "services_fixture.h"
 
 #include <atomic>
 #include <chrono>
@@ -176,15 +177,18 @@ int main() {
         auto mb = std::make_unique<LoopbackModem>(0);
         LoopbackModem::connect(*ma, *mb);
         CoreConfig ca{"A", (dir / "a.db").string(), 3, 1, true};
+        ca.rx_service = "mars";  // a channel-less test link: MARS traffic
         ca.link_gate = true;
         Core a(ca, std::move(ma));
+        a.set_services(test_services());
         a.set_link_monitor(mon);
-        Core b(CoreConfig{"B", (dir / "b.db").string(), 3, 1, true}, std::move(mb));
+        Core b(on_mars_link(CoreConfig{"B", (dir / "b.db").string(), 3, 1, true}), std::move(mb));
+        b.set_services(test_services());
         a.start();
         b.start();
 
         std::string err;
-        std::string id = a.submit("B", 'R', "HELD UNTIL LINKED", &err);
+        std::string id = a.submit("B", 'R', "HELD UNTIL LINKED", &err, SendOpts::in("mars"));
         CHECK(!id.empty());
         CHECK(wait_for([&] { return fake.asked() >= 3; }));
         std::this_thread::sleep_for(std::chrono::milliseconds(300));
@@ -215,7 +219,7 @@ int main() {
         // Link drops: the next message waits again.
         fake.set(with_links(R"([{"station":"B","state":"down"}])"));
         CHECK(wait_for([&] { return a.waits_for_link("B"); }));
-        std::string id2 = a.submit("B", 'R', "SECOND", &err);
+        std::string id2 = a.submit("B", 'R', "SECOND", &err, SendOpts::in("mars"));
         std::this_thread::sleep_for(std::chrono::milliseconds(300));
         CHECK(a.get(id2)->state == "queued");
         // The scanner goes away: still held, and the status says why.
@@ -244,13 +248,15 @@ int main() {
         auto ma = std::make_unique<LoopbackModem>(0);
         auto mb = std::make_unique<LoopbackModem>(0);
         LoopbackModem::connect(*ma, *mb);
-        Core a(CoreConfig{"A", (dir / "a2.db").string(), 3, 1, true}, std::move(ma));
+        Core a(on_mars_link(CoreConfig{"A", (dir / "a2.db").string(), 3, 1, true}), std::move(ma));
+        a.set_services(test_services());
         a.set_link_monitor(mon);
-        Core b(CoreConfig{"B", (dir / "b2.db").string(), 3, 1, true}, std::move(mb));
+        Core b(on_mars_link(CoreConfig{"B", (dir / "b2.db").string(), 3, 1, true}), std::move(mb));
+        b.set_services(test_services());
         a.start();
         b.start();
         std::string err;
-        std::string id = a.submit("B", 'R', "NOT GATED", &err);
+        std::string id = a.submit("B", 'R', "NOT GATED", &err, SendOpts::in("mars"));
         CHECK(wait_for([&] { return a.get(id) && a.get(id)->state == "acked"; }));
         CHECK(!a.status().link_gate && a.status().held_for_link == 0);
         a.stop();

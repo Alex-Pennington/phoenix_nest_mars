@@ -102,7 +102,7 @@ struct Rule {
     std::string sched;               // "" or "HHMMZ"
     bool compress = false;
     bool mark_processed = true;
-    std::string world = "mars";      // ask 37: always mars; a rule into the amateur world is refused
+    std::string world;               // the rule's service: stored, and the guard (a crossing is refused)
 };
 
 // A routed message (route_rerun and the engine).

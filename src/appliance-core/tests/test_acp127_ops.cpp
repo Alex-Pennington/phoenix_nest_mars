@@ -8,6 +8,7 @@
 #include "../src/frame.h"
 #include "../src/json.h"
 #include "check.h"
+#include "services_fixture.h"
 
 #include <chrono>
 #include <filesystem>
@@ -99,9 +100,11 @@ static std::unique_ptr<Core> make_core(const fs::path& dir, const std::string& c
     auto m = std::make_unique<ScriptModem>();
     modem = m.get();
     CoreConfig cfg{call, (dir / (call + ".db")).string(), 3, 1, true};
+    cfg.rx_service = "mars";  // a channel-less test link: MARS traffic
     cfg.ack_timeout_s = 0;
     if (tune) tune(cfg);
     auto c = std::make_unique<Core>(cfg, std::move(m));
+    c->set_services(test_services());
     c->start();
     return c;
 }
@@ -123,7 +126,7 @@ static void orderwire(const fs::path& dir) {
     CHECK(!c->orderwire("STA-B", "", &err));
     // Sent as typed, no frame, ahead of traffic.
     c->set_emcon(true);
-    std::string id = c->submit("STA-B", 'R', "SOME TRAFFIC", &err);
+    std::string id = c->submit("STA-B", 'R', "SOME TRAFFIC", &err, SendOpts::in("mars"));
     CHECK(ok(api(*c, R"({"cmd":"orderwire","to":"STA-B","text":"QSL QRU NCS-A"})")));
     std::this_thread::sleep_for(std::chrono::milliseconds(300));
     CHECK(m->count() == 0);  // EMCON holds orderwire too
@@ -166,7 +169,7 @@ static void link_wait(const fs::path& dir) {
         cfg.link_gate = true;  // and no link source: no station ever has a link
         cfg.link_wait_s = 1;
     });
-    std::string err, id = c->submit("STA-B", 'P', "WAITS FOR A LINK", &err);
+    std::string err, id = c->submit("STA-B", 'P', "WAITS FOR A LINK", &err, SendOpts::in("mars"));
     CHECK(wait_for([&] { return logged(*c, "waiting for a link to STA-B"); }));
     CHECK(wait_for([&] { return state_of(*c, id) == "failed"; }, 4000));
     CHECK(c->get(id)->last_error == "no link to STA-B after 1 s");
@@ -182,9 +185,9 @@ static void handling_and_expiry(const fs::path& dir) {
         cfg.expire_h = 2;
     });
     std::string err;
-    std::string late = c->submit("STA-B", 'R', "LATE BUT NOT EXPIRED", &err);
-    std::string old = c->submit("STA-B", 'R', "TOO OLD TO SEND", &err);
-    std::string fresh = c->submit("STA-B", 'R', "JUST FILED", &err);
+    std::string late = c->submit("STA-B", 'R', "LATE BUT NOT EXPIRED", &err, SendOpts::in("mars"));
+    std::string old = c->submit("STA-B", 'R', "TOO OLD TO SEND", &err, SendOpts::in("mars"));
+    std::string fresh = c->submit("STA-B", 'R', "JUST FILED", &err, SendOpts::in("mars"));
     CHECK(c->hold(late, &err) && c->hold(old, &err) && c->hold(fresh, &err));
     age(dir / "NCS-A.db", late, 90 * 60);
     age(dir / "NCS-A.db", old, 3 * 3600);
@@ -228,7 +231,7 @@ static void files(const fs::path& dir) {
     ScriptModem* mb;
     auto b = make_core(dir / "b", "STA-B", mb);
     std::string b64 = filemsg::base64(data);
-    auto v = api(*a, std::string(R"({"cmd":"send_file","to_station":"STA-B","prec":"R","channel":"QXA","routing":"RXAAAA",)") +
+    auto v = api(*a, std::string(R"({"cmd":"send_file","service":"mars","to_station":"STA-B","prec":"R","channel":"QXA","routing":"RXAAAA",)") +
                          R"("originator_ri":"RXCCCC","from":"RXCCCC/TEST STATION ONE","to":"RXAAAA/TEST STATION TWO",)" +
                          R"("text":"NET LOG ATTACHED","file_name":"net-log 11.txt","file_b64":")" + b64 + R"("})");
     CHECK(ok(v));
@@ -242,7 +245,7 @@ static void files(const fs::path& dir) {
     CHECK(logged(*b, "a file came in: net-log 11.txt, 300 bytes, CRC good"));
     auto g = api(*b, R"({"cmd":"get_file","id":")" + id + R"("})");
     CHECK(ok(g) && str(g, "name") == "net-log 11.txt" && str(g, "file_b64") == b64);
-    CHECK(!ok(api(*a, R"({"cmd":"send_file","to_station":"STA-B","file_name":"x","file_b64":"!!"})")));
+    CHECK(!ok(api(*a, R"({"cmd":"send_file","service":"mars","to_station":"STA-B","file_name":"x","file_b64":"!!"})")));
 }
 
 int main() {

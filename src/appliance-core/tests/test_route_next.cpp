@@ -9,6 +9,7 @@
 #include "../src/json.h"
 #include "../src/loopback_modem.h"
 #include "check.h"
+#include "services_fixture.h"
 
 #include <chrono>
 #include <ctime>
@@ -102,7 +103,8 @@ static JsonValue routed_row(Core& a, const std::string& msg_id) {
 }
 static std::string in_id(Core& a, const std::string& text) {
     for (auto& m : a.list(1000))
-        if (m.direction == "in" && m.body.find(text) != std::string::npos) return m.id;
+        // A garbled partial copy cut under load is not the one routed.
+        if (m.direction == "in" && m.state != "garbled" && m.body.find(text) != std::string::npos) return m.id;
     return "";
 }
 
@@ -115,11 +117,16 @@ int main() {
     auto mc = std::make_unique<LoopbackModem>(0);
     LoopbackModem::share({ma.get(), mb.get(), mc.get()});
     CoreConfig ca{"AAM499", (dir / "a.db").string(), 3, 1, true};
+    ca.rx_service = "mars";  // a channel-less test link: MARS traffic
     ca.ack_timeout_s = 1;  // a station that doesn't answer is unacked within seconds
     ca.ack_retries = 0;
+    ca.rx_service = "mars";  // a loopback link: the network it belongs to
     Core a(ca, std::move(ma));
-    Core b(CoreConfig{"AAR9AA", (dir / "b.db").string(), 3, 1, true}, std::move(mb));
-    Core c(CoreConfig{"AAR7ZZ", (dir / "c.db").string(), 3, 1, true}, std::move(mc));
+    a.set_services(test_services());
+    Core b(on_mars_link(CoreConfig{"AAR9AA", (dir / "b.db").string(), 3, 1, true}), std::move(mb));
+    b.set_services(test_services());
+    Core c(on_mars_link(CoreConfig{"AAR7ZZ", (dir / "c.db").string(), 3, 1, true}), std::move(mc));
+    c.set_services(test_services());
     a.start();
     b.start();
     c.start();
@@ -137,12 +144,12 @@ int main() {
     CHECK(ok(call(a, {{"cmd", "bbs_set"}, {"machine_mode", "true"}, {"routing", "true"}, {"accept", "all"}, {"ack_delay_ms", "0"},
                       {"auto_per_hour", "120"}})));
     // AAR5NO and AAR4NO are not on the air.
-    CHECK(ok(call(a, {{"cmd", "route_set"}, {"match", "UHW"}, {"route", "ALE WEST"}, {"ale", "AAR5NO,AAR9AA"}})));
-    CHECK(ok(call(a, {{"cmd", "route_set"}, {"match", "UHE"}, {"route", "ALE EAST"}, {"ale", "AAR4NO"}})));
-    CHECK(ok(call(a, {{"cmd", "route_set"}, {"match", "UHN"}, {"route", "ALE NORTH"}, {"ale", "AAM499,AAR9AA"}})));
+    CHECK(ok(call(a, {{"cmd", "route_set"}, {"service", "mars"}, {"match", "UHW"}, {"route", "ALE WEST"}, {"ale", "AAR5NO,AAR9AA"}})));
+    CHECK(ok(call(a, {{"cmd", "route_set"}, {"service", "mars"}, {"match", "UHE"}, {"route", "ALE EAST"}, {"ale", "AAR4NO"}})));
+    CHECK(ok(call(a, {{"cmd", "route_set"}, {"service", "mars"}, {"match", "UHN"}, {"route", "ALE NORTH"}, {"ale", "AAM499,AAR9AA"}})));
 
     // ---- the first address doesn't answer: the second is called ------------
-    CHECK(!c.submit("AAM499", 'R', traffic("UHWTST", "AAR7ZZ", 1, "FOR THE WEST GATEWAY"), &e).empty());
+    CHECK(!c.submit("AAM499", 'R', traffic("UHWTST", "AAR7ZZ", 1, "FOR THE WEST GATEWAY"), &e, SendOpts::in("mars")).empty());
     CHECK(pump_until([&] { return out_to(a, "AAR5NO").size() == 1; }));
     {
         const std::string id = in_id(a, "FOR THE WEST GATEWAY");
@@ -159,7 +166,7 @@ int main() {
     }
 
     // ---- no address answers: failed, with why --------------------------------
-    CHECK(!c.submit("AAM499", 'R', traffic("UHEAAA", "AAR7ZZ", 2, "FOR THE EAST GATEWAY"), &e).empty());
+    CHECK(!c.submit("AAM499", 'R', traffic("UHEAAA", "AAR7ZZ", 2, "FOR THE EAST GATEWAY"), &e, SendOpts::in("mars")).empty());
     CHECK(pump_until([&] { return out_to(a, "AAR4NO").size() == 1; }));
     {
         const std::string id = in_id(a, "FOR THE EAST GATEWAY");
@@ -173,7 +180,9 @@ int main() {
     }
 
     // ---- an address the core refuses is passed over for the next ----------
-    CHECK(!c.submit("AAM499", 'R', traffic("UHNXXX", "AAR7ZZ", 3, "FOR THE NORTH GATEWAY"), &e).empty());
+    CHECK(!c.submit("AAM499", 'R', traffic("UHNXXX", "AAR7ZZ", 3, "FOR THE NORTH GATEWAY"), &e, SendOpts::in("mars")).empty());
+    // B overhears C's own copy on the shared air: wait for A's routing, not for B.
+    CHECK(pump_until([&] { return str(routed_row(a, in_id(a, "FOR THE NORTH GATEWAY")), "state") == "queued"; }));
     CHECK(pump_until([&] { return got(b, "FOR THE NORTH GATEWAY"); }));
     {
         JsonValue r = routed_row(a, in_id(a, "FOR THE NORTH GATEWAY"));

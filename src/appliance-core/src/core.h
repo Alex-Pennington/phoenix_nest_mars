@@ -13,6 +13,8 @@
 #include "ops.h"
 #include "modem.h"
 #include "tuner.h"
+#include "route.h"
+#include "services.h"
 #include "store.h"
 
 #include <atomic>
@@ -73,6 +75,30 @@ struct CoreConfig {
     // A station that asks again for a part it has been sent again this many
     // times is flagged for the operator instead of being sent it once more.
     int parts_flag_after = 2;
+    // The service of traffic heard on a link that names no channel (the
+    // loopback, STANAG 5066 and Appendix A links): the one network that link
+    // belongs to. "" leaves such traffic with no service. Never used for a
+    // modem decode: that takes its capture's channel's service, or none.
+    std::string rx_service{};
+};
+
+// How submit queues a message (docs/api.md, "Services").
+struct SendOpts {
+    bool held = false;     // queued as held, so it waits until released
+    std::string service;   // the message's service: the operator's pick, or its source's ("" none)
+    std::string channel;   // the channel label the operator picked ("" none: the radio's, as the controller reports it)
+    std::string link;      // "plain": sent as the text alone whatever the station's link format (PLAIN)
+    std::string route_service;  // the service of the routing rule it goes on ("" none)
+    std::string format;         // its compose format (procedure id), checked against the service's table ("" not named)
+    bool enciphered = false;    // codress: only in a service whose table allows encryption
+    static SendOpts in(std::string service, std::string channel = "", std::string format = "") {
+        SendOpts o;
+        o.service = std::move(service);
+        o.channel = std::move(channel);
+        o.format = std::move(format);
+        o.enciphered = o.format == "ACP127_CODRESS";
+        return o;
+    }
 };
 
 // How a station is reached on the air.
@@ -106,17 +132,32 @@ public:
     void stop();
 
     // Queues a message. Returns its id, or an empty string with *error set.
-    // held: queued as held, so it waits until released.
+    // Its service comes from the one route function (route.h): the
+    // destination's book entry, else o.service; a crossing is refused.
     std::string submit(const std::string& to, char prec, const std::string& body, std::string* error,
-                       bool held = false);
+                       const SendOpts& o = SendOpts());
 
-    // Ask 37, Alex's hard rule: no route between MARS and amateur, ever.
-    // Why a send to `call` would cross into the amateur world ("" when it
-    // would not): it is one of this station's own amateur addresses, it has
-    // been heard on the amateur channels (station_view.h amateur_calls), or
-    // the station book marks it amateur. Checked in code at every send path
-    // and again at the airtime point, never left to configuration. A refused
-    // send is an error; it is never rerouted.
+    // The one route function (route.h), with this station's tables and book.
+    Route route_for(const std::string& service, const std::string& to, const std::string& channel = "",
+                    const std::string& route_service = "");
+
+    // The service tables (services.h). Set before start(); none: every
+    // service is refused.
+    void set_services(std::shared_ptr<const Services> s) { std::atomic_store(&services_, std::move(s)); }
+    const Services* services() const { return std::atomic_load(&services_).get(); }
+    std::shared_ptr<const Services> services_ptr() const { return std::atomic_load(&services_); }
+
+    // The radio's channel as the station controller reports it (gale_key.h);
+    // unknown when no controller is set or it has not answered.
+    RadioReport radio_channel();
+
+    // The automatic modes until stage 5 (greybeard-ale #18): routing, machine
+    // answers, auto-QSL and the BBS's ACKs work for MARS only and keep the
+    // refusals they had (ask 37, ask 40). Why an automatic send to `call`
+    // would go to the amateur world ("" when it would not): one of this
+    // station's own amateur addresses, heard on the amateur channels
+    // (station_view.h amateur_calls), or marked amateur in the book. Operator
+    // sends never ask this: the route function decides them.
     std::string world_refusal(const std::string& call) const;
 
     // Next value of a named counter, 1..wrap (see Store::next_counter).
@@ -177,7 +218,7 @@ public:
     const std::string& cipher_dir() const { return cipher_dir_; }
     // Queues a codress copy and keeps its plain copy beside it (Store::set_clear).
     std::string submit_codress(const std::string& to, char prec, const std::string& codress, const std::string& clear,
-                               const std::string& key, std::string* error);
+                               const std::string& key, std::string* error, const SendOpts& o = SendOpts());
     std::optional<std::pair<std::string, std::string>> clear(const std::string& id);
     // Writes a line to the station's event log (key loads and zeroizes).
     void note(const std::string& text);
@@ -266,14 +307,15 @@ public:
     std::string link_format(const std::string& station);
     std::vector<std::pair<std::string, std::string>> link_formats();
 
-    // gale-key's caller (gale_key.h). Set before start(); none: nothing is
-    // ever asked of gale-key and every burst stays written.
+    // The station controller's caller (gale_key.h). Set before start(); none:
+    // nothing is ever handed down and every burst stays written.
     void set_gale_key(std::shared_ptr<GaleKey> g);
     GaleKey* gale_key() const { return gk_.get(); }
     // The burst an operator's y would key: by message id, or by burst file
-    // name. False with *error when gale-key may not be asked to key it: not a
-    // written burst of ours, already asked, no world or not MARS (ask 40), a
-    // station of the amateur world, no channel, or EMCON on.
+    // name. False with *error when it may not be handed to the controller: not
+    // a written burst of ours, already asked, no route (the route function
+    // refuses a crossing of message, destination and channel), no channel,
+    // or EMCON on.
     bool key_item(const std::string& msg_id, const std::string& burst, KeyItem& it, std::string* error);
     // The same checks again, then the burst is marked asked (once) just
     // before the key goes: false with *error when it may not go now.
@@ -302,6 +344,11 @@ private:
     // The outbox write-back: gale-key keyed a burst (sent from now) or
     // refused it (failed, with why).
     void handle_key_result(const std::string& burst, bool keyed, const std::string& why);
+    // The service of the channel a capture was heard on, from the dial its
+    // name carries ("" when no channel of the plan is on that dial).
+    std::string heard_service(const std::string& source);
+    // The label of the radio's channel, as the controller last reported it ("" unknown).
+    std::string radio_label_locked();
     // Every line goes through without_dial_tags first (no capture name with its
     // _<dial>kHz tag reaches the log).
     void log(const std::string& msg_id, const std::string& text);
@@ -331,6 +378,7 @@ private:
         Frame f;
         std::string raw;
         bool orderwire = false;
+        std::string world;  // the service of the message it answers ("" none)
     };
     std::deque<Answer> acks_;
     std::optional<Frame> on_air_;      // what the modem is sending now
@@ -346,6 +394,16 @@ private:
     std::shared_ptr<LinkMonitor> link_;
     std::shared_ptr<TunerKeying> tuner_ = std::make_shared<TunerKeying>(nullptr);
     std::shared_ptr<Ops> ops_;
+    std::shared_ptr<const Services> services_;
+    // The service the bytes being read now were heard in: what store_in and
+    // the answers they make take (caller holds mu_).
+    std::string rx_service_;
+    // A decode's service, waiting for its bytes (on_decode, then on_rx).
+    std::string pending_service_;
+    bool pending_decode_ = false;
+    // The service of the bare text held in loose_: a capture of another
+    // service flushes it first, so two captures' text is never mixed.
+    std::string loose_service_;
     std::shared_ptr<keys::Keyring> keys_;
     void tie_cipher();
     mutable std::mutex cipher_mu_;
@@ -354,6 +412,7 @@ private:
     std::shared_ptr<station::Identity> id_;
     std::string id_path_;
     std::set<std::string> told_waiting_;  // messages already logged as waiting for a link
+    std::set<std::string> told_no_table_;  // messages already logged as waiting for their service's table
     std::map<std::string, std::chrono::steady_clock::time_point> waiting_since_;
     std::set<std::string> overdue_;       // messages logged as past their handling time
     std::set<std::string> no_expire_;     // expired, then requeued by the operator: not expired again
@@ -371,7 +430,7 @@ private:
     struct AnswerBurst {
         std::string about;    // the message it answers ("" for an orderwire)
         std::string what;     // "ack to STA-B", "orderwire to STA-B"
-        std::string dst, world, channel;
+        std::string dst, world, channel;  // world: the service
         bool queued = false;  // handed to gale-key's thread, not yet claimed
         bool asked = false;   // gale-key was sent its key
         std::chrono::steady_clock::time_point retry{};  // gale-key wasn't reached: not before

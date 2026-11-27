@@ -15,6 +15,7 @@
 #include "../src/loopback_modem.h"
 #include "../src/received.h"
 #include "check.h"
+#include "services_fixture.h"
 
 #include <filesystem>
 #include <iostream>
@@ -146,6 +147,12 @@ static void test_first_time_operator() {
                     std::cout << "  " << t.id << " in " << p << " left a warning: " << i.text << "\n";
                     CHECK(false);
                 }
+            if (p == "PLAIN") {
+                // The operator's text alone: no envelope, no digest (docs/api.md, Services).
+                CHECK(r.message.find("VZCZC") == std::string::npos && r.message.find("NNNN") == std::string::npos);
+                CHECK(r.message.find("BT") == std::string::npos && r.prec == 'R');
+                continue;
+            }
             if (p == "ACP201_CHAT") {
                 acp201::Chat c;
                 std::string err;
@@ -501,7 +508,8 @@ static void test_api() {
     fs::remove_all(dir);
     fs::create_directories(dir);
     {
-        Core core(CoreConfig{"AAR4XX", (dir / "a.db").string(), 3, 1, true}, std::make_unique<LoopbackModem>(0));
+        Core core(on_mars_link(CoreConfig{"AAR4XX", (dir / "a.db").string(), 3, 1, true}), std::make_unique<LoopbackModem>(0));
+        core.set_services(test_services());
         JsonValue v;
 
         CHECK(parse_json(ask(core, R"({"cmd":"compose_templates"})"), v));
@@ -516,17 +524,17 @@ static void test_api() {
         // Check, then send: refused with errors, queued without.
         CHECK(parse_json(ask(core, R"({"cmd":"compose_check","template":"GENADMIN_SIMPLE","routing":"AAR4XY"})"), v));
         CHECK(v.get("ok")->b && !v.get("ready")->b && !v.get("issues")->arr.empty() && !v.get("preview"));
-        CHECK(parse_json(ask(core, R"({"cmd":"compose_send","template":"GENADMIN_SIMPLE","routing":"AAR4XY"})"), v));
+        CHECK(parse_json(ask(core, R"({"cmd":"compose_send","service":"mars","template":"GENADMIN_SIMPLE","routing":"AAR4XY"})"), v));
         CHECK(!v.get("ok")->b && v.get("issues"));
         std::string good =
             R"("template":"GENADMIN_SIMPLE","routing":"AAR4XY","to":"UHAAAA/REGION FOUR RJMOG","subj":"TEST","remarks":"Line one.\nLine two.")";
         CHECK(parse_json(ask(core, "{\"cmd\":\"compose_check\"," + good + "}"), v));
         CHECK(v.get("ready")->b && v.get("preview")->s.find("#0001") != std::string::npos);
-        CHECK(parse_json(ask(core, "{\"cmd\":\"compose_send\"," + good + "}"), v));
+        CHECK(parse_json(ask(core, "{\"cmd\":\"compose_send\",\"service\":\"mars\"," + good + "}"), v));
         CHECK(v.get("ok")->b && !v.get("id")->s.empty());
         std::string first = v.get("message")->s;
         CHECK(first.find("DE AAR4XX #0001 ") != std::string::npos && first.find("/1//") != std::string::npos);
-        CHECK(parse_json(ask(core, "{\"cmd\":\"compose_send\"," + good + ",\"prec\":\"O\"}"), v));
+        CHECK(parse_json(ask(core, "{\"cmd\":\"compose_send\",\"service\":\"mars\"," + good + ",\"prec\":\"O\"}"), v));
         CHECK(v.get("ok")->b && v.get("message")->s.find("DE AAR4XX #0002 ") != std::string::npos);
         CHECK(v.get("message")->s.find("/2//") != std::string::npos);
         std::string second = v.get("id")->s;
@@ -565,7 +573,25 @@ static void test_api() {
     fs::remove_all(dir);
 }
 
+// PLAIN (docs/api.md, Services): the operator's text alone, as written,
+// lower case kept, no envelope, no digest; a frequency is still refused.
+static void test_plain() {
+    compose::Draft d;
+    d.template_id = "PLAIN";
+    d.values["to_station"] = "TEST-1";
+    d.values["text"] = "QRV ON THE NET\nsee you there";
+    compose::Result r = compose::check(d, ctx());
+    CHECK(r.ready && r.procedure == "PLAIN" && r.to_targets.size() == 1 && r.to_targets[0] == "TEST-1");
+    CHECK(r.message == "QRV ON THE NET\r\nsee you there");
+    CHECK(compose::find_procedure("PLAIN") && compose::find_template("PLAIN"));
+    d.values["text"] = "";
+    CHECK(!compose::check(d, ctx()).ready);
+    d.values["text"] = "MEET ON 12.345 MHZ";
+    CHECK(!compose::check(d, ctx()).ready);
+}
+
 int main() {
+    test_plain();
     test_first_time_operator();
     test_first_time_operator_wrapped();
     test_common_mistakes();

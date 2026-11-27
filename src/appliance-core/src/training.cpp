@@ -98,12 +98,23 @@ const char* kSecret =
 
 }  // namespace
 
-Training::Training(std::string dir, std::string call) : dir_(std::move(dir)), call_(std::move(call)) {}
+Training::Training(std::string dir, std::string call, std::shared_ptr<const Services> services)
+    : dir_(std::move(dir)), call_(std::move(call)), services_(std::move(services)) {}
 
 Training::~Training() { stop(); }
 
+// The practice net's traffic is ACP 127: it goes in the first service whose
+// table offers that format (docs/api.md, Services), never a name in code.
+std::string Training::practice_service() const {
+    if (services_)
+        for (const Service* x : services_->all())
+            if (x->offers("ACP127_PLAINDRESS")) return x->name;
+    return "";
+}
+
 bool Training::make(const std::string& call, std::unique_ptr<Core>& core, LoopbackModem*& modem, std::string* error) {
     CoreConfig cfg;
+    cfg.rx_service = practice_service();  // the practice link carries the practice net's service
     cfg.station = call;
     cfg.db_path = (fs::path(dir_) / (call + ".db")).string();
     cfg.send_acks = true;
@@ -114,6 +125,7 @@ bool Training::make(const std::string& call, std::unique_ptr<Core>& core, Loopba
     core = std::make_unique<Core>(std::move(cfg), std::move(m));
     std::string base = (fs::path(dir_) / call).string();
     core->set_ops(std::make_shared<Ops>(call, base + ".db"));
+    core->set_services(services_);
     auto kr = std::make_shared<keys::Keyring>(base + ".keys");
     std::string err;
     kr->load(&err);
@@ -174,7 +186,9 @@ bool Training::fill(std::string* error) {
 
     // A practice key tape, sealed to this station and sent over the practice
     // channel, so enciphered traffic opens.
-    const std::string made = call_api(*ncs_, {{"cmd", "net_tape"}, {"net", "TRAINING NET"}, {"members", call_}, {"days", "31"}, {"send", "Y"}});
+    const std::string svc = practice_service();
+    if (svc.empty()) return fail(error, "no service table offers ACP 127 plaindress: the practice net can't send");
+    const std::string made = call_api(*ncs_, {{"cmd", "net_tape"}, {"net", "TRAINING NET"}, {"members", call_}, {"days", "31"}, {"send", "Y"}, {"service", svc}});
     if (!reply_ok(made)) return fail(error, "practice key tape not made");
     std::string opened;
     wait_until(
@@ -204,6 +218,7 @@ bool Training::fill(std::string* error) {
     // Three messages to this station: two in the clear, one enciphered.
     auto send = [&](const char* prec, const std::string& text, const std::string& key) {
         std::map<std::string, std::string> r = {{"cmd", "compose_send"},
+                                                {"service", svc},
                                                 {"template", "FREE_FORM"},
                                                 {"procedure", key.empty() ? "ACP127_PLAINDRESS" : "ACP127_CODRESS"},
                                                 {"prec", prec},

@@ -10,6 +10,7 @@
 #include "../src/appa_modem.h"
 #include "../src/core.h"
 #include "check.h"
+#include "services_fixture.h"
 
 #include <arpa/inet.h>
 #include <atomic>
@@ -417,8 +418,11 @@ int main() {
         std::mutex emu;
         std::vector<std::string> a_events;
         CoreConfig cfa{"STA-A", (dir / "a.db").string(), 3, 1, true};
+        cfa.rx_service = "mars";  // a channel-less test link: MARS traffic
         Core a(cfa, std::move(da));
-        Core b(CoreConfig{"STA-B", (dir / "b.db").string(), 3, 1, true}, std::move(db));
+        a.set_services(test_services());
+        Core b(on_mars_link(CoreConfig{"STA-B", (dir / "b.db").string(), 3, 1, true}), std::move(db));
+        b.set_services(test_services());
         a.on_log([&](const std::string& t) {
             std::lock_guard<std::mutex> g(emu);
             a_events.push_back(t);
@@ -442,7 +446,7 @@ int main() {
 
         // A message and its ACK, both over Appendix A.
         std::string err;
-        std::string id = a.submit("STA-B", 'P', "HELLO STA-B THIS IS STA-A", &err);
+        std::string id = a.submit("STA-B", 'P', "HELLO STA-B THIS IS STA-A", &err, SendOpts::in("mars"));
         CHECK(!id.empty());
         CHECK(wait_for([&] { return state_of(a, id) == "acked"; }));
         auto rx = b.get(id);
@@ -460,7 +464,7 @@ int main() {
             std::lock_guard<std::mutex> g(ma.mu);
             before = ma.orders.size();
         }
-        std::string bid = a.submit("STA-B", 'R', big, &err);
+        std::string bid = a.submit("STA-B", 'R', big, &err, SendOpts::in("mars"));
         CHECK(!bid.empty());
         CHECK(wait_for([&] { return state_of(a, bid) == "acked"; }));
         CHECK(b.get(bid) && b.get(bid)->body == big);
@@ -472,12 +476,12 @@ int main() {
 
         // The modem refuses the data once: the core retries and it goes.
         ma.nak_next = 1;
-        std::string rid = a.submit("STA-B", 'R', "AFTER ONE REFUSAL", &err);
+        std::string rid = a.submit("STA-B", 'R', "AFTER ONE REFUSAL", &err, SendOpts::in("mars"));
         CHECK(wait_for([&] { return state_of(a, rid) == "acked"; }));
         CHECK(a.get(rid) && a.get(rid)->attempts == 2);
 
         // To ALL: heard by the far station.
-        std::string all = a.submit("ALL", 'R', "QST NET MEETS AT 2100Z", &err);
+        std::string all = a.submit("ALL", 'R', "QST NET MEETS AT 2100Z", &err, SendOpts::in("mars"));
         CHECK(wait_for([&] { return b.get(all) && b.get(all)->body == "QST NET MEETS AT 2100Z"; }));
 
         // Idle: the driver keeps the link alive (the modem closes after 30 s without).
@@ -497,7 +501,7 @@ int main() {
         ma.drop_client = true;
         CHECK(wait_for([&] { return !pa->ready(); }, 3000));
         CHECK(wait_for([&] { return pa->ready() && ma.connections == conns + 1; }));
-        std::string after = a.submit("STA-B", 'R', "AFTER RECONNECT", &err);
+        std::string after = a.submit("STA-B", 'R', "AFTER RECONNECT", &err, SendOpts::in("mars"));
         CHECK(wait_for([&] { return state_of(a, after) == "acked"; }));
 
         a.stop();

@@ -104,6 +104,12 @@ std::string procedure(const Message& m);
 // unclassified.
 bool parse(const std::string& raw, Message& out, std::string* error);
 
+// The compose format (procedure id) a message's text reads as, for the
+// service table's formats (docs/api.md, Services): ACP127_CODRESS when it is
+// enciphered, the procedure() of traffic parse() reads, ACP201_CHAT for a chat
+// line, or "" when it reads as none.
+std::string format_of(const std::string& body);
+
 // The text as one string, lines joined with '\n'.
 std::string text_of(const Message& m);
 

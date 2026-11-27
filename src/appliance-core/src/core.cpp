@@ -11,6 +11,7 @@
 #include "channels.h"
 #include "settings.h"
 #include "station_view.h"
+#include "route.h"
 
 #include <algorithm>
 #include <cctype>
@@ -29,6 +30,7 @@ namespace pna {
 Core::Core(CoreConfig cfg, std::unique_ptr<ModemDriver> modem)
     : cfg_(std::move(cfg)), modem_(std::move(modem)), store_(cfg_.db_path) {
     emcon_ = store_.flag("emcon");
+    rx_service_ = loose_service_ = cfg_.rx_service;
 }
 
 bool valid_link_format(const std::string& f) { return f == "pna1" || f == "plain"; }
@@ -132,7 +134,8 @@ void Core::stop() {
     modem_->stop();
 }
 
-std::string Core::submit(const std::string& to, char prec, const std::string& body, std::string* error, bool held) {
+std::string Core::submit(const std::string& to, char prec, const std::string& body, std::string* error,
+                         const SendOpts& o) {
     auto fail = [&](const std::string& e) {
         if (error) *error = e;
         return std::string();
@@ -143,11 +146,25 @@ std::string Core::submit(const std::string& to, char prec, const std::string& bo
     if (!valid_prec(prec)) return fail("precedence must be Z, O, P or R");
     if (body.empty()) return fail("message is empty");
     if (body.size() > kMaxBody) return fail("message is longer than " + std::to_string(kMaxBody) + " bytes");
-    if (std::string why = world_refusal(to); !why.empty()) return fail(why);
+    if (!o.link.empty() && o.link != "plain") return fail("link must be plain or left out");
+    // The one route function: the message's service, or the crossing refused.
+    Route rt = route_for(o.service, to, o.channel, o.route_service);
+    if (!rt.ok) return fail(rt.refusal);
+    // The service's table: the formats it sends, and whether it carries cipher.
+    std::shared_ptr<const Services> tables = std::atomic_load(&services_);
+    if (const Service* sv = tables ? tables->find(rt.service) : nullptr) {
+        if (o.enciphered && !sv->encryption)
+            return fail("refused: the " + rt.service + " service carries no enciphered traffic");
+        if (!o.format.empty() && !sv->offers(o.format))
+            return fail("refused: " + o.format + " is not a format of the " + rt.service + " service");
+    }
+    const bool held = o.held;
 
     std::lock_guard<std::mutex> g(mu_);
     Message m;
-    m.world = "mars";
+    m.world = rt.service;
+    m.channel = o.channel;
+    m.link = o.link;
     m.id = cfg_.station + "-" + std::to_string(store_.next_seq());
     m.direction = "out";
     m.src = cfg_.station;
@@ -157,8 +174,37 @@ std::string Core::submit(const std::string& to, char prec, const std::string& bo
     m.state = held ? "held" : "queued";
     m.created_at = m.updated_at = now_utc();
     store_.insert(m);
-    log(m.id, std::string(held ? "held " : "queued ") + prec_name(prec) + " for " + to);
+    log(m.id, std::string(held ? "held " : "queued ") + prec_name(prec) + " for " + to + " (" + m.world +
+                  (m.channel.empty() ? std::string() : ", channel " + m.channel) + ")");
     return m.id;
+}
+
+Route Core::route_for(const std::string& service, const std::string& to, const std::string& channel,
+                      const std::string& route_service) {
+    RouteAsk a;
+    a.service = service;
+    a.to = to;
+    a.channel = channel;
+    a.route_service = route_service;
+    std::shared_ptr<const Services> s = std::atomic_load(&services_);
+    return route(s.get(), ops_.get(), a);
+}
+
+RadioReport Core::radio_channel() {
+    std::shared_ptr<GaleKey> gk = gk_;
+    return gk ? gk->radio() : RadioReport();
+}
+
+std::string Core::radio_label_locked() {
+    if (!gk_) return "";
+    RadioReport r = gk_->radio();
+    return r.known ? r.label : std::string();
+}
+
+std::string Core::heard_service(const std::string& source) {
+    const int64_t hz = dial_tag_hz(source);
+    if (!hz || !ops_) return "";
+    return ops_->channels().service_for(hz);
 }
 
 std::string Core::world_refusal(const std::string& call) const {
@@ -181,8 +227,12 @@ std::string Core::world_refusal(const std::string& call) const {
 }
 
 std::string Core::submit_codress(const std::string& to, char prec, const std::string& codress,
-                                 const std::string& clear, const std::string& key, std::string* error) {
-    std::string id = submit(to, prec, codress, error);
+                                 const std::string& clear, const std::string& key, std::string* error,
+                                 const SendOpts& o) {
+    SendOpts oc = o;
+    oc.enciphered = true;
+    if (oc.format.empty()) oc.format = "ACP127_CODRESS";
+    std::string id = submit(to, prec, codress, error, oc);
     if (id.empty()) return id;
     std::lock_guard<std::mutex> g(mu_);
     store_.set_clear(id, clear, key);
@@ -549,8 +599,10 @@ void Core::tick() {
     age_queue();
     // Bare text that stopped part-way is taken as it stands.
     if (!loose_.empty() &&
-        std::chrono::steady_clock::now() - last_loose_ >= std::chrono::seconds(cfg_.loose_quiet_s))
+        std::chrono::steady_clock::now() - last_loose_ >= std::chrono::seconds(cfg_.loose_quiet_s)) {
+        rx_service_ = loose_service_;  // the held text's own service
         cut_loose(true);
+    }
 
     if (emcon_) return;
     if (on_air_ || !modem_->ready() || modem_->busy()) return;
@@ -559,8 +611,15 @@ void Core::tick() {
 
     if (!acks_.empty()) {
         Answer a = acks_.front();
-        // The airtime point: nothing goes to the amateur world (ask 37).
-        if (std::string why = world_refusal(a.f.dst); !why.empty()) {
+        // The airtime point: nothing goes to the amateur world (ask 37). An
+        // ACK is an automatic send: MARS only until stage 5, so one answering
+        // a message of another service, or of none, never goes.
+        std::string why = world_refusal(a.f.dst);
+        if (why.empty() && !a.orderwire && a.world != "mars")
+            why = "it answers " + (a.world.empty() ? std::string("a message with no service")
+                                                   : "a message of the " + a.world + " service") +
+                  ": until stage 5 the core ACKs MARS traffic only";
+        if (!why.empty()) {
             acks_.pop_front();
             log(a.orderwire ? "" : a.f.id, "not sent to " + a.f.dst + ": " + why);
             return;
@@ -604,8 +663,20 @@ void Core::tick() {
         next = store_.next_to_send(now_utc());
     }
     if (!next) return;
-    if (std::string why = next->world != "mars" ? std::string("it is an amateur-world item") : world_refusal(next->dst);
-        !why.empty()) {
+    // The airtime point: the route function again, with the message's own
+    // service and channel, so a book entry changed since it was queued is caught.
+    if (Route rt = route_for(next->world.empty() ? std::string("(none)") : next->world, next->dst, next->channel);
+        !rt.ok) {
+        const std::string why = rt.refusal;
+        if (rt.no_table) {
+            // Its service has no table (an upgrade before the tables are
+            // installed): it waits queued, with the reason, and is never failed for it.
+            const std::string wait = "waits: " + no_table(next->world);
+            store_.schedule_retry(next->id, now_utc() + 5, wait);
+            if (told_no_table_.insert(next->id).second) log(next->id, wait + "; it goes once the table is there");
+            return;
+        }
+        told_no_table_.erase(next->id);
         store_.set_state(next->id, "failed", why);
         log(next->id, "refused at the air: " + why);
         waiting_since_.erase(next->id);
@@ -621,7 +692,7 @@ void Core::tick() {
     f.dst = next->dst;
     f.prec = next->prec;
     f.body = next->body;
-    const bool plain = !is_broadcast(f.dst) && store_.link_format(f.dst) == "plain";
+    const bool plain = next->link == "plain" || (!is_broadcast(f.dst) && store_.link_format(f.dst) == "plain");
     store_.mark_sending(f.id);
     if (modem_->send(plain ? f.body : encode(f))) {
         on_air_ = f;
@@ -656,17 +727,18 @@ void Core::handle_tx_done(bool ok, const std::string& err) {
         const bool ow = f.id.compare(0, 3, "OW-") == 0;
         if (!ok) log(ow ? "" : f.id, (ow ? "orderwire to " : "ack to ") + f.dst + " failed: " + err);
         if (ok && !burst.empty()) {
-            // Written to the outbox, not on the air: gale-key keys it under
+            // Written to the outbox, not on the air: the controller keys it under
             // standing machine (key_answers), on the channel the radio is on.
-            // It takes the world of the message it answers, or of the station
-            // it goes to.
+            // It takes the service of the message it answers; an orderwire, or
+            // an ACK of something not held, that of the station it goes to in
+            // the book. None: it is never keyed (docs/api.md, ACK and orderwire).
             AnswerBurst a;
             a.about = ow ? std::string() : f.id;
             a.what = (ow ? "orderwire to " : "ack to ") + f.dst;
             a.dst = f.dst;
             auto m = ow ? std::nullopt : store_.get(f.id);
-            a.world = m && !m->world.empty() ? m->world : (world_refusal(f.dst).empty() ? "mars" : "amateur");
-            a.channel = tuner_->current_channel();
+            a.world = m ? m->world : route_for("", f.dst).service;
+            a.channel = radio_label_locked();
             answer_bursts_[burst] = a;
             log(a.about, a.what + " written to the outbox as " + burst +
                              "; not on the air until gale-key keys it (under standing machine)");
@@ -682,11 +754,14 @@ void Core::handle_tx_done(bool ok, const std::string& err) {
         if (now_m && now_m->state == "cancelled") return;
         if (!burst.empty()) {
             // The write-back: a file in the outbox is not on the air. It is
-            // sent only when gale-key says it keyed it (handle_key_result).
-            // Its channel is the one the radio was last set to through the
-            // tuner calls (as a net's is, heard()): gale-key keys it there.
-            store_.mark_written(f.id, burst, tuner_ ? tuner_->current_channel() : std::string());
-            log(f.id, "written to the outbox as " + burst + "; not on the air until gale-key keys it");
+            // sent only when its result file says it was keyed
+            // (handle_key_result). Its channel is the operator's pick, else
+            // the one the controller reports the radio on (docs/api.md, "A
+            // send's channel"); the route function checks it before it is
+            // handed down.
+            const std::string ch = now_m && !now_m->channel.empty() ? now_m->channel : radio_label_locked();
+            store_.mark_written(f.id, burst, ch);
+            log(f.id, "written to the outbox as " + burst + "; not on the air until the controller keys it");
             return;
         }
         // Only our own frames and CP's chat form are answered on the air.
@@ -710,7 +785,7 @@ void Core::handle_tx_done(bool ok, const std::string& err) {
     }
 }
 
-// ---- gale-key's caller (gale_key.h) ----
+// ---- the station controller's caller (gale_key.h) ----
 
 void Core::set_gale_key(std::shared_ptr<GaleKey> g) {
     gk_ = std::move(g);
@@ -719,37 +794,8 @@ void Core::set_gale_key(std::shared_ptr<GaleKey> g) {
         std::lock_guard<std::mutex> lk(mu_);
         log(id, text);
     });
-    // The tuner's sequence around every key gale-key is asked for (tuner.h,
-    // around_key): tuner_pre_tx first, and the key only on ok; tuner_post_tx
-    // once gale-key's key has ended. With no tuner daemon, the key goes as is.
-    GaleKey* gk = gk_.get();
-    gk_->set_around([this, gk](const KeyItem& it, const std::function<GaleKeyReply()>& send) {
-        std::shared_ptr<TunerKeying> tk = tuner_;
-        GaleKeyReply r;
-        bool asked = false;
-        TunerOutcome o = tk->around_key(
-            [&] { r = send(); },
-            [&] {
-                // gale-key answers a key once it has ended. One that took the
-                // request and answered after the timeout may still be keyed:
-                // its status says when it no longer is (and waits for it).
-                if (r.answered || !r.reached) return true;
-                GaleKeyReply st = gk->status();
-                const JsonValue* k = st.answered ? st.body.get("keyed") : nullptr;
-                return k && k->type == JsonValue::Type::Bool && !k->b;
-            },
-            &asked);
-        if (!asked) {
-            GaleKeyReply n;
-            n.reason = "tuner_pre_tx " + o.code + ": " + o.reason + "; gale-key not asked to key";
-            return n;
-        }
-        if (!o.ok) {
-            std::lock_guard<std::mutex> lk(mu_);
-            log(it.msg_id, "after gale-key's key of " + it.burst + ": " + no_frequency(o.reason));
-        }
-        return r;
-    });
+    // No tuner sequence here: the controller tells the tuner daemon the
+    // channel as part of its own sequence (docs/api.md, Keying).
 }
 
 bool Core::key_checks(const Store::KeyRow& r, std::string* error) {
@@ -759,22 +805,23 @@ bool Core::key_checks(const Store::KeyRow& r, std::string* error) {
     };
     if (r.state != "written" || r.burst.empty())
         return fail(r.id + " is " + r.state + ", not a burst written to the outbox waiting for its key");
-    if (r.asked) return fail("gale-key was already asked to key " + r.burst + "; its BURST.key.json decides");
-    if (r.world.empty()) return fail(r.burst + " has no world: never sent to gale-key");
-    if (r.world != "mars")
-        return fail(r.burst + " is an item of the " + r.world +
-                    " world: the MARS message center never asks gale-key to key it (ask 40)");
-    if (std::string why = world_refusal(r.dst); !why.empty())
-        return fail("not keyed to " + r.dst + ": " + why + " (ask 40)");
+    if (r.asked) return fail("the controller already has " + r.burst + "; its BURST.key.json decides");
     if (r.channel.empty())
-        return fail(r.burst + " has no channel (no channel was set through tuner_channel when it was written): "
-                              "never sent to gale-key; requeue it once a channel is set");
-    // Station design v1.9: the core keys only on MARS channels.
-    if (ops_)
-        if (auto c = ops_->channels().get(r.channel); c && c->world == "amateur")
-            return fail(r.burst + " was written on " + r.channel +
-                        ", an amateur channel: the MARS message center never keys on one (ask 40)");
-    if (emcon_) return fail("EMCON is on: nothing is asked of gale-key until it is off");
+        return fail(r.burst + " has no channel (none picked, and the controller reported none when it was "
+                              "written): never handed down; requeue it once one is set");
+    if (!r.mode.empty()) {
+        // An automatic send: MARS only until stage 5, as before (ask 40).
+        if (r.world != "mars")
+            return fail(r.burst + " is an item of the " + (r.world.empty() ? std::string("(no)") : r.world) +
+                        " service: until stage 5 the core keys automatic sends in MARS only");
+        if (std::string why = world_refusal(r.dst); !why.empty())
+            return fail("not keyed to " + r.dst + ": " + why + " (ask 40)");
+    }
+    // The route function: the burst's, the message's, the destination's and
+    // the channel's services are one.
+    if (Route rt = route_for(r.world.empty() ? std::string("(none)") : r.world, r.dst, r.channel); !rt.ok)
+        return fail("not keyed: " + rt.refusal);
+    if (emcon_) return fail("EMCON is on: nothing is handed to the controller until it is off");
     return true;
 }
 
@@ -786,7 +833,7 @@ bool Core::key_item(const std::string& msg_id, const std::string& burst, KeyItem
         if (error)
             *error = msg_id.empty() ? (burst.empty() ? std::string("name a msg_id or a burst: a prepare is only for a "
                                                                    "burst already written to the outbox")
-                                                     : burst + " is no burst of a message of ours: never sent to gale-key")
+                                                     : burst + " is no burst of a message of ours: never handed down")
                                     : "no outgoing message " + msg_id;
         return false;
     }
@@ -795,7 +842,7 @@ bool Core::key_item(const std::string& msg_id, const std::string& burst, KeyItem
         return false;
     }
     if (!key_checks(*r, error)) return false;
-    it = KeyItem{r->id, r->burst, r->world, r->channel};
+    it = KeyItem{r->id, r->burst, r->world, r->channel, r->dst};
     return true;
 }
 
@@ -806,13 +853,13 @@ bool Core::claim_key(const KeyItem& it, std::string* error) {
         if (error) *error = "no outgoing message " + it.msg_id;
         return false;
     }
-    if (r->burst != it.burst || r->channel != it.channel || r->world != it.world) {
+    if (r->burst != it.burst || r->channel != it.channel || r->world != it.service) {
         if (error) *error = it.msg_id + "'s burst changed since the y dialog opened: open it again";
         return false;
     }
     if (!key_checks(*r, error)) return false;
     if (!store_.claim_key(it.msg_id, it.burst)) {
-        if (error) *error = "gale-key was already asked to key " + it.burst;
+        if (error) *error = "the controller already has " + it.burst;
         return false;
     }
     return true;
@@ -842,37 +889,59 @@ size_t Core::answer_bursts() {
 // only, MARS only, on the channel they were written on (ask 40).
 void Core::key_answers(bool machine_on) {
     const auto now = std::chrono::steady_clock::now();
-    for (auto& [burst, a] : answer_bursts_) {
-        if (a.queued || a.asked) continue;
+    for (auto it = answer_bursts_.begin(); it != answer_bursts_.end();) {
+        const std::string burst = it->first;
+        AnswerBurst& a = it->second;
+        if (a.queued || a.asked) {
+            ++it;
+            continue;
+        }
         std::string why;
-        if (a.world != "mars")
-            why = "it answers an item of the " + a.world + " world: the MARS message center never asks gale-key to key it";
+        if (a.world.empty())
+            why = "it has no service (the message it answers has none, or its station is not in the book)";
+        else if (a.world != "mars")
+            why = "it is of the " + a.world + " service: until stage 5 the core keys automatic sends in MARS only";
         else if (std::string w = world_refusal(a.dst); !w.empty())
             why = w + " (ask 40)";
         else if (a.channel.empty())
-            why = "no channel was set through tuner_channel when it was written: never sent to gale-key";
+            why = "the controller reported no channel when it was written: never handed down";
+        else if (Route rt = route_for(a.world, a.dst, a.channel); !rt.ok)
+            why = rt.refusal;
         if (!why.empty()) {
-            if (key_told_.insert(burst).second) log(a.about, a.what + " (" + burst + ") not asked of gale-key: " + why);
+            // Never to be keyed: said once, and not held any longer.
+            log(a.about, a.what + " (" + burst + ") not handed to the controller: " + why);
+            key_told_.erase(burst);
+            it = answer_bursts_.erase(it);
             continue;
         }
+        ++it;
         if (!machine_on || now < a.retry) continue;
         a.queued = true;
         gk_->key_standing(
-            KeyItem{a.about, burst, a.world, a.channel}, "machine",
+            KeyItem{a.about, burst, a.world, a.channel, a.dst}, "machine",
             [this](const KeyItem& it) {
                 std::lock_guard<std::mutex> g(mu_);
                 auto x = answer_bursts_.find(it.burst);
                 if (x == answer_bursts_.end()) return false;
                 x->second.queued = false;
                 if (emcon_ || x->second.asked || !world_refusal(x->second.dst).empty()) return false;
+                // The route function again, as it goes.
+                if (!route_for(x->second.world, x->second.dst, x->second.channel).ok) return false;
                 x->second.asked = true;
                 return true;
             },
             [this](const KeyItem& it, const GaleKeyReply& rep) {
-                if (rep.reached) return;
+                if (rep.reached && (!rep.answered || rep.accepted)) return;  // its result file decides
                 std::lock_guard<std::mutex> g(mu_);
                 auto x = answer_bursts_.find(it.burst);
                 if (x == answer_bursts_.end()) return;
+                if (rep.answered) {
+                    // Refused at the controller: no result file comes. Logged once, not tried again.
+                    log(x->second.about, x->second.what + " (" + it.burst + ") not accepted by the controller: " +
+                                             no_frequency(rep.reason));
+                    answer_bursts_.erase(x);
+                    return;
+                }
                 x->second.asked = false;
                 x->second.retry = std::chrono::steady_clock::now() + std::chrono::seconds(30);
             });
@@ -895,12 +964,12 @@ void Core::key_automatic() {
         }
         std::string why;
         if (!key_checks(r, &why)) {
-            if (key_told_.insert(r.burst).second) log(r.id, "not asked of gale-key: " + why);
+            if (key_told_.insert(r.burst).second) log(r.id, "not handed to the controller: " + why);
             continue;
         }
         key_queued_.insert(r.id);
         gk_->key_standing(
-            KeyItem{r.id, r.burst, r.world, r.channel}, r.mode,
+            KeyItem{r.id, r.burst, r.world, r.channel, r.dst}, r.mode,
             [this, mode = r.mode](const KeyItem& it) {
                 std::lock_guard<std::mutex> g(mu_);
                 key_queued_.erase(it.msg_id);
@@ -911,8 +980,18 @@ void Core::key_automatic() {
                 return store_.claim_key(it.msg_id, it.burst);
             },
             [this](const KeyItem& it, const GaleKeyReply& rep) {
-                if (rep.reached) return;
+                if (rep.reached && (!rep.answered || rep.accepted)) return;  // its result file decides
                 std::lock_guard<std::mutex> g(mu_);
+                if (rep.answered) {
+                    // Refused at the controller: no result file comes, so the refusal decides.
+                    auto row = store_.key_row(it.msg_id);
+                    if (!row || row->state != "written" || row->burst != it.burst) return;
+                    const std::string why = "not accepted by the controller: " +
+                                            no_frequency(rep.reason.empty() ? "no reason given" : rep.reason);
+                    store_.set_state(it.msg_id, "failed", why);
+                    log(it.msg_id, it.burst + " " + why + "; failed (requeue to try again)");
+                    return;
+                }
                 store_.unclaim_key(it.msg_id, it.burst);
                 key_retry_[it.msg_id] = std::chrono::steady_clock::now() + std::chrono::seconds(30);
             });
@@ -940,11 +1019,20 @@ void Core::handle_key_result(const std::string& burst, bool keyed, const std::st
         return;
     }
     if (!keyed) {
+        // gale-key revokes grants itself (EMCON, the hourly cap). A burst keyed
+        // under a grant it no longer holds comes back refused with its wording,
+        // and that mode goes off here too, so the next bursts wait for the y.
+        if (auto row = store_.key_row(m->id); row && !row->mode.empty() && gk_ &&
+                                               why.rfind("no standing grant for " + row->mode, 0) == 0) {
+            gk_->forget(row->mode);
+            log("", "standing " + row->mode +
+                        " OFF: gale-key holds no grant for it any more; the operator's y turns it on again");
+        }
         store_.set_state(m->id, "failed", "not keyed: " + (why.empty() ? "gale-key gave no reason" : why));
         log(m->id, burst + " " + said + "; failed (requeue to try again)");
         return;
     }
-    const bool plain = !is_broadcast(m->dst) && store_.link_format(m->dst) == "plain";
+    const bool plain = m->link == "plain" || (!is_broadcast(m->dst) && store_.link_format(m->dst) == "plain");
     const bool cp_chat = plain && m->body.compare(0, 5, "chat|") == 0;
     const bool awaits = !is_broadcast(m->dst) && cfg_.send_acks && (!plain || cp_chat);
     store_.mark_sent(m->id, awaits && cfg_.ack_timeout_s > 0 ? now_utc() + cfg_.ack_timeout_s : 0);
@@ -983,6 +1071,14 @@ void Core::decode_in(const ModemDecode& d) {
     std::lock_guard<std::mutex> g(mu_);
     const std::string sha = d.sha256.empty() ? sha256_hex(d.bytes) : d.sha256;
     const std::string id = "DEC-" + sha.substr(0, 12);
+    // Received traffic takes the service of the channel it was heard on: the
+    // plan's channel on the dial its capture's name carries. The messages the
+    // same bytes hold (handle_rx, next) take it too.
+    // A decode names its channel by its capture's dial: no plan channel on
+    // that dial is no service. --rx-service is for links that name no channel.
+    pending_service_ = heard_service(d.source);
+    pending_decode_ = true;
+    rx_service_ = pending_service_;  // the decode's own row
     if (store_.exists(id)) {
         log(id, "the same modem decode came again (" + d.source + "), not stored twice");
         return;
@@ -997,6 +1093,16 @@ void Core::handle_rx(const std::string& bytes) {
     raw_rx(bytes);
     std::lock_guard<std::mutex> g(mu_);
     if (!bytes.empty()) last_air_ = std::chrono::steady_clock::now();
+    // These bytes' service: their decode's, else the link's.
+    const std::string svc = pending_decode_ ? pending_service_ : cfg_.rx_service;
+    pending_decode_ = false;
+    // Bare text held from a capture of another service is taken as it stands
+    // first, in its own service, before these bytes join it.
+    if (!loose_.empty() && loose_service_ != svc) {
+        rx_service_ = loose_service_;
+        cut_loose(true);
+    }
+    rx_service_ = loose_service_ = svc;
     auto frames = parser_.feed(bytes);
     for (const Frame& f : parser_.take_garbled()) {
         // The header checked, the body didn't: keep what came, ack nothing,
@@ -1049,6 +1155,7 @@ void Core::handle_rx(const std::string& bytes) {
             m.prec = f.prec;
             m.body = f.body;
             m.state = "received";
+            m.world = rx_service_;  // the service of the channel it was heard on
             m.created_at = m.updated_at = now_utc();
             store_.insert(m);
             log(f.id, std::string("received ") + prec_name(f.prec) + " from " + f.src +
@@ -1077,6 +1184,7 @@ void Core::handle_rx(const std::string& bytes) {
             Answer a;
             a.f.type = FrameType::Ack;
             a.f.id = f.id;
+            a.world = rx_service_;
             a.f.src = cfg_.station;
             a.f.dst = f.src;
             a.f.prec = f.prec;
@@ -1177,8 +1285,9 @@ bool Core::release(const std::string& id, std::string* error) {
     auto m = store_.get(id);
     if (!m || m->direction != "out") return refuse(error, "no message " + id + " of ours");
     if (m->state != "held") return refuse(error, id + " is " + m->state + ", not held");
-    if (m->world != "mars") return refuse(error, id + " is an amateur-world item; the MARS message center never sends it");
-    if (std::string why = world_refusal(m->dst); !why.empty()) return refuse(error, why);
+    // The route function, with the message's own service and channel.
+    if (Route rt = route_for(m->world.empty() ? std::string("(none)") : m->world, m->dst, m->channel); !rt.ok)
+        return refuse(error, rt.refusal);
     store_.set_state(id, "queued");
     // The operator's own from here: no standing grant keys it, only a y.
     store_.set_key_mode(id, "");
@@ -1194,8 +1303,9 @@ bool Core::requeue(const std::string& id, std::string* error) {
         m->state != "expired" && m->state != "written")
         return refuse(error, id + " is " + m->state +
                                  "; only failed, unacked, cancelled, expired, written or held traffic can be requeued");
-    if (m->world != "mars") return refuse(error, id + " is an amateur-world item; the MARS message center never sends it");
-    if (std::string why = world_refusal(m->dst); !why.empty()) return refuse(error, why);
+    // The route function, with the message's own service and channel.
+    if (Route rt = route_for(m->world.empty() ? std::string("(none)") : m->world, m->dst, m->channel); !rt.ok)
+        return refuse(error, rt.refusal);
     overdue_.erase(id);
     if (m->state == "expired") no_expire_.insert(id);
     store_.requeue(id, false);
@@ -1292,6 +1402,7 @@ void Core::store_in(const std::string& id, const std::string& src, const std::st
     m.prec = valid_prec(prec) ? prec : 'R';
     m.body = body;
     m.state = state;
+    m.world = rx_service_;  // the service of the channel it was heard on ("" not known)
     m.created_at = m.updated_at = now_utc();
     store_.insert(m);
     log(id, what);
@@ -1408,6 +1519,7 @@ void Core::plain_chat(const std::string& text) {
         Answer a;
         a.f.type = FrameType::Ack;
         a.f.id = id;
+        a.world = rx_service_;
         a.f.src = cfg_.station;
         a.f.dst = c.from;
         a.f.prec = 'P';
@@ -1464,6 +1576,7 @@ void Core::plain_unit(const std::string& raw, bool complete) {
             Answer n;
             n.f.type = FrameType::Ack;
             n.f.id = "CHAT-" + cp_id;
+            n.world = rx_service_;
             n.f.src = cfg_.station;
             n.f.dst = src;
             n.f.prec = 'P';

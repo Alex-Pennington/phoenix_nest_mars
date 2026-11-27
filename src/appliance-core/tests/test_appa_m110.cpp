@@ -11,6 +11,7 @@
 #include "../src/appa_modem.h"
 #include "../src/core.h"
 #include "check.h"
+#include "services_fixture.h"
 
 #include <arpa/inet.h>
 #include <atomic>
@@ -141,12 +142,14 @@ static int two_cores(const char* exe, const fs::path& dir) {
         return std::make_unique<AppaModem>(c);
     };
     {
-        Core a(CoreConfig{"STA-A", (dir / "a.db").string(), 3, 1, true}, make(sa.port));
-        Core b(CoreConfig{"STA-B", (dir / "b.db").string(), 3, 1, true}, make(sb.port));
+        Core a(on_mars_link(CoreConfig{"STA-A", (dir / "a.db").string(), 3, 1, true}), make(sa.port));
+        a.set_services(test_services());
+        Core b(on_mars_link(CoreConfig{"STA-B", (dir / "b.db").string(), 3, 1, true}), make(sb.port));
+        b.set_services(test_services());
         a.start();
         b.start();
         std::string err;
-        std::string id = a.submit("STA-B", 'P', "HELLO STA-B THIS IS STA-A OVER 110A", &err);
+        std::string id = a.submit("STA-B", 'P', "HELLO STA-B THIS IS STA-A OVER 110A", &err, SendOpts::in("mars"));
         CHECK(!id.empty());
         auto acked = [&] {
             auto m = a.get(id);

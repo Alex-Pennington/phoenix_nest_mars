@@ -19,7 +19,7 @@ namespace {
 
 
 constexpr const char* kCols =
-    "id, direction, src, dst, prec, body, state, attempts, created_at, updated_at, next_try_at, last_error, sends, world";
+    "id, direction, src, dst, prec, body, state, attempts, created_at, updated_at, next_try_at, last_error, sends, world, want_channel, link";
 
 Message row(Stmt& s) {
     Message m;
@@ -37,7 +37,11 @@ Message row(Stmt& s) {
     m.next_try_at = s.i64(10);
     m.last_error = s.text(11);
     m.sends = static_cast<int>(s.i64(12));
-    m.world = s.text(13) == "amateur" ? "amateur" : "mars";
+    // As stored: a service no table names is refused by the route function,
+    // never read here as MARS (greybeard-ale #18 v2.2).
+    m.world = s.text(13);
+    m.channel = s.text(14);
+    m.link = s.text(15);
     return m;
 }
 
@@ -95,6 +99,24 @@ Store::Store(const std::string& path) {
         while (t.step())
             if (t.text(1) == "burst") has = true;
         if (!has) exec("ALTER TABLE messages ADD COLUMN burst TEXT NOT NULL DEFAULT ''");
+    }
+    // The channel the operator picked for a send (docs/api.md, "A send's
+    // channel"); "" for none.
+    {
+        bool has = false;
+        Stmt t(db_, "PRAGMA table_info(messages)");
+        while (t.step())
+            if (t.text(1) == "want_channel") has = true;
+        if (!has) exec("ALTER TABLE messages ADD COLUMN want_channel TEXT NOT NULL DEFAULT ''");
+    }
+    // "plain": the message goes as its text alone (PLAIN), whatever the
+    // station's link format.
+    {
+        bool has = false;
+        Stmt t(db_, "PRAGMA table_info(messages)");
+        while (t.step())
+            if (t.text(1) == "link") has = true;
+        if (!has) exec("ALTER TABLE messages ADD COLUMN link TEXT NOT NULL DEFAULT ''");
     }
     // gale-key's caller (gale_key.h): the channel a burst was written for,
     // the standing mode of an automatic send, and whether gale-key was asked.
@@ -155,11 +177,11 @@ int64_t Store::next_counter(const std::string& key, int64_t wrap) {
 void Store::insert(const Message& m) {
     Stmt s(db_,
            "INSERT INTO messages(id, direction, src, dst, prec, body, state, attempts, created_at,"
-           " updated_at, next_try_at, last_error, world) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)");
+           " updated_at, next_try_at, last_error, world, want_channel, link) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)");
     s.bind(1, m.id).bind(2, m.direction).bind(3, m.src).bind(4, m.dst).bind(5, std::string(1, m.prec));
     s.bind_blob(6, m.body).bind(7, m.state).bind(8, static_cast<int64_t>(m.attempts));
     s.bind(9, m.created_at).bind(10, m.updated_at).bind(11, m.next_try_at).bind(12, m.last_error);
-    s.bind(13, m.world.empty() ? std::string("mars") : m.world);
+    s.bind(13, m.world).bind(14, m.channel).bind(15, m.link);
     s.step();
 }
 

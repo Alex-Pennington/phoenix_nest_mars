@@ -19,6 +19,7 @@
 #include "../src/ops.h"
 #include "../src/station.h"
 #include "check.h"
+#include "services_fixture.h"
 
 #include <cctype>
 #include <chrono>
@@ -145,7 +146,7 @@ static std::string read_file(const fs::path& p) {
 
 // The member's form calls, as gale-term sends them.
 static JsonValue form(Core& c, const std::string& id, std::vector<std::pair<std::string, std::string>> values) {
-    std::string line = "{\"cmd\":\"form_submit\",\"form\":\"" + id + "\"";
+    std::string line = "{\"cmd\":\"form_submit\",\"service\":\"mars\",\"form\":\"" + id + "\"";
     for (auto& [k, v] : values) line += ",\"" + k + "\":\"" + esc(v) + "\"";
     line += "}";
     if (std::getenv("FORMS_DEBUG")) std::cerr << "FORM " << id << "\n";
@@ -189,7 +190,8 @@ static Box out_of_can(const fs::path& dir, const std::string& typed, std::unique
     std::string saved;
     CHECK(first_start::saved_call(dir.string(), saved) && saved == got);
     std::string base = (dir / got).string();
-    b.core = std::make_unique<Core>(CoreConfig{got, base + ".db", 3, 1, true}, std::move(modem));
+    b.core = std::make_unique<Core>(on_mars_link(CoreConfig{got, base + ".db", 3, 1, true}), std::move(modem));
+    b.core->set_services(test_services());
     b.keys = std::make_shared<keys::Keyring>(base + ".keys");
     b.keys->set_clock([] { return g_now; });
     std::string err;
@@ -538,7 +540,7 @@ static void drill(const fs::path& dir) {
         return std::string();
     };
     CHECK(!today(A).empty() && today(A) == today(B) && today(A) == today(C));
-    r = call(*A.core, {{"cmd", "compose_send"},
+    r = call(*A.core, {{"cmd", "compose_send"}, {"service", "mars"},
                        {"template", "FREE_FORM"},
                        {"procedure", "ACP127_PLAINDRESS"},
                        {"prec", "R"},

@@ -76,6 +76,7 @@ void write_rule(JsonWriter& w, const bbs::Rule& r) {
         .field("sched", r.sched)
         .field("compress", r.compress)
         .field("mark_processed", r.mark_processed)
+        .field("service", r.world)
         .field("world", r.world)
         .end_object();
 }
@@ -201,7 +202,9 @@ std::optional<std::string> handle_bbs(Core& core, const std::string& cmd, std::m
         if (req.count("sched")) r.sched = req["sched"];
         if (req.count("compress")) r.compress = truthy(req["compress"]);
         if (req.count("mark_processed")) r.mark_processed = truthy(req["mark_processed"]);
-        if (req.count("world")) r.world = req["world"];
+        // The rule's service (`world` is read as it for one release: the API gate).
+        if (req.count("service") && !req["service"].empty()) r.world = req["service"];
+        else if (req.count("world")) r.world = req["world"];
         int64_t id = 0;
         if (!e.set_rule(r, &id, &why)) return err(why);
         JsonWriter w;

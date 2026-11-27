@@ -10,6 +10,7 @@
 #include "../src/s5066.h"
 #include "../src/s5066_client.h"
 #include "check.h"
+#include "services_fixture.h"
 
 #include <arpa/inet.h>
 #include <atomic>
@@ -367,8 +368,10 @@ int main() {
         auto ca = make(na.port());
         auto cb = make(nb.port());
         S5066Client* pa = ca.get();
-        Core a(CoreConfig{"STA-A", (dir / "a.db").string(), 3, 1, true}, std::move(ca));
-        Core b(CoreConfig{"STA-B", (dir / "b.db").string(), 3, 1, true}, std::move(cb));
+        Core a(on_mars_link(CoreConfig{"STA-A", (dir / "a.db").string(), 3, 1, true}), std::move(ca));
+        a.set_services(test_services());
+        Core b(on_mars_link(CoreConfig{"STA-B", (dir / "b.db").string(), 3, 1, true}), std::move(cb));
+        b.set_services(test_services());
         a.start();
         b.start();
 
@@ -382,7 +385,7 @@ int main() {
 
         // A message and its ACK, both through 5066.
         std::string err;
-        std::string id = a.submit("STA-B", 'P', "HELLO STA-B THIS IS STA-A", &err);
+        std::string id = a.submit("STA-B", 'P', "HELLO STA-B THIS IS STA-A", &err, SendOpts::in("mars"));
         CHECK(!id.empty());
         CHECK(wait_for([&] { return state_of(a, id) == "acked"; }));
         auto rx = b.get(id);
@@ -402,7 +405,7 @@ int main() {
             std::lock_guard<std::mutex> g(na.mu);
             before = na.requests.size();
         }
-        std::string bid = a.submit("STA-B", 'R', big, &err);
+        std::string bid = a.submit("STA-B", 'R', big, &err, SendOpts::in("mars"));
         CHECK(!bid.empty());
         CHECK(wait_for([&] { return state_of(a, bid) == "acked"; }));
         CHECK(b.get(bid) && b.get(bid)->body == big);
@@ -414,12 +417,12 @@ int main() {
 
         // The node refuses once: the core retries and it goes.
         na.reject_next = 1;
-        std::string rid = a.submit("STA-B", 'R', "AFTER ONE REFUSAL", &err);
+        std::string rid = a.submit("STA-B", 'R', "AFTER ONE REFUSAL", &err, SendOpts::in("mars"));
         CHECK(wait_for([&] { return state_of(a, rid) == "acked"; }));
         CHECK(a.get(rid) && a.get(rid)->attempts == 2);
 
         // A station with no 5066 address fails, with the reason in the log.
-        std::string nid = a.submit("STA-C", 'R', "NOBODY KNOWS STA-C", &err);
+        std::string nid = a.submit("STA-C", 'R', "NOBODY KNOWS STA-C", &err, SendOpts::in("mars"));
         CHECK(!nid.empty());
         CHECK(wait_for([&] { return state_of(a, nid) == "failed"; }, 15000));
 
@@ -428,7 +431,7 @@ int main() {
             std::ofstream f(dir / "peers");
             f << "STA-A 0.0.0.1\nSTA-B 0.0.0.2\nSTA-C 0.0.0.3\n";
         }
-        std::string cid = a.submit("STA-C", 'R', "STA-C NOW HAS AN ADDRESS BUT NO NODE", &err);
+        std::string cid = a.submit("STA-C", 'R', "STA-C NOW HAS AN ADDRESS BUT NO NODE", &err, SendOpts::in("mars"));
         CHECK(wait_for([&] { return state_of(a, cid) == "failed"; }, 15000));
         CHECK(pa->peers() == 3);
 
@@ -439,7 +442,7 @@ int main() {
             std::lock_guard<std::mutex> g(na.mu);
             before = na.requests.size();
         }
-        std::string all = a.submit("ALL", 'R', "QST NET MEETS AT 2100Z", &err);
+        std::string all = a.submit("ALL", 'R', "QST NET MEETS AT 2100Z", &err, SendOpts::in("mars"));
         CHECK(!all.empty());
         CHECK(wait_for([&] { return b.get(all) && b.get(all)->body == "QST NET MEETS AT 2100Z"; }));
         CHECK(wait_for([&] { return state_of(a, all) == "sent"; }));
@@ -470,7 +473,7 @@ int main() {
         // Data flow off holds sends; on lets them go.
         na.to_client(s5066::dataflow(false));
         CHECK(wait_for([&] { return pa->busy(); }));
-        std::string held = a.submit("STA-B", 'R', "HELD BY FLOW CONTROL", &err);
+        std::string held = a.submit("STA-B", 'R', "HELD BY FLOW CONTROL", &err, SendOpts::in("mars"));
         std::this_thread::sleep_for(std::chrono::milliseconds(400));
         CHECK(state_of(a, held) == "queued");
         na.to_client(s5066::dataflow(true));
@@ -484,7 +487,7 @@ int main() {
             std::lock_guard<std::mutex> g(na.mu);
             CHECK(na.binds.size() == 2);
         }
-        std::string after = a.submit("STA-B", 'R', "AFTER RECONNECT", &err);
+        std::string after = a.submit("STA-B", 'R', "AFTER RECONNECT", &err, SendOpts::in("mars"));
         CHECK(wait_for([&] { return state_of(a, after) == "acked"; }));
 
         // An unbind from the node is the same as a lost connection.

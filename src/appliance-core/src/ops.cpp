@@ -295,7 +295,7 @@ static BookEntry row_entry(Stmt& s) {
     e.members = split(s.text(5), "\n");
     e.note = s.text(6);
     e.source = s.text(7);
-    e.world = s.text(8) == "amateur" ? "amateur" : "mars";
+    e.world = s.text(8);  // as stored
     return e;
 }
 
@@ -313,7 +313,7 @@ bool Ops::book_put(BookEntry e, std::string* error) {
     for (auto& m : e.members) m = book_key(m);
     if (e.source.empty()) e.source = "local";
     for (auto& c : e.world) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-    if (e.world.empty()) e.world = "mars";
+    if (e.world.empty()) return fail("service: give the entry's service (mars or amateur); none is never read as MARS");
     if (e.world != "mars" && e.world != "amateur") return fail("world: mars or amateur");
     if (e.name.empty() || e.name.size() > 64 || !chars_ok(e.name, " -/."))
         return fail("name: use letters, digits, spaces, - / or ., up to 64");
@@ -386,12 +386,12 @@ std::vector<BookEntry> Ops::book_list() {
 }
 
 int Ops::book_import(const std::string& csv, const std::string& source, std::vector<std::string>* dropped,
-                     std::vector<std::string>* errors) {
+                     std::vector<std::string>* errors, const std::string& service) {
     std::istringstream in(csv);
     std::vector<std::string> head, row;
     if (!csv_row(in, &head)) return 0;
     std::map<std::string, int> col;
-    static const std::set<std::string> kKnown = {"name", "kind", "call", "ri", "ale", "members", "note", "world"};
+    static const std::set<std::string> kKnown = {"name", "kind", "call", "ri", "ale", "members", "note", "world", "service"};
     for (size_t i = 0; i < head.size(); ++i) {
         std::string h = book_key(head[i]);
         for (auto& c : h) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
@@ -423,6 +423,8 @@ int Ops::book_import(const std::string& csv, const std::string& source, std::vec
         e.members = split(get("members"), ";|");
         e.note = get("note");
         e.world = get("world");
+        if (e.world.empty()) e.world = get("service");
+        if (e.world.empty()) e.world = service;
         e.source = source.empty() ? "import" : source;
         std::string err;
         if (book_put(e, &err))

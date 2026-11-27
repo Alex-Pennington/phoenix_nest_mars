@@ -12,6 +12,7 @@
 #include "../src/keys.h"
 #include "../src/loopback_modem.h"
 #include "check.h"
+#include "services_fixture.h"
 
 #include <sqlite3.h>
 
@@ -130,9 +131,12 @@ int main() {
     auto mb = std::make_unique<LoopbackModem>(0);
     auto mc = std::make_unique<LoopbackModem>(0);
     LoopbackModem::share({ma.get(), mb.get(), mc.get()});
-    Core a(CoreConfig{"AAM497", (dir / "a.db").string(), 3, 1, true}, std::move(ma));
-    Core b(CoreConfig{"AAR9AA", (dir / "b.db").string(), 3, 1, true}, std::move(mb));
-    Core c(CoreConfig{"AAR7ZZ", (dir / "c.db").string(), 3, 1, true}, std::move(mc));
+    Core a(on_mars_link(CoreConfig{"AAM497", (dir / "a.db").string(), 3, 1, true}), std::move(ma));
+    a.set_services(test_services());
+    Core b(on_mars_link(CoreConfig{"AAR9AA", (dir / "b.db").string(), 3, 1, true}), std::move(mb));
+    b.set_services(test_services());
+    Core c(on_mars_link(CoreConfig{"AAR7ZZ", (dir / "c.db").string(), 3, 1, true}), std::move(mc));
+    c.set_services(test_services());
     std::string e;
     const int64_t t0 = static_cast<int64_t>(std::time(nullptr));
     keys::Tape tape;
@@ -147,11 +151,11 @@ int main() {
     CHECK(c.set_link_format("AAM497", "plain", &e));
 
     // ---- traffic in: three plain from C (one for another station), one PNA1 from B, one garbled ----
-    CHECK(!c.submit("AAM497", 'P', traffic("AAM497", "AAR7ZZ", 21, "MSGID/SITREP/AAR7ZZ/21//\r\nALL QUIET"), &e).empty());
-    CHECK(!c.submit("AAM497", 'R', traffic("AAM497", "AAR7ZZ", 22, "LINE ONE\r\nLINE TWO\r\nLINE THREE"), &e).empty());
-    CHECK(!c.submit("AAM497", 'R', traffic("UHWTST", "AAR7ZZ", 23, "FOR THE WEST"), &e).empty());
-    CHECK(!c.submit("AAM497", 'R', "VZCZC\r\nRR AAM497 DE AAR7ZZ #0024 3291200\r\nUNCLAS\r\nNO BT HERE\r\nNNNN\r\n", &e).empty());
-    CHECK(!b.submit("AAM497", 'R', traffic("AAM497", "AAR9AA", 31, "FROM BRAVO"), &e).empty());
+    CHECK(!c.submit("AAM497", 'P', traffic("AAM497", "AAR7ZZ", 21, "MSGID/SITREP/AAR7ZZ/21//\r\nALL QUIET"), &e, SendOpts::in("mars")).empty());
+    CHECK(!c.submit("AAM497", 'R', traffic("AAM497", "AAR7ZZ", 22, "LINE ONE\r\nLINE TWO\r\nLINE THREE"), &e, SendOpts::in("mars")).empty());
+    CHECK(!c.submit("AAM497", 'R', traffic("UHWTST", "AAR7ZZ", 23, "FOR THE WEST"), &e, SendOpts::in("mars")).empty());
+    CHECK(!c.submit("AAM497", 'R', "VZCZC\r\nRR AAM497 DE AAR7ZZ #0024 3291200\r\nUNCLAS\r\nNO BT HERE\r\nNNNN\r\n", &e, SendOpts::in("mars")).empty());
+    CHECK(!b.submit("AAM497", 'R', traffic("AAM497", "AAR9AA", 31, "FROM BRAVO"), &e, SendOpts::in("mars")).empty());
     auto in_count = [&] {
         int n = 0;
         for (auto& m : a.list(100)) n += m.direction == "in";
@@ -235,13 +239,13 @@ int main() {
     CHECK(!ok(call(a, {{"cmd", "mark_all"}, {"list", "everything"}})));
 
     // ---- qsl ----
-    JsonValue q = call(a, {{"cmd", "qsl"}, {"id", s21}});
+    JsonValue q = call(a, {{"cmd", "qsl"}, {"service", "mars"}, {"id", s21}});
     CHECK(ok(q) && !flag(q, "sent"));
     g = call(a, {{"cmd", "get"}, {"id", s21}});
     CHECK(str(at(g, "inbox", 0), "state") == "QSL");
     CHECK(len(at(g, "inbox", 0), "qsl") == 1);
     // A receipt only on send=Y, and only for plain traffic (PNA1 was acked on the air).
-    JsonValue q2 = call(a, {{"cmd", "qsl"}, {"id", s21}, {"send", "Y"}});
+    JsonValue q2 = call(a, {{"cmd", "qsl"}, {"service", "mars"}, {"id", s21}, {"send", "Y"}});
     CHECK(ok(q2) && flag(q2, "sent") && !str(q2, "out_id").empty());
     CHECK(wait_for([&] {
         for (auto& m : c.list(100))
@@ -249,7 +253,7 @@ int main() {
                 return true;
         return false;
     }));
-    JsonValue q3 = call(a, {{"cmd", "qsl"}, {"id", s31}, {"send", "Y"}});
+    JsonValue q3 = call(a, {{"cmd", "qsl"}, {"service", "mars"}, {"id", s31}, {"send", "Y"}});
     CHECK(ok(q3) && !flag(q3, "sent") && !str(q3, "not_sent").empty());
 
     // ---- tag ----
@@ -277,33 +281,33 @@ int main() {
     CHECK(!ok(call(a, {{"cmd", "export"}, {"id", "NOPE-2"}})));
 
     // ---- retransmit: confirm=Y, sends as itself, lines, our key, EMCON ----
-    CHECK(!ok(call(a, {{"cmd", "retransmit"}, {"id", s21}, {"to", "AAR9AA"}})));
-    CHECK(!ok(call(a, {{"cmd", "retransmit"}, {"id", s21}, {"to", "AAR9AA"}, {"de", "AAR1XX"}, {"confirm", "Y"}})));
-    CHECK(!ok(call(a, {{"cmd", "retransmit"}, {"id", s21}, {"confirm", "Y"}})));
-    JsonValue rt = call(a, {{"cmd", "retransmit"}, {"id", s22}, {"to", "AAR9AA"}, {"confirm", "Y"}});
+    CHECK(!ok(call(a, {{"cmd", "retransmit"}, {"service", "mars"}, {"id", s21}, {"to", "AAR9AA"}})));
+    CHECK(!ok(call(a, {{"cmd", "retransmit"}, {"service", "mars"}, {"id", s21}, {"to", "AAR9AA"}, {"de", "AAR1XX"}, {"confirm", "Y"}})));
+    CHECK(!ok(call(a, {{"cmd", "retransmit"}, {"service", "mars"}, {"id", s21}, {"confirm", "Y"}})));
+    JsonValue rt = call(a, {{"cmd", "retransmit"}, {"service", "mars"}, {"id", s22}, {"to", "AAR9AA"}, {"confirm", "Y"}});
     CHECK(ok(rt) && !str(rt, "out_id").empty());
     CHECK(!str(rt, "route").empty());
     {
         auto m = a.get(str(rt, "out_id"));
         CHECK(m && m->body.find("CORRECTED") != std::string::npos);  // the corrected copy goes
     }
-    JsonValue rl = call(a, {{"cmd", "retransmit"}, {"id", s21}, {"to", "AAR9AA"}, {"lines", "1-2"}, {"confirm", "Y"}});
+    JsonValue rl = call(a, {{"cmd", "retransmit"}, {"service", "mars"}, {"id", s21}, {"to", "AAR9AA"}, {"lines", "1-2"}, {"confirm", "Y"}});
     CHECK(ok(rl));
     {
         auto m = a.get(str(rl, "out_id"));
         CHECK(m && m->body.rfind("VZCZC", 0) == 0 && m->body.find("BT") == std::string::npos);
     }
-    CHECK(!ok(call(a, {{"cmd", "retransmit"}, {"id", s21}, {"to", "AAR9AA"}, {"lines", "9-99"}, {"confirm", "Y"}})));
-    JsonValue rk = call(a, {{"cmd", "retransmit"}, {"id", s22}, {"to", "AAR9AA"}, {"key", "PRACTICE NET"}, {"confirm", "Y"}});
+    CHECK(!ok(call(a, {{"cmd", "retransmit"}, {"service", "mars"}, {"id", s21}, {"to", "AAR9AA"}, {"lines", "9-99"}, {"confirm", "Y"}})));
+    JsonValue rk = call(a, {{"cmd", "retransmit"}, {"service", "mars"}, {"id", s22}, {"to", "AAR9AA"}, {"key", "PRACTICE NET"}, {"confirm", "Y"}});
     CHECK(ok(rk) && !str(rk, "key").empty());
     if (!ok(rk)) std::cout << "retransmit with key: " << str(rk, "error") << "\n";
     {
         auto m = a.get(str(rk, "out_id"));
         CHECK(m && codress::is_codress(m->body));
     }
-    CHECK(!ok(call(a, {{"cmd", "retransmit"}, {"id", s21}, {"to", "AAR9AA"}, {"key", "NO SUCH NET"}, {"confirm", "Y"}})));
+    CHECK(!ok(call(a, {{"cmd", "retransmit"}, {"service", "mars"}, {"id", s21}, {"to", "AAR9AA"}, {"key", "NO SUCH NET"}, {"confirm", "Y"}})));
     a.set_emcon(true);
-    JsonValue re = call(a, {{"cmd", "retransmit"}, {"id", s21}, {"to", "AAR9AA"}, {"confirm", "Y"}});
+    JsonValue re = call(a, {{"cmd", "retransmit"}, {"service", "mars"}, {"id", s21}, {"to", "AAR9AA"}, {"confirm", "Y"}});
     CHECK(ok(re) && !str(re, "emcon").empty());
     std::this_thread::sleep_for(std::chrono::milliseconds(400));
     {
@@ -338,7 +342,7 @@ int main() {
     CHECK(len(call(a, {{"cmd", "list"}, {"dir", "in"}, {"include_processed", "Y"}}), "messages") == 5);
 
     // ---- duplicates, log streams, activity counters ----
-    CHECK(!c.submit("AAM497", 'P', traffic("AAM497", "AAR7ZZ", 21, "MSGID/SITREP/AAR7ZZ/21//\r\nALL QUIET"), &e).empty());
+    CHECK(!c.submit("AAM497", 'P', traffic("AAM497", "AAR7ZZ", 21, "MSGID/SITREP/AAR7ZZ/21//\r\nALL QUIET"), &e, SendOpts::in("mars")).empty());
     CHECK(wait_for([&] {
         for (auto& ev : a.events(0, 1000))
             if (ev.text.find("again") != std::string::npos && ev.text.rfind("heard", 0) == 0) return true;
@@ -473,7 +477,7 @@ int main() {
                         "VZCZC\r\nPP AAM497 DE AAR7ZZ #0025 3291300\r\nZNR UUUUU\r\nP 251300Z NOV 26\r\n"
                         "FM MARS STATION AAR7ZZ\r\nTO MARS STATION AAM497\r\nBT\r\nUNCLAS\r\n"
                         "MSGID/GENADMIN/AAR7ZZ/25//\r\nSUBJ/NET SCHEDULE CHANGE//\r\nRMKS/SEE YOU THERE//\r\nBT\r\n#0025\r\nNNNN\r\n",
-                        &e)
+                        &e, SendOpts::in("mars"))
                     .empty());
         std::string s25;
         CHECK(wait_for([&] {

@@ -25,6 +25,7 @@
 #include "../src/station.h"
 #include "../src/training.h"
 #include "check.h"
+#include "services_fixture.h"
 
 #include <atomic>
 #include <set>
@@ -147,7 +148,9 @@ static void guide(const fs::path& dir) {
     auto far = std::make_unique<LoopbackModem>(0);
     LoopbackModem::connect(*radio, *far);
     CoreConfig cfg{got, base + ".db", 3, 1, true};
+    cfg.rx_service = "mars";  // a channel-less test link: MARS traffic
     Core core(cfg, std::move(radio));
+    core.set_services(test_services());
     auto kr = std::make_shared<keys::Keyring>(base + ".keys");
     std::string err;
     kr->load(&err);
@@ -243,7 +246,7 @@ static void guide(const fs::path& dir) {
     // The walkthrough ticks off what the station holds.
     r = call(core, {{"cmd", "guide_start"}});
     CHECK(ok(r) && yes(*step(r, "SETUP"), "done") && !yes(*step(r, "FIRST"), "done") && str(r, "next") == "CARD");
-    CHECK(ok(call(core, {{"cmd", "send"}, {"to", "STA-H"}, {"body", "FIRST MESSAGE"}})));
+    CHECK(ok(call(core, {{"cmd", "send"}, {"service", "mars"}, {"to", "STA-H"}, {"body", "FIRST MESSAGE"}})));
     r = call(core, {{"cmd", "guide_start"}});
     CHECK(yes(*step(r, "FIRST"), "done") && num(r, "done") >= 2);
     core.stop();
@@ -261,7 +264,9 @@ static void training(const fs::path& dir) {
     LoopbackModem* far_radio = far.get();
     far_radio->start({[&](const std::string& b) { heard += b.size(); }, nullptr, nullptr, nullptr});
     CoreConfig cfg{"STA-T", base + ".db", 3, 1, true};
+    cfg.rx_service = "mars";  // a channel-less test link: MARS traffic
     Core core(cfg, std::move(radio));
+    core.set_services(test_services());
     auto kr = std::make_shared<keys::Keyring>(base + ".keys");
     std::string err;
     kr->load(&err);
@@ -322,7 +327,7 @@ static void training(const fs::path& dir) {
     CHECK(read_secret);
 
     // The member answers the practice net control: it goes, and is acknowledged.
-    r = call(core, {{"cmd", "compose_send"},
+    r = call(core, {{"cmd", "compose_send"}, {"service", "mars"},
                     {"template", "FREE_FORM"},
                     {"procedure", "ACP127_PLAINDRESS"},
                     {"prec", "R"},

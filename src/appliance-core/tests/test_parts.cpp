@@ -27,6 +27,7 @@
 #include "../src/parts.h"
 #include "../src/station.h"
 #include "check.h"
+#include "services_fixture.h"
 
 #include <algorithm>
 #include <cctype>
@@ -148,7 +149,7 @@ static std::vector<std::string> choice_values(const JsonValue& form, const std::
 
 // The member's form calls, as gale-term sends them.
 static JsonValue form(Core& c, const std::string& id, std::vector<std::pair<std::string, std::string>> values) {
-    std::string line = "{\"cmd\":\"form_submit\",\"form\":\"" + id + "\"";
+    std::string line = "{\"cmd\":\"form_submit\",\"service\":\"mars\",\"form\":\"" + id + "\"";
     for (auto& [k, v] : values) line += ",\"" + k + "\":\"" + esc(v) + "\"";
     line += "}";
     if (std::getenv("FORMS_DEBUG")) std::cerr << "FORM " << id << "\n";
@@ -194,9 +195,11 @@ static Box out_of_can(const fs::path& dir, const std::string& typed, std::unique
     CHECK(first_start::saved_call(dir.string(), saved) && saved == got);
     std::string base = (dir / got).string();
     CoreConfig cfg{got, base + ".db", 3, 1, true};
+    cfg.rx_service = "mars";  // a channel-less test link: MARS traffic
     cfg.parts_hold_s = hold_s;
     cfg.parts_resend_per_hour = cap;
     b.core = std::make_unique<Core>(cfg, std::move(modem));
+    b.core->set_services(test_services());
     b.keys = std::make_shared<keys::Keyring>(base + ".keys");
     b.keys->set_clock([] { return g_now; });
     std::string err;
@@ -385,7 +388,7 @@ static void drill(const fs::path& dir) {
     CHECK(!B.keys->for_sending().empty());
 
     // A request can't send parts to a station they never went to.
-    r = call(*A.core, {{"cmd", "parts_resend"}, {"to", "STA-Q"}, {"tag", str(set, "tag")}, {"parts", "2"}});
+    r = call(*A.core, {{"cmd", "parts_resend"}, {"service", "mars"}, {"to", "STA-Q"}, {"tag", str(set, "tag")}, {"parts", "2"}});
     CHECK(!ok(r));
     // And a short tape still goes whole, as one message, for older boxes.
     r = form(*A.core, "NET_TAPE", {{"net", "short net"}, {"members", "STA-B"}, {"days", "3"}});
@@ -404,7 +407,7 @@ static void drill(const fs::path& dir) {
     for (int i = 1; i <= 260; ++i) {
         char call_[16];
         std::snprintf(call_, sizeof call_, "STA-%03d", i);
-        r = call(*A.core, {{"cmd", "book_put"}, {"name", call_}, {"call", call_}, {"note", "practice member, made up"}});
+        r = call(*A.core, {{"cmd", "book_put"}, {"world", "mars"}, {"name", call_}, {"call", call_}, {"note", "practice member, made up"}});
         CHECK(ok(r));
     }
     radio_a->hold(true);
@@ -470,7 +473,7 @@ static void drill(const fs::path& dir) {
     // A fresh sending of every part opens it.
     std::string all;
     for (int n = 1; n <= cof; ++n) all += (all.empty() ? "" : " ") + std::to_string(n);
-    r = call(*C.core, {{"cmd", "parts_resend"}, {"to", "STA-D"}, {"tag", dtag}, {"parts", all}});
+    r = call(*C.core, {{"cmd", "parts_resend"}, {"service", "mars"}, {"to", "STA-D"}, {"tag", dtag}, {"parts", all}});
     CHECK(ok(r) && static_cast<int>(arr(r, "resent").size()) == cof);
     CHECK(wait_for([&] { return str(waiting(*D.core, "Y"), "state") == "complete"; }));
     r = call(*D.core, {{"cmd", "key_open"}, {"id", did}});
@@ -574,10 +577,10 @@ static void rally(const fs::path& dir) {
     for (int i = 1; i <= 260; ++i) {
         char n[24];
         std::snprintf(n, sizeof n, "PRACTICE-%03d", i);
-        CHECK(ok(call(*A.core, {{"cmd", "book_put"}, {"name", n}, {"call", n}, {"note", "made up for the drill"}})));
+        CHECK(ok(call(*A.core, {{"cmd", "book_put"}, {"world", "mars"}, {"name", n}, {"call", n}, {"note", "made up for the drill"}})));
     }
     CHECK(ok(form(*A.core, "BUNDLE_MAKE", {{"out", (stick / "region.pnb").string()}})));
-    r = call(*A.core, {{"cmd", "bundle_send"}, {"to", everyone}, {"file", (stick / "region.pnb").string()}});
+    r = call(*A.core, {{"cmd", "bundle_send"}, {"service", "mars"}, {"to", everyone}, {"file", (stick / "region.pnb").string()}});
     CHECK(ok(r) && arr(r, "sent").size() == static_cast<size_t>(kMembers));
     std::cerr << "  rally: shared bundle of 260 entries, " << num(r, "parts") / kMembers << " parts each\n";
     // Part 2 lost for STA-06 to STA-17, part 3 for STA-13 to STA-20.
@@ -677,7 +680,7 @@ static void rally(const fs::path& dir) {
     for (int round = 1; round <= 2; ++round) {
         ask(X, A, "tape");
         radio_a->hold(true);
-        r = call(*A.core, {{"cmd", "parts_queue_send"}});
+        r = call(*A.core, {{"cmd", "parts_queue_send"}, {"service", "mars"}});
         CHECK(ok(r) && num(r, "sends") == 1);
         CHECK(A.core->cancel(str(arr(r, "sent")[0], "id"), &err));  // lost on the air again
         radio_a->hold(false);
@@ -685,7 +688,7 @@ static void rally(const fs::path& dir) {
     ask(X, A, "tape");
     r = call(*A.core, {{"cmd", "parts_queue"}});
     CHECK(num(r, "sends") == 0 && arr(r, "flagged").size() == 1 && str(arr(r, "flagged")[0], "station") == "STA-21");
-    CHECK(!ok(call(*A.core, {{"cmd", "parts_queue_send"}})));  // nothing to send
+    CHECK(!ok(call(*A.core, {{"cmd", "parts_queue_send"}, {"service", "mars"}})));  // nothing to send
     // RESENDS: the flagged ask is a row of its own. A fourth ask is dropped.
     {
         std::string flagged_rq = str(arr(r, "flagged")[0], "request");
@@ -703,7 +706,7 @@ static void rally(const fs::path& dir) {
         r = call(*A.core, {{"cmd", "parts_queue_drop"}, {"request", again}});
         CHECK(ok(r) && num(r, "dropped") == 1 && str(r, "station") == "STA-21");
         CHECK(!ok(call(*A.core, {{"cmd", "parts_queue_drop"}, {"request", again}})));  // nothing left
-        CHECK(!ok(call(*A.core, {{"cmd", "parts_queue_send"}, {"request", again}})));
+        CHECK(!ok(call(*A.core, {{"cmd", "parts_queue_send"}, {"service", "mars"}, {"request", again}})));
         r = call(*A.core, {{"cmd", "parts_queue"}});
         CHECK(arr(r, "flagged").size() == 1);
         bool dropped = false;
@@ -812,11 +815,11 @@ static void pacing(const fs::path& dir) {
     CHECK(num(r, "sends") == 1 && num(r, "room") == 0);
     CHECK(str(arr(r, "rows")[0], "state") == "HELD-CAP");
     // Sending the row now obeys the cap: nothing goes.
-    r = call(*C.core, {{"cmd", "parts_queue_send"}, {"request", rq}});
+    r = call(*C.core, {{"cmd", "parts_queue_send"}, {"service", "mars"}, {"request", rq}});
     CHECK(ok(r) && num(r, "sends") == 0 && num(r, "left_for_cap") == 1 && str(r, "request") == rq);
     CHECK(ok(call(*C.core, {{"cmd", "emcon"}, {"on", "Y"}})));
     CHECK(str(arr(call(*C.core, {{"cmd", "parts_queue"}}), "rows")[0], "state") == "HELD-EMCON");
-    CHECK(!ok(call(*C.core, {{"cmd", "parts_queue_send"}, {"request", rq}})));
+    CHECK(!ok(call(*C.core, {{"cmd", "parts_queue_send"}, {"service", "mars"}, {"request", rq}})));
     CHECK(ok(call(*C.core, {{"cmd", "emcon"}, {"on", "N"}})));
     // Status shows the cap spent, and when the rolling hour opens room again.
     {
@@ -843,7 +846,7 @@ static void pacing(const fs::path& dir) {
     std::snprintf(hhmm, sizeof hhmm, "%02d%02d", tm.tm_hour, tm.tm_min);
     CHECK(ok(form(*C.core, "SCHEDULE", {{"name", "evening net"}, {"days", "DAILY"}, {"time", hhmm}})));
     // The row, sent for the net slot (RESENDS s, then N).
-    r = call(*C.core, {{"cmd", "parts_queue_send"}, {"request", rq}, {"when", "NET"}, {"net", "EVENING NET"}});
+    r = call(*C.core, {{"cmd", "parts_queue_send"}, {"service", "mars"}, {"request", rq}, {"when", "NET"}, {"net", "EVENING NET"}});
     CHECK(ok(r) && yes(r, "held") && num(r, "sends") == 1);
     std::string held_id = str(arr(r, "sent")[0], "id");
     CHECK(str(arr(call(*C.core, {{"cmd", "parts_queue"}}), "rows")[0], "state") == "HELD-NET");

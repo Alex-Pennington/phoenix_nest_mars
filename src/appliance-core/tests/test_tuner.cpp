@@ -19,6 +19,7 @@
 #include "../src/ops.h"
 #include "../src/tuner.h"
 #include "check.h"
+#include "services_fixture.h"
 
 #include <algorithm>
 #include <atomic>
@@ -177,6 +178,7 @@ static Channel chan(const std::string& name, int64_t hz, int rx, int tx) {
     c.name = name;
     c.hz = hz;
     c.mode = "USB";
+    c.world = "mars";
     c.ant_rx = rx;
     c.ant_tx = tx;
     return c;
@@ -245,8 +247,9 @@ static void channel_form(const fs::path& dir) {
               contains(f->help, "Blank keeps the port the channel has (1 for a new one)"));
     }
 
-    auto core = std::make_unique<Core>(CoreConfig{"STA-A", (dir / "STA-A.db").string(), 3, 1, true},
+    auto core = std::make_unique<Core>(on_mars_link(CoreConfig{"STA-A", (dir / "STA-A.db").string(), 3, 1, true}),
                                        std::make_unique<LoopbackModem>(0));
+    core->set_services(test_services());
     auto ops = std::make_shared<Ops>("STA-A", (dir / "STA-A.db").string());
     core->set_ops(ops);
 
@@ -261,7 +264,7 @@ static void channel_form(const fs::path& dir) {
     r = api(*core, R"({"cmd":"form_submit","form":"CHANNEL","name":"P1","frequency":"5000"})");
     CHECK(okv(r));
     CHECK(ops->channels().get("P1") && ops->channels().get("P1")->ant_rx == 1 && ops->channels().get("P1")->ant_tx == 2);
-    r = api(*core, R"({"cmd":"form_submit","form":"CHANNEL","name":"P5","frequency":"7000"})");
+    r = api(*core, R"({"cmd":"form_submit","form":"CHANNEL","name":"P5","frequency":"7000","world":"MARS"})");
     CHECK(okv(r));
     CHECK(ops->channels().get("P5") && ops->channels().get("P5")->ant_rx == 1 && ops->channels().get("P5")->ant_tx == 1);
     // RX on 1, TX on 1, then TX on 2.
@@ -597,8 +600,9 @@ static void socket_framing(const fs::path& dir) {
 // ---------------------------------------------------------------- status and the guide page
 
 static void status_and_guide(const fs::path& dir) {
-    auto core = std::make_unique<Core>(CoreConfig{"STA-B", (dir / "STA-B.db").string(), 3, 1, true},
+    auto core = std::make_unique<Core>(on_mars_link(CoreConfig{"STA-B", (dir / "STA-B.db").string(), 3, 1, true}),
                                        std::make_unique<LoopbackModem>(0));
+    core->set_services(test_services());
     core->set_ops(std::make_shared<Ops>("STA-B", (dir / "STA-B.db").string()));
 
     // No tuner set up: status carries no tuner section.

@@ -15,6 +15,7 @@
 #include "../src/received.h"
 #include "../src/station.h"
 #include "check.h"
+#include "services_fixture.h"
 
 #include <chrono>
 #include <cstdlib>
@@ -305,7 +306,8 @@ static Box make_box(const fs::path& dir, const std::string& call, std::unique_pt
     Box b;
     fs::create_directories(dir);
     std::string base = (dir / call).string();
-    b.core = std::make_unique<Core>(CoreConfig{call, base + ".db", 3, 1, true}, std::move(modem));
+    b.core = std::make_unique<Core>(on_mars_link(CoreConfig{call, base + ".db", 3, 1, true}), std::move(modem));
+    b.core->set_services(test_services());
     b.keys = std::make_shared<keys::Keyring>(base + ".keys");
     std::string err;
     b.keys->load(&err);
@@ -343,7 +345,7 @@ static void net(const fs::path& dir) {
     // B's card to the keymaster, read back by voice; then the tape and handout.
     CHECK(ok(call(*A.core, {{"cmd", "card_import"}, {"text", str(call(*B.core, {{"cmd", "station_card"}}), "card")}})));
     CHECK(ok(call(*A.core, {{"cmd", "card_check"}, {"station", "STA-B"}, {"fingerprint", B.fp}})));
-    r = call(*A.core, {{"cmd", "net_tape"}, {"net", "Toy Net"}, {"days", "7"}, {"members", "STA-B"}, {"handouts", "Y"}});
+    r = call(*A.core, {{"cmd", "net_tape"}, {"service", "mars"}, {"net", "Toy Net"}, {"days", "7"}, {"members", "STA-B"}, {"handouts", "Y"}});
     CHECK(ok(r) && r.get("handouts") && r.get("handouts")->arr.size() == 1);
     std::string hand = r.get("handouts") ? str(r.get("handouts")->arr[0], "text") : "";
     CHECK(hand.find("\nCIPHER TOY-TEXT ") != std::string::npos);
@@ -401,7 +403,7 @@ static void net(const fs::path& dir) {
 
     // Codress on the toy cipher, over the air.
     std::string today = B.keys->for_sending().at(0).indicator;
-    r = call(*A.core, {{"cmd", "compose_send"},
+    r = call(*A.core, {{"cmd", "compose_send"}, {"service", "mars"},
                        {"template", "FREE_FORM"},
                        {"procedure", "ACP127_CODRESS"},
                        {"key", today},

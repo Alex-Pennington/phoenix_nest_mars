@@ -166,12 +166,12 @@ static bool check(Channel& c, std::string* error) {
 }
 
 // An antenna port not given (0) keeps what the plan held, or 1.
-// So are a world not given ("": what the plan held, or mars) and a label
+// So are a world not given ("": what the plan held; a new channel must name one) and a label
 // not given.
 static void keep_antennas(Channel& c, const Channel* old) {
     if (c.ant_rx == 0) c.ant_rx = old ? old->ant_rx : 1;
     if (c.ant_tx == 0) c.ant_tx = old ? old->ant_tx : 1;
-    if (c.world.empty()) c.world = old ? old->world : "mars";
+    if (c.world.empty() && old) c.world = old->world;  // a new channel names its own: no default
     if (!c.label_given) c.label = old ? old->label : "";
     c.label_given = false;
 }
@@ -182,6 +182,10 @@ bool ChannelPlan::put(const Channel& in, std::string* error) {
     std::lock_guard<std::mutex> g(mu_);
     auto it = std::find_if(ch_.begin(), ch_.end(), [&](const Channel& x) { return x.name == c.name; });
     keep_antennas(c, it != ch_.end() ? &*it : nullptr);
+    if (c.world.empty()) {
+        if (error) *error = "channel " + c.name + ": give its service (mars or amateur); none is never read as MARS";
+        return false;
+    }
     if (it != ch_.end()) *it = c;
     else ch_.push_back(c);
     return save_locked(error);
@@ -197,6 +201,10 @@ bool ChannelPlan::put_all(const std::vector<Channel>& cs, std::vector<std::strin
         }
         auto it = std::find_if(ch_.begin(), ch_.end(), [&](const Channel& x) { return x.name == c.name; });
         keep_antennas(c, it != ch_.end() ? &*it : nullptr);
+        if (c.world.empty()) {
+            if (errors) errors->push_back("channel " + c.name + ": give its service (mars or amateur)");
+            continue;
+        }
         if (it != ch_.end()) *it = c;
         else ch_.push_back(c);
     }
@@ -248,6 +256,17 @@ std::string ChannelPlan::display_name_for(int64_t hz) {
         if (amateur.empty()) amateur = c.label.empty() ? c.name : c.label;
     }
     return amateur;
+}
+
+std::string ChannelPlan::service_for(int64_t hz) {
+    std::lock_guard<std::mutex> g(mu_);
+    std::string svc;
+    for (auto& c : ch_) {
+        if (std::llabs(c.hz - hz) > 50) continue;
+        if (!svc.empty() && svc != c.world) return "";
+        svc = c.world;
+    }
+    return svc;
 }
 
 size_t ChannelPlan::size() {

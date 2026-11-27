@@ -38,6 +38,7 @@
 //                                 a roster, address book, frequency card or net schedule (.xlsx or text)
 //   appliance-cli [--port 4100] channels         the channel plan, by designator (never frequencies)
 //   appliance-cli [--port 4100] channels add NAME FREQ [--mode USB] [--use "PRIMARY"] [--unit khz|mhz|hz]
+//                 [--service S]   (a new channel names its service: none is never read as MARS)
 //   appliance-cli [--port 4100] form [list] | form show ID | form fill ID KEY=VALUE ... | form check ID ...
 //   appliance-cli [--port 4100] form template ID | form edit ID FILE | form reset ID
 //                                 enter one channel by hand (FREQ in kHz unless --unit says)
@@ -98,7 +99,7 @@ int main(int argc, char** argv) {
                      "                    | bundle send CALL[,CALL...] [FILE] | bundle load FILE|ID [--yes]\n"
                      "                    | cipher | cipher install FOLDER | cipher remove\n"
                      "                    | import FILE [--kind roster|book|freq|schedule] | channels\n"
-                     "                    | channels add NAME FREQ [--mode M] [--use TEXT] [--unit khz|mhz|hz]\n"
+                     "                    | channels add NAME FREQ [--mode M] [--use TEXT] [--unit khz|mhz|hz] [--service S]\n"
                      "                    | form [list] | form show ID | form fill ID KEY=VALUE ... | form check ID ...\n"
                      "                    | form template ID | form edit ID FILE | form reset ID\n"
                      "                    | channels remove NAME | setup [CALL]\n";
@@ -348,11 +349,12 @@ int main(int argc, char** argv) {
                 if (a == "--mode") w.field("mode", std::string(argv[i + 1]));
                 else if (a == "--use") w.field("use", std::string(argv[i + 1]));
                 else if (a == "--unit") w.field("unit", std::string(argv[i + 1]));
+                else if (a == "--service") w.field("service", std::string(argv[i + 1]));
             }
         } else if (sub == "remove" && i < argc) {
             w.begin_object().field("cmd", "channel_remove").field("name", std::string(argv[i]));
         } else {
-            std::cerr << "channels | channels add NAME FREQ [--mode M] [--use TEXT] [--unit khz|mhz|hz]"
+            std::cerr << "channels | channels add NAME FREQ [--mode M] [--use TEXT] [--unit khz|mhz|hz] [--service S]"
                          " | channels remove NAME\n";
             return 2;
         }

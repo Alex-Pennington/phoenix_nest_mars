@@ -11,6 +11,7 @@
 #include "../src/frame.h"
 #include "../src/json.h"
 #include "check.h"
+#include "services_fixture.h"
 
 #include <chrono>
 #include <filesystem>
@@ -174,11 +175,13 @@ static std::unique_ptr<Core> make_core(const fs::path& dir, const std::string& c
     auto m = std::make_unique<ScriptModem>();
     modem = m.get();
     CoreConfig cfg{call, (dir / (call + ".db")).string(), 3, 1, true};
+    cfg.rx_service = "mars";  // a channel-less test link: MARS traffic
     cfg.ack_timeout_s = 1;
     cfg.ack_retries = 1;
     cfg.loose_quiet_s = 1;
     if (tune) tune(cfg);
     auto c = std::make_unique<Core>(cfg, std::move(m));
+    c->set_services(test_services());
     c->start();
     return c;
 }
@@ -187,7 +190,7 @@ static std::unique_ptr<Core> make_core(const fs::path& dir, const std::string& c
 static void no_ack(const fs::path& dir) {
     ScriptModem* m = nullptr;
     auto c = make_core(dir, "NCS-A", m);
-    std::string err, id = c->submit("STA-B", 'P', "TEST ONE", &err);
+    std::string err, id = c->submit("STA-B", 'P', "TEST ONE", &err, SendOpts::in("mars"));
     CHECK(wait_for([&] { return m->count() == 1; }));
     m->finish();
     CHECK(state_of(*c, id) == "sent" && c->get(id)->sends == 1);
@@ -212,7 +215,7 @@ static void no_ack(const fs::path& dir) {
     std::this_thread::sleep_for(std::chrono::milliseconds(1500));
     CHECK(m->count() == 4);
     // An ack while it is queued for another try stops the try.
-    std::string id2 = c->submit("STA-B", 'R', "TEST TWO", &err);
+    std::string id2 = c->submit("STA-B", 'R', "TEST TWO", &err, SendOpts::in("mars"));
     CHECK(wait_for([&] { return m->count() == 5; }));
     m->finish();
     CHECK(wait_for([&] { return m->count() == 6; }, 4000));
@@ -231,7 +234,7 @@ static void operator_hand(const fs::path& dir) {
     std::string err;
     CHECK(ok(api(*c, R"({"cmd":"emcon","on":"Y"})")));
     CHECK(c->emcon() && c->status().emcon);
-    std::string id = c->submit("STA-B", 'Z', "FLASH TEST", &err);
+    std::string id = c->submit("STA-B", 'Z', "FLASH TEST", &err, SendOpts::in("mars"));
     // A station heard while in EMCON is not acked on the air either.
     m->rx(encode(msg_frame("STA-B-9", "STA-B", "NCS-A", "CHECK")));
     std::this_thread::sleep_for(std::chrono::milliseconds(400));
@@ -280,18 +283,18 @@ static void tx_gap(const fs::path& dir) {
     });
     std::string err;
     std::this_thread::sleep_for(std::chrono::milliseconds(200));
-    c->submit("STA-B", 'R', "ONE", &err);
+    c->submit("STA-B", 'R', "ONE", &err, SendOpts::in("mars"));
     CHECK(wait_for([&] { return m->count() == 1; }));
     m->finish();
     auto done = std::chrono::steady_clock::now();
-    c->submit("STA-B", 'R', "TWO", &err);
+    c->submit("STA-B", 'R', "TWO", &err, SendOpts::in("mars"));
     CHECK(wait_for([&] { return m->count() == 2; }, 5000));
     CHECK(std::chrono::steady_clock::now() - done >= std::chrono::milliseconds(1900));
     m->finish();
     // A byte heard restarts the gap.
     m->rx("noise");
     auto heard = std::chrono::steady_clock::now();
-    c->submit("STA-B", 'R', "THREE", &err);
+    c->submit("STA-B", 'R', "THREE", &err, SendOpts::in("mars"));
     CHECK(wait_for([&] { return m->count() == 3; }, 5000));
     CHECK(std::chrono::steady_clock::now() - heard >= std::chrono::milliseconds(1900));
     m->finish();
@@ -333,7 +336,7 @@ static void cp_station(const fs::path& dir) {
 
     // Formal traffic goes as its text alone, with no ack expected.
     std::string text = "VZCZC\r\nRR STA-C DE NCS-A #0001 3280155\r\nBT\r\nUNCLAS\r\nTEST\r\nBT\r\nNNNN\r\n";
-    std::string err, id = c->submit("STA-C", 'R', text, &err);
+    std::string err, id = c->submit("STA-C", 'R', text, &err, SendOpts::in("mars"));
     CHECK(wait_for([&] { return m->count() == 1; }));
     CHECK(m->last() == text);
     m->finish();
@@ -342,7 +345,7 @@ static void cp_station(const fs::path& dir) {
     CHECK(state_of(*c, id) == "sent" && m->count() == 1);
 
     // Chat goes in CP's form, and CP's ack|ID answers it.
-    r = api(*c, R"({"cmd":"send_chat","call":"STA-C","station":"NCS-A","text":"QSL TEST","to_station":"STA-C"})");
+    r = api(*c, R"({"cmd":"send_chat","service":"mars","call":"STA-C","station":"NCS-A","text":"QSL TEST","to_station":"STA-C"})");
     CHECK(ok(r) && str(r, "message").compare(0, 10, "chat|NCS-A") == 0);
     std::string chat_id = str(r, "id"), body = str(r, "message");
     std::string cp_id = body.substr(5, body.find('|', 5) - 5);
@@ -386,7 +389,7 @@ static void cp_station(const fs::path& dir) {
     CHECK(m->last() == "nack|STA-C24020400001\r\n");
     m->finish();
     // CP's nack for our chat sends it again.
-    r = api(*c, R"({"cmd":"send_chat","call":"STA-C","station":"NCS-A","text":"AGAIN","to_station":"STA-C"})");
+    r = api(*c, R"({"cmd":"send_chat","service":"mars","call":"STA-C","station":"NCS-A","text":"AGAIN","to_station":"STA-C"})");
     std::string id3 = str(r, "id"), body3 = str(r, "message");
     CHECK(wait_for([&] { return m->count() == 6; }));
     m->finish();

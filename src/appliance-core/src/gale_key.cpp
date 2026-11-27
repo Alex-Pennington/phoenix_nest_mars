@@ -85,7 +85,7 @@ GaleKeySocket::GaleKeySocket(std::string path, int timeout_ms) : path_(std::move
 
 GaleKeyReply GaleKeySocket::call(const std::string& request) {
     sockaddr_un addr{};
-    if (path_.empty() || path_.size() >= sizeof(addr.sun_path)) return not_reached("no usable gale-key socket path");
+    if (path_.empty() || path_.size() >= sizeof(addr.sun_path)) return not_reached("no usable controller socket path");
     int fd = ::socket(AF_UNIX, SOCK_STREAM, 0);
     if (fd < 0) return not_reached(std::string("socket: ") + std::strerror(errno));
     timeval tv{timeout_ms_ / 1000, (timeout_ms_ % 1000) * 1000};
@@ -95,16 +95,16 @@ GaleKeyReply GaleKeySocket::call(const std::string& request) {
     std::memcpy(addr.sun_path, path_.c_str(), path_.size());
     if (::connect(fd, reinterpret_cast<sockaddr*>(&addr), sizeof addr) != 0) {
         std::string why = errno == ENOENT || errno == ECONNREFUSED
-                              ? "gale-key isn't running (nothing answers on " + path_ + ")"
-                              : "gale-key's socket: " + std::string(std::strerror(errno));
+                              ? "the station controller isn't running (nothing answers on " + path_ + ")"
+                              : "the controller's socket: " + std::string(std::strerror(errno));
         ::close(fd);
         return not_reached(why);
     }
     const std::string line = request + "\n";
-    // gale-key acts only on a whole line: a request cut short is never acted on.
+    // The controller acts only on a whole line: a request cut short is never acted on.
     if (::send(fd, line.data(), line.size(), MSG_NOSIGNAL) != static_cast<ssize_t>(line.size())) {
         ::close(fd);
-        return not_reached("the request didn't reach gale-key");
+        return not_reached("the request didn't reach the controller");
     }
     GaleKeyReply r;
     r.reached = true;
@@ -118,19 +118,23 @@ GaleKeyReply GaleKeySocket::call(const std::string& request) {
     ::close(fd);
     size_t nl = buf.find('\n');
     if (nl == std::string::npos) {
-        r.reason = "gale-key didn't answer within " + std::to_string(timeout_ms_) + " ms (busy keying, or stuck)";
+        r.reason = "the controller didn't answer within " + std::to_string(timeout_ms_) + " ms (it answers when it accepts a send: stuck?)";
         return r;
     }
     std::string reply = buf.substr(0, nl);
     if (!reply.empty() && reply.back() == '\r') reply.pop_back();
     if (!parse_json(reply, r.body) || !r.body.is_object()) {
         r.body = JsonValue();
-        r.reason = "gale-key's reply isn't one JSON object";
+        r.reason = "the controller's reply isn't one JSON object";
         return r;
     }
     r.answered = true;
     const JsonValue* ok = r.body.get("ok");
     r.ok = ok && ok->type == JsonValue::Type::Bool && ok->b;
+    const JsonValue* acc = r.body.get("accepted");
+    // An ok reply that leaves "accepted" out is taken as accepted: the
+    // result file decides what became of it.
+    r.accepted = acc ? acc->type == JsonValue::Type::Bool && acc->b : r.ok;
     const JsonValue* ex = r.body.get("exit");
     if (ex && ex->type == JsonValue::Type::Number) r.exit = static_cast<int>(ex->n);
     r.reason = text_of(r.body, "reason");
@@ -247,10 +251,10 @@ void GaleKey::note(const std::string& msg_id, const std::string& text) {
 }
 
 GaleKeyReply GaleKey::ask(const std::string& request) {
-    GaleKeyReply r = link_ ? link_->call(request) : not_reached("no gale-key socket is set (gale-key-socket)");
+    GaleKeyReply r = link_ ? link_->call(request) : not_reached("no controller socket is set (controller-socket)");
     std::lock_guard<std::mutex> g(mu_);
-    // A key's reply comes when the key ends: a reply later than the timeout
-    // is gale-key busy, not gale-key gone.
+    // The controller answers when it accepts: a reply later than the timeout
+    // is a controller that took the request and is stuck, not one gone.
     last_ = r.answered ? "answering" : r.reached ? "busy" : "not answering";
     last_why_ = r.answered ? std::string() : no_frequency(r.reason);
     return r;
@@ -268,17 +272,25 @@ std::string GaleKey::wav_path(const std::string& burst) const {
     return (ec ? fs::path(outbox_) / burst : p).lexically_normal().string();
 }
 
-std::string GaleKey::air_request(const char* cmd, const KeyItem& it, const std::string& control) const {
-    JsonWriter w;
-    w.begin_object()
-        .field("cmd", cmd)
-        .field("kind", "air")
-        .field("wav", wav_path(it.burst))
-        .field("world", it.world)
+std::string GaleKey::air_request(const char* cmd, const KeyItem& it, const std::string& control,
+                                 const std::string& extra) const {
+    // D.4.2.8.3: the message, carried unopened, and its control information.
+    JsonWriter m;
+    m.begin_object().field("wav", wav_path(it.burst)).end_object();
+    JsonWriter c;
+    c.begin_object()
+        .field("to", it.to)
+        .field("service", it.service)
         .field("channel", it.channel)
+        .field("kind", "air")
         .field("control", control)
-        .field("final", false);
-    return w.str();  // still open: the caller adds its last fields and closes it
+        .field("final", false)
+        .end_object();
+    std::string ctl = c.str();
+    if (!extra.empty()) ctl = ctl.substr(0, ctl.size() - 1) + "," + extra + "}";
+    JsonWriter w;
+    w.begin_object().field("cmd", cmd).raw("message", m.str()).raw("control", ctl).end_object();
+    return w.str();
 }
 
 std::string GaleKey::new_id() {
@@ -315,35 +327,40 @@ GaleKey::Prepared GaleKey::prepare(const KeyItem& it) {
         return p;
     }
     const std::string digest = sha256_hex(bytes);
-    std::string req = air_request("prepare", it, "local");
-    req += "}";
-    GaleKeyReply r = ask(req);
+    GaleKeyReply r = ask(air_request("prepare", it, "local", ""));
     if (!r.answered) {
         p.error = "not prepared: " + no_frequency(r.reason);
         return p;
     }
     if (!r.ok) {
-        p.error = "gale-key refused: " + no_frequency(r.reason.empty() ? "no reason given" : r.reason);
+        p.error = "the controller refused: " + no_frequency(r.reason.empty() ? "no reason given" : r.reason);
         return p;
     }
     const std::string token = text_of(r.body, "token");
     if (token.empty()) {
-        p.error = "gale-key answered ok but gave no token: nothing to confirm";
+        p.error = "the controller answered ok but gave no token: nothing to confirm";
         return p;
     }
     const JsonValue* c = member(r.body, "confirm");
     static const JsonValue none;
     const JsonValue& cf = c && c->is_object() ? *c : none;
-    // The core's own channel label and world are what was asked for; gale-key's
-    // summary must agree, or the y would confirm something else.
-    const std::string cw = text_of(cf, "world"), cc = text_of(cf, "channel");
-    if ((!cw.empty() && cw != it.world) || (!cc.empty() && cc != it.channel)) {
-        p.error = "gale-key's summary names another world or channel than the core asked for: not held";
+    // The core's own channel label and service are what was asked for; the
+    // controller's summary must agree, or the y would confirm something else.
+    // `world` is read as `service` for one release.
+    std::string cs = text_of(cf, "service");
+    if (cs.empty()) cs = text_of(cf, "world");
+    const std::string cc = text_of(cf, "channel");
+    if ((!cs.empty() && cs != it.service) || (!cc.empty() && cc != it.channel)) {
+        p.error = "the controller's summary names another service or channel than the core asked for: not held";
         return p;
     }
     // The summary for the kiosk: only fields it shows, only values it knows.
     JsonWriter w;
-    w.begin_object().field("kind", "air").field("world", it.world).field("channel", no_frequency(it.channel));
+    w.begin_object()
+        .field("kind", "air")
+        .field("service", it.service)
+        .field("world", it.service)
+        .field("channel", no_frequency(it.channel));
     const std::string control = text_of(cf, "control");
     w.field("control", one_of(control, {"local", "automatic"}) ? control : std::string("local"));
     if (const JsonValue* id = member(cf, "id"); id && id->type == JsonValue::Type::Bool) w.field("id", id->b);
@@ -377,49 +394,63 @@ GaleKey::Prepared GaleKey::prepare(const KeyItem& it) {
     p.prepare_id = h.id;
     p.expires_s = static_cast<int>(life);
     p.confirm = w.str();
-    note(it.msg_id, "gale-key prepared " + it.burst + " on " + it.channel + " for the operator's y");
+    note(it.msg_id, "the controller prepared " + it.burst + " (" + it.service + ") on " + it.channel +
+                        " for the operator's y");
     return p;
 }
 
-GaleKey::Prepared GaleKey::prepare_standing(const std::string& mode) {
+GaleKey::Prepared GaleKey::prepare_standing(const std::string& mode, const std::string& service) {
     Prepared p;
     if (!core_standing_mode(mode)) {
         p.error = "mode is machine, routing or auto_qsl (the core never asks for amateur_auto)";
         return p;
     }
+    // Automatic modes stay as they are until stage 5 (greybeard-ale #18): MARS
+    // only, by name, until the table's automatic_modes decides them.
+    if (service != "mars") {
+        p.error = "service " + (service.empty() ? std::string("not given") : no_frequency(service)) +
+                  ": until stage 5 the core turns on automatic sends in MARS only";
+        return p;
+    }
     JsonWriter w0;
-    w0.begin_object().field("cmd", "prepare").field("kind", "standing:" + mode).end_object();
+    w0.begin_object().field("cmd", "prepare").field("kind", "standing:" + mode).field("service", service).end_object();
     GaleKeyReply r = ask(w0.str());
     if (!r.answered) {
         p.error = "not prepared: " + no_frequency(r.reason);
         return p;
     }
     if (!r.ok) {
-        p.error = "gale-key refused: " + no_frequency(r.reason.empty() ? "no reason given" : r.reason);
+        p.error = "the controller refused: " + no_frequency(r.reason.empty() ? "no reason given" : r.reason);
         return p;
     }
     const std::string token = text_of(r.body, "token");
     if (token.empty()) {
-        p.error = "gale-key answered ok but gave no token: nothing to confirm";
+        p.error = "the controller answered ok but gave no token: nothing to confirm";
         return p;
     }
     const JsonValue* c = member(r.body, "confirm");
     static const JsonValue none;
     const JsonValue& cf = c && c->is_object() ? *c : none;
-    const std::string world = text_of(cf, "world");
-    if (world != "mars") {
-        p.error = "the station's transmit world is " + (world.empty() ? std::string("not given") : no_frequency(world)) +
-                  ": the core turns on automatic sends in the MARS world only";
+    std::string cs = text_of(cf, "service");
+    if (cs.empty()) cs = text_of(cf, "world");
+    if (!cs.empty() && cs != service) {
+        p.error = "the controller's summary names service " + no_frequency(cs) + ", not " + service + ": not held";
         return p;
     }
     JsonWriter w;
-    w.begin_object().field("kind", "standing").field("mode", mode).field("world", world).end_object();
+    w.begin_object()
+        .field("kind", "standing")
+        .field("mode", mode)
+        .field("service", service)
+        .field("world", service)
+        .end_object();
     double life = kGaleKeyTokenS;
     if (const JsonValue* e = member(r.body, "expires_s"); e && e->type == JsonValue::Type::Number && e->n > 0)
         life = std::min(life, e->n);
     Held h;
     h.kind = "standing";
     h.mode = mode;
+    h.service = service;
     h.conn = KeyConnection::current();
     h.token = token;
     {
@@ -434,7 +465,7 @@ GaleKey::Prepared GaleKey::prepare_standing(const std::string& mode) {
     p.prepare_id = h.id;
     p.expires_s = static_cast<int>(life);
     p.confirm = w.str();
-    note("", "gale-key prepared standing " + mode + " for the operator's y");
+    note("", "the controller prepared standing " + mode + " (" + service + ") for the operator's y");
     return p;
 }
 
@@ -499,13 +530,13 @@ bool GaleKey::unchanged(const Held& h, std::string* error) const {
 }
 
 GaleKeyReply GaleKey::key(const Held& h) {
-    std::string req = air_request("key", h.item, "local");
     JsonWriter t;
     t.begin_object().field("token", h.token).end_object();
-    req += "," + t.str().substr(1);  // ,"token":"..."}
-    GaleKeyReply r = send_key(h.item, req);
-    note(h.item.msg_id, "asked gale-key to key " + h.item.burst + " on the operator's y: " +
-                            (r.answered ? (r.ok ? std::string("it answered ok") : "it answered " + no_frequency(r.reason))
+    const std::string tok = t.str().substr(1, t.str().size() - 2);  // "token":"..."
+    GaleKeyReply r = send_key(h.item, air_request("key", h.item, "local", tok));
+    note(h.item.msg_id, "handed " + h.item.burst + " to the controller on the operator's y: " +
+                            (r.answered ? (r.ok && r.accepted ? std::string("it accepted it")
+                                                              : "it answered " + no_frequency(r.reason))
                                         : no_frequency(r.reason)) +
                             "; its BURST.key.json decides");
     return r;
@@ -513,13 +544,18 @@ GaleKeyReply GaleKey::key(const Held& h) {
 
 GaleKeyReply GaleKey::grant(const Held& h) {
     JsonWriter w;
-    w.begin_object().field("cmd", "grant").field("mode", h.mode).field("token", h.token).end_object();
+    w.begin_object()
+        .field("cmd", "grant")
+        .field("mode", h.mode)
+        .field("service", h.service)
+        .field("token", h.token)
+        .end_object();
     GaleKeyReply r = ask(w.str());
     if (r.answered && r.ok) {
         std::lock_guard<std::mutex> g(mu_);
         standing_[h.mode] = true;
     }
-    note("", r.answered && r.ok ? "standing " + h.mode + " ON: gale-key granted it on the operator's y"
+    note("", r.answered && r.ok ? "standing " + h.mode + " ON: the controller granted it on the operator's y"
                                 : "standing " + h.mode + " not granted: " + no_frequency(r.reason));
     return r;
 }
@@ -533,10 +569,15 @@ GaleKeyReply GaleKey::revoke(const std::string& mode, const std::string& why) {
     JsonWriter w;
     w.begin_object().field("cmd", "revoke").field("mode", mode).end_object();
     GaleKeyReply r = ask(w.str());
-    note("", "standing " + mode + " OFF (" + why + "); gale-key " +
+    note("", "standing " + mode + " OFF (" + why + "); the controller " +
                  (r.answered ? (r.ok ? std::string("revoked it") : "answered " + no_frequency(r.reason))
                              : no_frequency(r.reason)));
     return r;
+}
+
+void GaleKey::forget(const std::string& mode) {
+    std::lock_guard<std::mutex> g(mu_);
+    standing_.erase(mode);
 }
 
 bool GaleKey::standing_on(const std::string& mode) {
@@ -555,14 +596,13 @@ std::vector<std::string> GaleKey::standing() {
 
 GaleKeyReply GaleKey::key_standing_now(const KeyItem& it, const std::string& mode) {
     if (!core_standing_mode(mode) || !standing_on(mode)) return not_reached("standing " + mode + " is off");
-    std::string req = air_request("key", it, "automatic");
     JsonWriter t;
     t.begin_object().field("standing", mode).end_object();
-    req += "," + t.str().substr(1);
-    GaleKeyReply r = send_key(it, req);
-    // gale-key revokes grants itself (the hourly cap, a change of transmit
-    // world). Told it holds none for this mode, the core turns the mode off
-    // too, so its next bursts wait for the operator's y instead of failing.
+    const std::string st = t.str().substr(1, t.str().size() - 2);
+    GaleKeyReply r = send_key(it, air_request("key", it, "automatic", st));
+    // gale-key revokes grants itself (EMCON, the hourly cap). Told it holds
+    // none for this mode, the core turns the mode off too, so its next bursts
+    // wait for the operator's y instead of failing.
     if (gale_key_holds_no_grant(r, mode)) {
         {
             std::lock_guard<std::mutex> g(mu_);
@@ -570,8 +610,9 @@ GaleKeyReply GaleKey::key_standing_now(const KeyItem& it, const std::string& mod
         }
         note("", "standing " + mode + " OFF: gale-key holds no grant for it any more; the operator's y turns it on again");
     }
-    note(it.msg_id, "asked gale-key to key " + it.burst + " on " + it.channel + " under standing " + mode + ": " +
-                        (r.answered ? (r.ok ? std::string("it answered ok") : "it answered " + no_frequency(r.reason))
+    note(it.msg_id, "handed " + it.burst + " to the controller on " + it.channel + " under standing " + mode + ": " +
+                        (r.answered ? (r.ok && r.accepted ? std::string("it accepted it")
+                                                          : "it answered " + no_frequency(r.reason))
                                     : no_frequency(r.reason)) +
                         (r.reached ? "; its BURST.key.json decides" : "; not asked, the burst stays written"));
     return r;
@@ -590,12 +631,26 @@ void GaleKey::key_standing(const KeyItem& it, const std::string& mode, std::func
 void GaleKey::worker() {
     for (;;) {
         Job j;
+        bool poll = false;
         {
             std::unique_lock<std::mutex> lk(mu_);
-            cv_.wait(lk, [this] { return stop_ || !jobs_.empty(); });
+            auto ready = [this] { return stop_ || !jobs_.empty(); };
+            if (poll_ms_ > 0) {
+                poll = !cv_.wait_for(lk, std::chrono::milliseconds(poll_ms_), ready);
+            } else {
+                // A poll interval set while waiting wakes the wait too.
+                cv_.wait(lk, [this] { return stop_ || !jobs_.empty() || poll_ms_ > 0; });
+                if (!stop_ && jobs_.empty()) continue;
+            }
             if (stop_) return;
-            j = std::move(jobs_.front());
-            jobs_.pop_front();
+            if (!poll) {
+                j = std::move(jobs_.front());
+                jobs_.pop_front();
+            }
+        }
+        if (poll) {
+            refresh_radio();
+            continue;
         }
         if (j.claim && !j.claim(j.item)) continue;
         GaleKeyReply r = key_standing_now(j.item, j.mode);
@@ -603,6 +658,43 @@ void GaleKey::worker() {
     }
 }
 
-GaleKeyReply GaleKey::status() { return ask(R"({"cmd":"status"})"); }
+void GaleKey::set_poll_ms(int ms) {
+    {
+        std::lock_guard<std::mutex> g(mu_);
+        poll_ms_ = ms > 0 ? ms : 0;
+    }
+    cv_.notify_all();
+}
+
+void GaleKey::take_radio(const GaleKeyReply& r) {
+    // station-controller.md, status: "radio":{"channel","service","since","source"}.
+    RadioReport rr;
+    if (r.answered && r.ok) {
+        const JsonValue* x = member(r.body, "radio");
+        if (x && x->is_object()) {
+            rr.known = true;
+            rr.label = no_frequency(text_of(*x, "channel"));
+            rr.service = text_of(*x, "service");
+            if (rr.service.empty()) rr.service = text_of(*x, "world");
+            rr.since = text_of(*x, "since");
+            rr.source = text_of(*x, "source");
+        }
+    }
+    std::lock_guard<std::mutex> g(mu_);
+    radio_ = rr;
+}
+
+RadioReport GaleKey::radio() {
+    std::lock_guard<std::mutex> g(mu_);
+    return radio_;
+}
+
+void GaleKey::refresh_radio() { status(); }
+
+GaleKeyReply GaleKey::status() {
+    GaleKeyReply r = ask(R"({"cmd":"status"})");
+    take_radio(r);
+    return r;
+}
 
 }  // namespace pna

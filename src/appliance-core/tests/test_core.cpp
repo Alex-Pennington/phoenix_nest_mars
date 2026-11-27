@@ -4,6 +4,7 @@
 #include "../src/loopback_modem.h"
 #include "../src/store.h"
 #include "check.h"
+#include "services_fixture.h"
 
 #include <chrono>
 #include <cstdio>
@@ -87,44 +88,46 @@ int main() {
         auto mb = std::make_unique<LoopbackModem>(0);
         LoopbackModem* pa = ma.get();
         LoopbackModem::connect(*ma, *mb);
-        Core a(CoreConfig{"A", (dir / "a.db").string(), 3, 1, true}, std::move(ma));
-        Core b(CoreConfig{"B", (dir / "b.db").string(), 3, 1, true}, std::move(mb));
+        Core a(on_mars_link(CoreConfig{"A", (dir / "a.db").string(), 3, 1, true}), std::move(ma));
+        a.set_services(test_services());
+        Core b(on_mars_link(CoreConfig{"B", (dir / "b.db").string(), 3, 1, true}), std::move(mb));
+        b.set_services(test_services());
         a.start();
         b.start();
 
         std::string err;
-        CHECK(a.submit("A", 'R', "to self", &err).empty());
-        CHECK(a.submit("B", 'X', "bad prec", &err).empty());
-        CHECK(a.submit("B", 'R', "", &err).empty());
-        CHECK(a.submit("b", 'R', "lower case", &err).empty());
+        CHECK(a.submit("A", 'R', "to self", &err, SendOpts::in("mars")).empty());
+        CHECK(a.submit("B", 'X', "bad prec", &err, SendOpts::in("mars")).empty());
+        CHECK(a.submit("B", 'R', "", &err, SendOpts::in("mars")).empty());
+        CHECK(a.submit("b", 'R', "lower case", &err, SendOpts::in("mars")).empty());
 
         // Out and back: A sends, B receives and acks, A sees the ack.
-        std::string id = a.submit("B", 'R', "HELLO B THIS IS A", &err);
+        std::string id = a.submit("B", 'R', "HELLO B THIS IS A", &err, SendOpts::in("mars"));
         CHECK(!id.empty());
         CHECK(wait_for([&] { return state_of(a, id) == "acked"; }));
         auto rx = b.get(id);
         CHECK(rx && rx->direction == "in" && rx->body == "HELLO B THIS IS A" && rx->src == "A");
 
         // And the other way.
-        std::string back = b.submit("A", 'P', "ROGER A", &err);
+        std::string back = b.submit("A", 'P', "ROGER A", &err, SendOpts::in("mars"));
         CHECK(wait_for([&] { return state_of(b, back) == "acked"; }));
         CHECK(a.get(back) && a.get(back)->body == "ROGER A");
 
         // A modem failure is retried, then the message still goes.
         pa->fail_next_sends(1);
-        std::string retry = a.submit("B", 'R', "AFTER ONE FAILURE", &err);
+        std::string retry = a.submit("B", 'R', "AFTER ONE FAILURE", &err, SendOpts::in("mars"));
         CHECK(wait_for([&] { return state_of(a, retry) == "acked"; }, 8000));
         CHECK(a.get(retry) && a.get(retry)->attempts == 2);
 
         // Too many failures marks it failed.
         pa->fail_next_sends(10);
-        std::string dead = a.submit("B", 'R', "NEVER ARRIVES", &err);
+        std::string dead = a.submit("B", 'R', "NEVER ARRIVES", &err, SendOpts::in("mars"));
         CHECK(wait_for([&] { return state_of(a, dead) == "failed"; }, 15000));
         pa->fail_next_sends(0);
 
         // A damaged frame is dropped; nothing is stored at B, A stays "sent".
         pa->corrupt_next_deliveries(1);
-        std::string hit = a.submit("B", 'R', "DAMAGED ON THE WAY", &err);
+        std::string hit = a.submit("B", 'R', "DAMAGED ON THE WAY", &err, SendOpts::in("mars"));
         CHECK(wait_for([&] { return state_of(a, hit) == "sent"; }));
         std::this_thread::sleep_for(std::chrono::milliseconds(300));
         CHECK(!b.get(hit));
@@ -133,9 +136,9 @@ int main() {
         // FLASH jumps the queue: queue two ROUTINE and one FLASH while the
         // modem is held, then check the FLASH reached B first.
         pa->hold(true);
-        std::string r1 = a.submit("B", 'R', "ROUTINE 1", &err);
-        std::string r2 = a.submit("B", 'R', "ROUTINE 2", &err);
-        std::string z = a.submit("B", 'Z', "FLASH", &err);
+        std::string r1 = a.submit("B", 'R', "ROUTINE 1", &err, SendOpts::in("mars"));
+        std::string r2 = a.submit("B", 'R', "ROUTINE 2", &err, SendOpts::in("mars"));
+        std::string z = a.submit("B", 'Z', "FLASH", &err, SendOpts::in("mars"));
         std::this_thread::sleep_for(std::chrono::milliseconds(300));
         CHECK(state_of(a, z) == "queued");
         pa->hold(false);
@@ -149,10 +152,10 @@ int main() {
         // Local API.
         std::string s = ApiServer::handle(a, R"({"cmd":"status"})");
         CHECK(s.find("\"station\":\"A\"") != std::string::npos);
-        std::string sent = ApiServer::handle(a, R"({"cmd":"send","to":"B","prec":"O","body":"VIA API"})");
+        std::string sent = ApiServer::handle(a, R"({"cmd":"send","service":"mars","to":"B","prec":"O","body":"VIA API"})");
         CHECK(sent.find("\"ok\":true") != std::string::npos);
         CHECK(ApiServer::handle(a, R"({"cmd":"nope"})").find("\"ok\":false") != std::string::npos);
-        CHECK(ApiServer::handle(a, R"({"cmd":"send","to":"B","prec":"Q","body":"x"})").find("\"ok\":false") !=
+        CHECK(ApiServer::handle(a, R"({"cmd":"send","service":"mars","to":"B","prec":"Q","body":"x"})").find("\"ok\":false") !=
               std::string::npos);
         CHECK(ApiServer::handle(a, R"({"cmd":"list","limit":3})").find("\"messages\":[") != std::string::npos);
 
