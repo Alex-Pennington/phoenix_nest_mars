@@ -254,6 +254,11 @@ static void tables() {
     CHECK(s->find("amateur")->station_id && !s->find("mars")->station_id);
     CHECK(no_table("narnia") == "no table for service `narnia`");
 
+    // The fixture tables load whatever mode the checkout gave them (a umask
+    // of 0002 makes them group-writable): the tests read a 0644 copy.
+    CHECK(test_services()->valid("mars") && test_services()->valid("amateur"));
+    CHECK(test_services_dir() != test_services_source_dir());
+
     // A third service needs a table only, never code.
     std::string third;
     {
