@@ -137,7 +137,7 @@ struct SisLinkConfig {
     std::string dir = "/run/gale-rx";  // --controller-sis-dir: DIR/sis-<service>.sock
     uint8_t sap_operator = 13;
     uint8_t sap_automatic = 14;
-    uint32_t ttl_seconds = 600;        // s5066-ttl, per U_PDU (A.2.1.6 (6))
+    uint32_t ttl_seconds = 600;        // s5066-ttl, per U_PDU, sent in 2 s units (Figure A-20); 0 no limit
     int answer_grace_s = 30;           // waited past the TTL for the answer
     int reconnect_ms = 3000;
     uint16_t mtu = 2048;               // A.2.1.3 (7), and the controller's

@@ -422,36 +422,9 @@ GaleKey::Prepared GaleKey::prepare_standing(const std::string& mode, const std::
                   ": until stage 5 the core turns on automatic sends in MARS only";
         return p;
     }
-    if (sis_) {
-        // link = controller: the y is the core's own. No prepare goes to the
-        // controller; key_confirm sends `grant` (docs/api.md, standing_prepare).
-        JsonWriter w;
-        w.begin_object()
-            .field("kind", "standing")
-            .field("mode", mode)
-            .field("service", service)
-            .field("world", service)
-            .end_object();
-        Held h;
-        h.kind = "standing";
-        h.mode = mode;
-        h.service = service;
-        h.conn = KeyConnection::current();
-        {
-            std::lock_guard<std::mutex> g(mu_);
-            drop_expired();
-            h.id = new_id();
-            h.at = clock_();
-            h.until = h.at + kGaleKeyTokenS;
-            held_[h.id] = h;
-        }
-        p.ok = true;
-        p.prepare_id = h.id;
-        p.expires_s = static_cast<int>(kGaleKeyTokenS);
-        p.confirm = w.str();
-        note("", "standing " + mode + " (" + service + ") waits for the operator's y");
-        return p;
-    }
+    // Also with link = controller: a grant carries the token of gale-key's
+    // standing prepare, so prepare kind standing:MODE stays on the local socket
+    // (greybeard-ale docs/station-controller.md, Network management).
     JsonWriter w0;
     w0.begin_object().field("cmd", "prepare").field("kind", "standing:" + mode).field("service", service).end_object();
     GaleKeyReply r = ask(w0.str());

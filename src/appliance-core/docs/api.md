@@ -1855,7 +1855,8 @@ This is the core's 5066 client (docs/stanag-5066-client.md) with `link = control
   no delivery confirmation, in order, no retransmission (A.2.2.3, Figure A-3). A dropped
   connection binds again every 3 s.
 - **One frame per request,** non-ARQ, with no delivery confirmation asked, to the all-stations
-  address as a group address (A.2.2.28.1). Stage 1 makes no link, and the frame's
+  address as a group address (A.2.2.28.1). The time to live goes in 2 s units (Figure A-20); 0
+  is no limit, and the answer is then waited for until it comes or the connection drops. Stage 1 makes no link, and the frame's
   header names the addressee, as on every path. Priority comes from the precedence, as in that
   document, and the time to live is `s5066-ttl` (600 s).
 - **At most 2048 bytes.** The SIS MTU is 2048 bytes: Annex A A.2.1.3 (7) fixes it for a
@@ -1870,7 +1871,8 @@ This is the core's 5066 client (docs/stanag-5066-client.md) with `link = control
   S_KEEP_ALIVE is answered in kind. Receive stays as `link = burst` has it: the modems' captures.
 - **Settings that leave.** `tx-mode` and `tx-cmd` leave the core for this link, because the
   controller runs gale-tx. The core writes each frame whole to the outbox as `BURST.frame`, and
-  reads no `BURST.key.json`. It sends no `prepare`, `key` or `cancel` on the local socket.
+  reads no `BURST.key.json`. On the local socket it sends no `key`, no `cancel` and no `prepare`
+  for a send.
 
 The three parts of D.4.2.8:
 
@@ -2024,8 +2026,8 @@ controller keys it as control automatic (greybeard-ale
 `{"cmd":"standing_prepare","mode":"routing","service":"S"}` →
 `{"ok":true,"prepare_id":"KP-...","expires_s":120,"confirm":{"kind":"standing","mode":"routing","service":"S"}}`
 
-`service` is required; none is never read as MARS. With the controller, no prepare goes to it,
-and `grant` carries no token.
+`service` is required; none is never read as MARS. With the controller too, `prepare` kind
+`standing:MODE` stays on the local socket, and `grant` carries its token.
 
 then `key_confirm` with that `prepare_id` and `confirm` `Y` sends `grant` →
 `{"ok":true,"kind":"standing","mode":"routing","service":"S","on":true,"controller":{...}}`.

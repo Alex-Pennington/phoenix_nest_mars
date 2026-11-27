@@ -485,7 +485,11 @@ bool SisControllerLink::submit(const SisSend& s, std::string* why) {
     if (!write_fd(c->fd, req)) return fail("the request didn't reach the station controller");
     Pending p;
     p.send = s;
-    p.deadline = std::chrono::steady_clock::now() + std::chrono::seconds(cfg_.ttl_seconds + cfg_.answer_grace_s);
+    // A TTL of 0 is no limit of its own (A.2.1.6 (8)): the answer is waited for
+    // until it comes or the connection drops.
+    p.deadline = cfg_.ttl_seconds == 0
+                     ? std::chrono::steady_clock::time_point::max()
+                     : std::chrono::steady_clock::now() + std::chrono::seconds(cfg_.ttl_seconds + cfg_.answer_grace_s);
     c->pending.push_back(std::move(p));
     return true;
 }

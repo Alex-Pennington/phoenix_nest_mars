@@ -105,6 +105,7 @@ struct FakeController {
     std::string reject_why = "refused: channel P1: passband outside the data segments of service mars";
     std::mutex mu;
     std::vector<Bind> binds;
+    int unbound_sends = 0;
     std::vector<Req> reqs;
     std::vector<JsonValue> json;  // every local request
     std::vector<std::string> last;  // status.last entries, JSON text, newest first
@@ -198,7 +199,23 @@ struct FakeController {
             json.push_back(req);
             const std::string cmd = str(req, "cmd");
             if (cmd == "status") reply = status_text();
-            else if (cmd == "grant" || cmd == "revoke") reply = R"({"ok":true})";
+            else if (cmd == "prepare" && str(req, "kind").rfind("standing:", 0) == 0) {
+                // Stays local: gale-key's standing prepare, passed on with its token.
+                JsonWriter w;
+                w.begin_object()
+                    .field("ok", true)
+                    .field("token", "TOK-STANDING-1")
+                    .field("expires_s", 120)
+                    .begin_object("confirm")
+                    .field("service", str(req, "service"))
+                    .end_object()
+                    .end_object();
+                reply = w.str();
+            } else if (cmd == "prepare") reply = R"({"ok":false,"reason":"prepare is for standing:MODE only"})";
+            else if (cmd == "grant")
+                reply = str(req, "token") == "TOK-STANDING-1" ? R"({"ok":true})"
+                                                              : R"({"ok":false,"reason":"grant needs the standing prepare's token"})";
+            else if (cmd == "revoke") reply = R"({"ok":true})";
             else reply = R"({"ok":false,"reason":"not a request the core sends"})";
         }
         reply += "\n";
@@ -219,8 +236,8 @@ struct FakeController {
             .field("why", confirm ? std::string() : reject_why)
             .end_object();
         last.insert(last.begin(), e.str());
-        // A.2.1.7 (7): the first bytes of the U_PDU name it.
-        const std::string part = r.p.data.substr(0, 16);
+        // As the controller's SIS server: a copy of the U_PDU, its first 2048 bytes.
+        const std::string part = r.p.data.substr(0, 2048);
         const std::string out = confirm ? s5066::unidata_confirm(r.sap, s5066::kBroadcastAddress, part)
                                         : s5066::unidata_rejected(reason, r.sap, s5066::kBroadcastAddress, part);
         (void)::send(r.fd, out.data(), out.size(), MSG_NOSIGNAL);
@@ -256,7 +273,8 @@ struct FakeController {
                 if (p.type == s5066::kBindRequest) {
                     binds.push_back(Bind{service, p.sap, p.service.tx_mode, p.service.confirm});
                     std::string out;
-                    if (p.sap != 13 && p.sap != 14) out = s5066::bind_rejected(2);  // A.2.1.4: invalid SAP
+                    if (bound) out = s5066::bind_rejected(0);  // a second bind on a bound connection
+                    else if (p.sap != 13 && p.sap != 14) out = s5066::bind_rejected(2);  // A.2.1.4: invalid SAP
                     else {
                         bound = p.sap;
                         out = s5066::bind_accepted(p.sap, 2048);
@@ -264,7 +282,12 @@ struct FakeController {
                     (void)::send(c, out.data(), out.size(), MSG_NOSIGNAL);
                 } else if (p.type == s5066::kUnidataRequest) {
                     reqs.push_back(Req{service, bound, p, c, false});
-                    if (mode == "confirm") answer(reqs.back(), true);
+                    if (!bound) {
+                        ++unbound_sends;  // a U_PDU before any bind: rejected, reason 0
+                        const std::string out = s5066::unidata_rejected(0, p.sap, p.dst, p.data.substr(0, 2048));
+                        (void)::send(c, out.data(), out.size(), MSG_NOSIGNAL);
+                        reqs.back().answered = true;
+                    } else if (mode == "confirm") answer(reqs.back(), true);
                     else if (mode == "reject") answer(reqs.back(), false, 0);
                     else if (mode == "drop") {
                         ::shutdown(c, SHUT_RDWR);
@@ -448,7 +471,7 @@ int main() {
         auto m = s.core->get(id);
         CHECK(m && m->sends == 1 && m->next_try_at > 0);
         CHECK(has(s.events_text(), "keyed by the station controller on P1: sent, waiting for ack"));
-        // Nothing went to the local socket but status (no prepare, key or cancel).
+        // Nothing went to the local socket for a send: no prepare, key or cancel.
         CHECK(f.count_json("prepare") == 0 && f.count_json("key") == 0 && f.count_json("cancel") == 0);
         CHECK(!ok(call(*s.core, {{"cmd", "key_prepare"}, {"msg_id", id}})));
 
@@ -526,14 +549,14 @@ int main() {
         CHECK(!ok(rep) && has(str(parsed(rep), "error"), "MARS only"));
         CHECK(!ok(call(*s.core, {{"cmd", "standing_prepare"}, {"mode", "routing"}})));  // needs service
         JsonValue sp = parsed(call(*s.core, {{"cmd", "standing_prepare"}, {"mode", "routing"}, {"service", "mars"}}));
-        CHECK(flag(sp, "ok") && f.count_json("prepare") == 0);
+        CHECK(flag(sp, "ok") && f.count_json("prepare") == 1);
         s.now = s.now + 2;
         v = parsed(call(*s.core, {{"cmd", "key_confirm"}, {"prepare_id", str(sp, "prepare_id")}, {"confirm", "Y"}}));
         CHECK(flag(v, "ok") && flag(v, "on") && f.count_json("grant") == 1);
         {
             std::lock_guard<std::mutex> g(f.mu);
             for (auto& j : f.json)
-                if (str(j, "cmd") == "grant") CHECK(str(j, "service") == "mars" && !j.get("token"));
+                if (str(j, "cmd") == "grant") CHECK(str(j, "service") == "mars" && str(j, "token") == "TOK-STANDING-1");
         }
         const size_t b2 = f.count_reqs();
         err.clear();
@@ -571,6 +594,11 @@ int main() {
         const std::string again = s.written("FARSTN", "AFTER THE DROP");
         CHECK(flag(s.y(again), "asked"));
         CHECK(wait_for([&] { return s.state(again) == "sent"; }, 5000));
+        {
+            // Each connection bound once, and nothing was sent before a bind.
+            std::lock_guard<std::mutex> g(f.mu);
+            CHECK(f.unbound_sends == 0);
+        }
         f.stop();
     }
 
