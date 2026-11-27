@@ -150,6 +150,13 @@ std::string Core::submit(const std::string& to, char prec, const std::string& bo
     // The one route function: the message's service, or the crossing refused.
     Route rt = route_for(o.service, to, o.channel, o.route_service);
     if (!rt.ok) return fail(rt.refusal);
+    // The service's table: the formats it sends, and whether it carries cipher.
+    if (const Service* sv = services_ ? services_->find(rt.service) : nullptr) {
+        if (o.enciphered && !sv->encryption)
+            return fail("refused: the " + rt.service + " service carries no enciphered traffic");
+        if (!o.format.empty() && !sv->offers(o.format))
+            return fail("refused: " + o.format + " is not a format of the " + rt.service + " service");
+    }
     const bool held = o.held;
 
     std::lock_guard<std::mutex> g(mu_);
@@ -220,7 +227,10 @@ std::string Core::world_refusal(const std::string& call) const {
 std::string Core::submit_codress(const std::string& to, char prec, const std::string& codress,
                                  const std::string& clear, const std::string& key, std::string* error,
                                  const SendOpts& o) {
-    std::string id = submit(to, prec, codress, error, o);
+    SendOpts oc = o;
+    oc.enciphered = true;
+    if (oc.format.empty()) oc.format = "ACP127_CODRESS";
+    std::string id = submit(to, prec, codress, error, oc);
     if (id.empty()) return id;
     std::lock_guard<std::mutex> g(mu_);
     store_.set_clear(id, clear, key);

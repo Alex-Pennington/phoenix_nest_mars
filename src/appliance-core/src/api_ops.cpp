@@ -625,7 +625,9 @@ std::optional<std::string> handle_ops(Core& core, const std::string& cmd, std::m
         std::string svc = req["service"];
         if (svc.empty() && !m.channel.empty())
             if (auto pc = ops->channels().get(m.channel)) svc = pc->world;
-        std::string msg = core.submit(kBroadcast, m.prec, text, &err, SendOpts::in(svc));
+        const std::string format =
+            m.procedure == acp126::Message::Procedure::Plaindress ? "ACP126_PLAINDRESS" : "ACP126_SIMPLE";
+        std::string msg = core.submit(kBroadcast, m.prec, text, &err, SendOpts::in(svc, "", format));
         if (msg.empty()) return err_reply(err);
         ops->log_add("net",
                      "call-up sent on " + n->id + " to " +

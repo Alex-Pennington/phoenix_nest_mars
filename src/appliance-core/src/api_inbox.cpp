@@ -893,7 +893,7 @@ std::string qsl(Core& core, Db& db, std::map<std::string, std::string>& req) {
             if (line.empty()) return err_reply("no receipt could be made: " + err);
             // The receipt carries the source message's service, so a crossing is caught.
             out_id = core.submit(to, 'R', line, &err,
-                                 SendOpts::in(r->m.world.empty() ? req["service"] : r->m.world));
+                                 SendOpts::in(r->m.world.empty() ? req["service"] : r->m.world, "", "ACP201_CHAT"));
             if (out_id.empty()) return err_reply("receipt refused: " + err);
         }
     }
@@ -985,6 +985,11 @@ std::string retransmit(Core& core, Db& db, std::map<std::string, std::string>& r
     const std::string key_name = upper(trim(req["key"]));
     std::string err, id, ind;
     if (!key_name.empty()) {
+        // Enciphered only in a service whose table allows it, before any key is touched.
+        Route rt = core.route_for(svc, dst);
+        if (!rt.ok) return err_reply(rt.refusal);
+        if (const Service* sv = core.services() ? core.services()->find(rt.service) : nullptr; sv && !sv->encryption)
+            return err_reply("refused: the " + rt.service + " service carries no enciphered traffic");
         if (enciphered) return err_reply("it is enciphered already; send it without a key");
         ind = resolve_key(core.keyring(), key_name);
         std::string secret, out;
@@ -997,7 +1002,7 @@ std::string retransmit(Core& core, Db& db, std::map<std::string, std::string>& r
         if (!ok) return err_reply(err.empty() ? "no cipher installed" : err);
         id = core.submit_codress(dst, prec, out, body, ind, &err, SendOpts::in(svc));
     } else {
-        id = core.submit(dst, prec, body, &err, SendOpts::in(svc));
+        id = core.submit(dst, prec, body, &err, SendOpts::in(svc, "", received::format_of(body)));
     }
     if (id.empty()) return err_reply(err);
     const bool compress = truthy(req["compress"]);

@@ -183,7 +183,8 @@ std::string send_acp127(Core& core, std::map<std::string, std::string>& req) {
     m.station_serial = std::to_string(core.next_counter("acp127.station." + m.originator_ri, 9999));
     std::string text = acp127::build(m, &err);
     if (text.empty()) return error_reply(err);
-    std::string id = core.submit(req["to_station"], m.prec, text, &err, SendOpts::in(req["service"], req["radio_channel"]));
+    std::string id = core.submit(req["to_station"], m.prec, text, &err,
+                                 SendOpts::in(req["service"], req["radio_channel"], "ACP127_PLAINDRESS"));
     if (id.empty()) return error_reply(err);
     JsonWriter w;
     w.begin_object().field("ok", true).field("id", id).field("edition", acp127::kEdition).field("message", text).end_object();
@@ -219,7 +220,10 @@ std::string send_acp126(Core& core, std::map<std::string, std::string>& req) {
     m.serial = static_cast<int>(core.next_counter("acp126.nr." + m.station, 999));
     std::string text = acp126::build(m, &err);
     if (text.empty()) return error_reply(err);
-    std::string id = core.submit(req["to_station"], m.prec, text, &err, SendOpts::in(req["service"], req["radio_channel"]));
+    const std::string format =
+        m.procedure == acp126::Message::Procedure::Plaindress ? "ACP126_PLAINDRESS" : "ACP126_SIMPLE";
+    std::string id =
+        core.submit(req["to_station"], m.prec, text, &err, SendOpts::in(req["service"], req["radio_channel"], format));
     if (id.empty()) return error_reply(err);
     JsonWriter w;
     w.begin_object().field("ok", true).field("id", id).field("source", acp126::kSource)
@@ -250,7 +254,8 @@ std::string send_chat(Core& core, std::map<std::string, std::string>& req) {
     std::string err, line = acp201::build(c, &err);
     if (line.empty()) return error_reply(err);
     std::string id = core.submit(req["to_station"], 'R', line, &err,
-                                 SendOpts::in(req["service"], req.count("radio_channel") ? req["radio_channel"] : req["channel"]));
+                                 SendOpts::in(req["service"], req.count("radio_channel") ? req["radio_channel"] : req["channel"],
+                                              "ACP201_CHAT"));
     if (id.empty()) return error_reply(err);
     JsonWriter w;
     w.begin_object().field("ok", true).field("id", id).field("message", line).end_object();
@@ -438,8 +443,19 @@ std::string compose_send(Core& core, std::map<std::string, std::string>& req) {
         return w.str();
     }
     if (r.to_targets.empty()) return error_reply("no station to send to");
-    for (auto& t : r.to_targets)  // the whole send, before any copy is queued
-        if (Route rt = core.route_for(service, t, radio_channel); !rt.ok) return error_reply(rt.refusal);
+    {
+        // The whole send, before any copy is queued: each target routed, and
+        // one send is one service (a collective of two services is refused).
+        std::set<std::string> svcs;
+        for (auto& t : r.to_targets) {
+            Route rt = core.route_for(service, t, radio_channel);
+            if (!rt.ok) return error_reply(rt.refusal);
+            svcs.insert(rt.service);
+        }
+        if (svcs.size() > 1)
+            return error_reply("refused: the stations it goes to are of two services (" + *svcs.begin() + ", " +
+                               *std::next(svcs.begin()) + "): send each service its own message");
+    }
     // A service offers only the formats its table lists.
     std::string msg_service = service;
     if (msg_service.empty() && !r.to_targets.empty()) msg_service = core.route_for("", r.to_targets[0]).service;
@@ -489,9 +505,10 @@ std::string compose_send(Core& core, std::map<std::string, std::string>& req) {
                 continue;
             }
             sent_text = out;
-            id = core.submit_codress(t, r.prec, out, r.message, r.codress_key, &e, SendOpts::in(service, radio_channel));
+            id = core.submit_codress(t, r.prec, out, r.message, r.codress_key, &e,
+                                     SendOpts::in(service, radio_channel, r.procedure));
         } else {
-            SendOpts o = SendOpts::in(service, radio_channel);
+            SendOpts o = SendOpts::in(service, radio_channel, r.procedure);
             o.held = req["hold"] == "Y";
             if (r.procedure == "PLAIN") o.link = "plain";
             id = core.submit(t, r.prec, r.message, &e, o);
@@ -2973,13 +2990,21 @@ std::string ApiServer::handle_call(Core& core, const std::string& line) {
         if (to.empty()) to.push_back(req["to"]);
         // The route function: one crossing refuses the whole send, before any copy is queued.
         const std::string channel = req.count("radio_channel") ? req["radio_channel"] : req["channel"];
-        for (auto& t : to)
-            if (Route rt = core.route_for(req["service"], t, channel); !rt.ok)
-                return error_reply(to.size() > 1 ? "refused for " + req["to"] + ": " + rt.refusal : rt.refusal);
+        std::set<std::string> svcs;
+        for (auto& t : to) {
+            Route rt = core.route_for(req["service"], t, channel);
+            if (!rt.ok) return error_reply(to.size() > 1 ? "refused for " + req["to"] + ": " + rt.refusal : rt.refusal);
+            svcs.insert(rt.service);
+        }
+        if (svcs.size() > 1)
+            return error_reply("refused for " + req["to"] + ": its stations are of two services (" + *svcs.begin() +
+                               ", " + *std::next(svcs.begin()) + "): send each service its own message");
+        // A raw send is checked by the format its text reads as.
+        const std::string format = received::format_of(req["body"]);
         std::string err;
         std::vector<std::string> ids;
         for (auto& t : to) {
-            std::string id = core.submit(t, prec[0], req["body"], &err, SendOpts::in(req["service"], channel));
+            std::string id = core.submit(t, prec[0], req["body"], &err, SendOpts::in(req["service"], channel, format));
             if (id.empty()) return ids.empty() ? error_reply(err) : error_reply(err + " (sent to " + std::to_string(ids.size()) + " before this)");
             ids.push_back(id);
         }

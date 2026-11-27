@@ -89,10 +89,14 @@ struct SendOpts {
     std::string channel;   // the channel label the operator picked ("" none: the radio's, as the controller reports it)
     std::string link;      // "plain": sent as the text alone whatever the station's link format (PLAIN)
     std::string route_service;  // the service of the routing rule it goes on ("" none)
-    static SendOpts in(std::string service, std::string channel = "") {
+    std::string format;         // its compose format (procedure id), checked against the service's table ("" not named)
+    bool enciphered = false;    // codress: only in a service whose table allows encryption
+    static SendOpts in(std::string service, std::string channel = "", std::string format = "") {
         SendOpts o;
         o.service = std::move(service);
         o.channel = std::move(channel);
+        o.format = std::move(format);
+        o.enciphered = o.format == "ACP127_CODRESS";
         return o;
     }
 };

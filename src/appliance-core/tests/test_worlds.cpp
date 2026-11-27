@@ -450,6 +450,37 @@ int main() {
     CHECK(has(str(compose16("TEST-HAM1", ""), "error"), "not a format of the amateur service"));
     CHECK(out_count(a) == 0);
 
+    // ---- a send's format and cipher against its service's table ------------
+    {
+        auto formats_refused = [&](const JsonValue& v, const std::string& fmt) {
+            return !ok(v) && has(str(v, "error"), fmt + " is not a format of the amateur service");
+        };
+        CHECK(formats_refused(call(a, {{"cmd", "send_acp127"}, {"to_station", "TEST-HAM1"}, {"prec", "R"}, {"channel", "QXA"},
+                                       {"routing", "TEST-HAM1"}, {"originator_ri", "STA-A"}, {"from", "STA-A/TEST ONE"},
+                                       {"to", "TEST-HAM1/TEST HAM"}, {"text", "TEST"}}),
+                              "ACP127_PLAINDRESS"));
+        CHECK(formats_refused(call(a, {{"cmd", "send_acp126"}, {"to_station", "TEST-HAM1"}, {"prec", "R"}, {"calls", "TEST-HAM1"},
+                                       {"station", "STA-A"}, {"text", "TEST"}}),
+                              "ACP126_SIMPLE"));
+        CHECK(formats_refused(call(a, {{"cmd", "send_chat"}, {"to_station", "TEST-HAM1"}, {"call", "TEST-HAM1"},
+                                       {"station", "STA-A"}, {"text", "QRU"}}),
+                              "ACP201_CHAT"));
+        // A raw send is checked by the format its text reads as.
+        CHECK(formats_refused(call(a, {{"cmd", "send"}, {"to", "TEST-HAM1"}, {"body", acp127_to("TEST-HAM1", "RAW ACP 127")}}),
+                              "ACP127_PLAINDRESS"));
+        // Enciphered traffic only in a service whose table allows it.
+        CHECK(a.submit_codress("TEST-HAM1", 'R', "VZCZC CODRESS", "CLEAR", "QXR01", &e).empty() &&
+              has(e, "the amateur service carries no enciphered traffic"));
+        // One send, one service: a collective, or targets, of two services is refused whole.
+        JsonValue v = call(a, {{"cmd", "send"}, {"to", "MIXED"}, {"body", "TO BOTH"}});
+        CHECK(!ok(v) && has(str(v, "error"), "two services"));
+        v = call(a, {{"cmd", "compose_send"}, {"template", "FREE_FORM"}, {"procedure", "16L_P2P_FULL"}, {"prec", "R"},
+                     {"routing", "STA-B"}, {"originator", "STA-A"}, {"from", "TEST STATION ONE"},
+                     {"to", "RXAAAA/TEST STATION TWO"}, {"to_station", "MIXED"}, {"sign", "N"}, {"text", "TEST"}});
+        CHECK(!ok(v) && has(str(v, "error"), "two services"));
+        CHECK(out_count(a) == 0);
+    }
+
     // ---- PLAIN: the operator's text alone, in a service that offers it ------
     {
         JsonValue v = call(a, {{"cmd", "compose_send"}, {"template", "PLAIN"}, {"to_station", "TEST-HAM1"},
@@ -502,6 +533,11 @@ int main() {
     // A received message of the amateur service: its retransmit to MARS crosses.
     set_world(dir / "a.db", in_id, "amateur");
     CHECK(crossed(call(a, {{"cmd", "retransmit"}, {"id", in_id}, {"to", "STA-B"}, {"confirm", "Y"}}), "amateur", "mars"));
+    // A retransmit with a key in a service that carries no enciphered traffic.
+    {
+        JsonValue v = call(a, {{"cmd", "retransmit"}, {"id", in_id}, {"to", "TEST-HAM1"}, {"confirm", "Y"}, {"key", "QXR01"}});
+        CHECK(!ok(v) && has(str(v, "error"), "the amateur service carries no enciphered traffic"));
+    }
     // qsl: a receipt for ACP 127 traffic that came as plain text.
     CHECK(b.set_link_format("STA-A", "plain", &e));
     CHECK(ok(call(b, {{"cmd", "send_acp127"}, {"to_station", "STA-A"}, {"prec", "R"}, {"channel", "QXA"},

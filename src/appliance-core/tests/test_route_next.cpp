@@ -181,6 +181,8 @@ int main() {
 
     // ---- an address the core refuses is passed over for the next ----------
     CHECK(!c.submit("AAM499", 'R', traffic("UHNXXX", "AAR7ZZ", 3, "FOR THE NORTH GATEWAY"), &e, SendOpts::in("mars")).empty());
+    // B overhears C's own copy on the shared air: wait for A's routing, not for B.
+    CHECK(pump_until([&] { return str(routed_row(a, in_id(a, "FOR THE NORTH GATEWAY")), "state") == "queued"; }));
     CHECK(pump_until([&] { return got(b, "FOR THE NORTH GATEWAY"); }));
     {
         JsonValue r = routed_row(a, in_id(a, "FOR THE NORTH GATEWAY"));

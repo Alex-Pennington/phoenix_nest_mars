@@ -1,6 +1,9 @@
 // Reading traffic as MARS stations send it. See received.h.
 #include "received.h"
 
+#include "acp201.h"
+#include "codress.h"
+
 #include <cctype>
 #include <sstream>
 
@@ -443,6 +446,16 @@ bool parse(const std::string& raw, Message& m, std::string* error) {
     }
     if (error) error->clear();
     return true;
+}
+
+std::string format_of(const std::string& body) {
+    if (codress::is_codress(body)) return "ACP127_CODRESS";
+    Message m;
+    if (parse(body, m, nullptr)) return procedure(m);
+    acp201::Chat c;
+    const std::string first = body.substr(0, body.find_first_of("\r\n"));
+    if (acp201::parse(first, c, nullptr)) return "ACP201_CHAT";
+    return "";
 }
 
 }  // namespace received
