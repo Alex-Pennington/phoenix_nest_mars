@@ -1835,6 +1835,13 @@ message from the controller's `status.last`, under the frame's sha256:
   "result unknown: check the log before resending". It may have been keyed, so it is never
   called "not keyed", and the core sends nothing again by itself.
 
+A request that ran out of time may still be answered. The core keeps it on its connection's
+late list (up to 16, for 300 s), and matches every answer against that list first, oldest
+first, before the requests still waiting. So a late answer is never taken for a resend of the
+same bytes. It settles its own message: one still waiting on `status`, or one failed as "result
+unknown", takes the answer's result. A message sent again meanwhile is left to its own answer.
+A dropped connection empties the list.
+
 `status` is read at start, again each time a SIS connection binds, and every 2 s while a message
 waits. While `status` does not answer, the message waits. A wait ends after 270 s (the
 controller's `claim-max-s`, 120 s, plus its order timeout, 150 s) as "result unknown". Nothing is

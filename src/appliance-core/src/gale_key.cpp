@@ -788,10 +788,10 @@ void GaleKey::set_sis(std::shared_ptr<SisControllerLink> sis) {
         settle_retry_ms_ = std::max(50, sis_->config().settle_retry_ms);
     }
     sis_->start(
-        [this](const SisSend& s, SisControllerLink::End end, uint8_t, const std::string& why) {
+        [this](const SisSend& s, SisControllerLink::End end, uint8_t, const std::string& why, bool late) {
             // No answer in time, or a drop: it may have been keyed, so status.last decides.
             if (end == SisControllerLink::End::unanswered) unanswered(s.burst, s.msg_id, s.sha256, why);
-            else on_sis(s.burst, s.sha256, end == SisControllerLink::End::confirmed, why);
+            else on_sis(s.burst, s.msg_id, s.sha256, end == SisControllerLink::End::confirmed, why, late);
         },
         [this](const std::string& text) { note("", text); },
         // Every bind, the first and each reconnect: what is unsettled is looked up now.
@@ -1038,7 +1038,19 @@ GaleKeyReply GaleKey::submit_sis(const KeyItem& it, bool automatic, const std::s
     return r;
 }
 
-void GaleKey::on_sis(const std::string& burst, const std::string& sha256, bool confirmed, const std::string& why) {
+void GaleKey::on_sis(const std::string& burst, const std::string& msg_id, const std::string& sha256, bool confirmed,
+                     const std::string& why, bool late) {
+    if (late) {
+        // Its own answer after all: nothing more is read from status for it.
+        {
+            std::lock_guard<std::mutex> g(mu_);
+            unsettled_.erase(std::remove_if(unsettled_.begin(), unsettled_.end(),
+                                            [&](const Unsettled& u) { return u.burst == burst; }),
+                             unsettled_.end());
+        }
+        note(msg_id, burst + ": its SIS answer came late, after the core stopped waiting for it: " +
+                         (confirmed ? "a confirm" : "a reject") + ", for this frame and no later one of the same bytes");
+    }
     // The controller's sentence is in status.last under the frame's sha256,
     // because SIS carries only a reason code (station-controller.md, part 3).
     std::string said = confirmed ? std::string() : why, channel;

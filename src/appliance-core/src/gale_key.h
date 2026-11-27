@@ -303,7 +303,10 @@ private:
     // Reads the frame once and submits those bytes. With sha256 given (the
     // y's), bytes of another sha256 are not submitted.
     GaleKeyReply submit_sis(const KeyItem& it, bool automatic, const std::string& sha256);
-    void on_sis(const std::string& burst, const std::string& sha256, bool confirmed, const std::string& why);
+    // late: the answer of a request that had ended unanswered. It settles that
+    // frame, waiting on status or already settled, and no other.
+    void on_sis(const std::string& burst, const std::string& msg_id, const std::string& sha256, bool confirmed,
+                const std::string& why, bool late);
     // A request that ended with no answer: its frame joins the unsettled.
     void unanswered(const std::string& burst, const std::string& msg_id, const std::string& sha256,
                     const std::string& because);

@@ -135,6 +135,10 @@ private:
 //    is not a failure: the frame may have been keyed. The request ends
 //    unanswered, and its frame is settled from the controller's status.last
 //    (gale_key.h, settle).
+//  - A request that ran out of time is kept on its connection's late list.
+//    An answer is matched against that list first, oldest first, and only
+//    then against the requests waiting: the answer of a request that ran out
+//    of time is never taken for a later request of the same bytes.
 //  - S_KEEP_ALIVE (A.2.1.17) is answered in kind.
 // The controller's own bounds (greybeard-ale docs/station-controller.md and
 // tools/gale_rx.py): no claim on the radio is held past claim-max-s, and an
@@ -160,9 +164,14 @@ struct SisLinkConfig {
     // read again meanwhile.
     int settle_wait_s = kSisClaimMaxS + kSisOrderTimeoutS;
     int settle_retry_ms = 2000;
+    // How long a request that ran out of time stays on the late list for its
+    // answer. The controller waits on gale-key for the order timeout twice
+    // (the order, then its result file) before it answers.
+    int late_keep_s = 2 * kSisOrderTimeoutS;
 };
 
 constexpr size_t kSisMtu = 2048;
+constexpr size_t kSisLateMax = 16;  // requests kept on one connection's late list
 
 // One frame handed down.
 struct SisSend {
@@ -178,8 +187,11 @@ public:
     //  rejected    S_UNIDATA_REQUEST_REJECTED (A.2.1.8), with its reason: not keyed
     //  unanswered  the deadline passed or the connection dropped, and why says
     //              which. The frame may have been keyed: never a failure by itself
+    // late: a confirm or a reject for a request that had already ended
+    // unanswered at its deadline. It is that request's, and no other's.
     enum class End { confirmed, rejected, unanswered };
-    using Result = std::function<void(const SisSend& s, End end, uint8_t reason, const std::string& why)>;
+    using Result =
+        std::function<void(const SisSend& s, End end, uint8_t reason, const std::string& why, bool late)>;
 
     explicit SisControllerLink(SisLinkConfig cfg);
     ~SisControllerLink();
@@ -218,6 +230,7 @@ private:
         uint16_t mtu = 0;
         s5066::Reader reader;
         std::deque<Pending> pending;
+        std::deque<Pending> late;  // ran out of time, answer still owed; deadline: when it is forgotten
         std::chrono::steady_clock::time_point next_try{};
         std::string told;  // the last state logged, so it is said once
     };
@@ -226,6 +239,7 @@ private:
         End end = End::unanswered;
         uint8_t reason = 0;
         std::string why;
+        bool late = false;
     };
     void run();
     void open(Conn& c, std::vector<std::string>& notes);  // caller holds mu_

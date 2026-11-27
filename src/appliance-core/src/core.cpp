@@ -1066,10 +1066,14 @@ void Core::handle_key_result(const std::string& burst, bool keyed, const std::st
         log("", burst + " " + said + " (an ack, an orderwire or traffic no longer held)");
         return;
     }
-    if (m->state != "written") {
+    // A message failed as "result unknown" is still this burst's, and its
+    // result was never known: an answer that comes late for it decides it.
+    const bool unknown = m->state == "failed" && m->last_error == kSisResultUnknown;
+    if (m->state != "written" && !unknown) {
         log(m->id, burst + " " + said + " (it is " + m->state + " now, so nothing changes)");
         return;
     }
+    if (unknown) store_.set_state(m->id, "written", "");
     if (!keyed) {
         // gale-key revokes grants itself (EMCON, the hourly cap). A burst keyed
         // under a grant it no longer holds comes back refused with its wording,

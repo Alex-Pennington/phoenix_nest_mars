@@ -812,6 +812,58 @@ int main() {
         CHECK(SisLinkConfig().settle_wait_s >= 120 + 150);
     }
 
+    // ---- a late answer settles the request that ran out of time, never a resend of the same bytes
+    {
+        FakeController f;
+        f.dir = base;
+        f.mode = "hold";
+        f.start({"mars", "amateur"});
+        // Status is read at the deadline and then not for a minute: only the late answer
+        // can settle what is left after that.
+        Station s(base / "L", base, [](SisLinkConfig& c) { c.settle_retry_ms = 60000; });
+        CHECK(wait_for([&] { return s.link->bound("mars", false); }, 5000));
+        const std::string a = s.written("FARSTN", "ANSWERED LATE, AND SENT AGAIN MEANWHILE");
+        CHECK(flag(s.y(a), "asked"));
+        const std::string c = s.written("FARSTN", "ANSWERED LATE");
+        CHECK(flag(s.y(c), "asked"));
+        const std::string d = s.written("FARSTN", "REFUSED LATE, GALE-KEY HAD THE ORDER");
+        CHECK(flag(s.y(d), "asked"));
+        CHECK(wait_for([&] { return f.count_reqs() == 3; }, 5000));
+        f.note_last(f.req(2).p.data, "mars", "unknown");
+        // No answer within 5 s. Status has no word of the first two; the third waits on gale-key.
+        CHECK(wait_for([&] { return s.state(a) == "failed" && s.state(c) == "failed"; }, 10000));
+        CHECK(s.core->get(a)->last_error == kSisResultUnknown && s.core->get(c)->last_error == kSisResultUnknown);
+        CHECK(wait_for([&] { return s.gk->unsettled() == 1 && s.link->outstanding() == 0; }, 3000));
+        CHECK(s.state(d) == "written");
+        // The operator sends the first again: the same bytes, a new request.
+        std::string why;
+        CHECK(s.core->requeue(a, &why));
+        CHECK(wait_for([&] { return s.state(a) == "written"; }, 10000));
+        CHECK(flag(s.y(a), "asked"));
+        CHECK(wait_for([&] { return f.count_reqs() == 4; }, 5000));
+        CHECK(f.req(0).p.data == f.req(3).p.data);
+        // The first request's confirm comes now. It is not the resend's.
+        CHECK(f.answer_one(true));
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+        CHECK(s.state(a) == "written" && s.link->outstanding() == 1);
+        CHECK(has(s.events_text(), "came late"));
+        // The second's confirm: it was failed as unknown, and its own answer says keyed.
+        CHECK(f.answer_one(true));
+        CHECK(wait_for([&] { return s.state(c) == "sent"; }, 3000));
+        CHECK(s.core->get(c)->sends == 1 && s.core->get(c)->last_error.empty());
+        // The third's reject: it settles the row still waiting on status.
+        CHECK(f.answer_one(false));
+        CHECK(wait_for([&] { return s.state(d) == "failed"; }, 3000));
+        CHECK(has(s.core->get(d)->last_error, "not keyed: refused: channel P1"));
+        CHECK(s.gk->unsettled() == 0);
+        // The resend's own answer decides the resend.
+        CHECK(s.state(a) == "written");
+        CHECK(f.answer_one(true));
+        CHECK(wait_for([&] { return s.state(a) == "sent"; }, 3000));
+        CHECK(s.core->get(a)->sends == 1 && s.link->outstanding() == 0);
+        f.stop();
+    }
+
     // ---- no controller: nothing is handed down, the message stays written
     {
         const fs::path empty = base / "none";

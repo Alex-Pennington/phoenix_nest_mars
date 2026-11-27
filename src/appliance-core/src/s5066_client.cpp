@@ -459,6 +459,7 @@ void SisControllerLink::stop() {
         c->fd = -1;
         c->bound = false;
         c->pending.clear();  // nothing is told to a core going away
+        c->late.clear();
     }
 }
 
@@ -537,6 +538,7 @@ void SisControllerLink::drop(Conn& c, const std::string& why, std::vector<Done>&
     c.next_try = std::chrono::steady_clock::now() + std::chrono::milliseconds(cfg_.reconnect_ms);
     for (auto& p : c.pending) done.push_back(Done{p.send, End::unanswered, 0, why});
     c.pending.clear();
+    c.late.clear();  // an answer comes only on the connection that asked
     if (was) {
         const std::string w = "SIS " + c.service + " SAP " + std::to_string(c.sap) + ": " + why;
         notes.push_back(w);
@@ -576,18 +578,28 @@ void SisControllerLink::handle(Conn& c, const s5066::Prim& p, std::vector<Done>&
     case s5066::kUnidataRequestConfirm:
     case s5066::kUnidataRequestRejected: {
         // A.2.1.7 (7): the copy of the U_PDU (or its first bytes) names the
-        // request; an empty copy is the oldest one waiting.
-        auto it = c.pending.begin();
-        if (!p.data.empty())
-            for (; it != c.pending.end(); ++it)
-                if (it->send.frame.compare(0, p.data.size(), p.data) == 0) break;
-        if (it == c.pending.end()) {
+        // request; an empty copy is the oldest one. The copy can't tell two
+        // requests of the same bytes apart, so the oldest is taken: the late
+        // list first (every request on it is older than any waiting), then
+        // the requests waiting.
+        auto match = [&p](std::deque<Pending>& q) {
+            auto it = q.begin();
+            if (!p.data.empty())
+                for (; it != q.end(); ++it)
+                    if (it->send.frame.compare(0, p.data.size(), p.data) == 0) break;
+            return it;
+        };
+        const bool late = match(c.late) != c.late.end();
+        std::deque<Pending>& q = late ? c.late : c.pending;
+        auto it = match(q);
+        if (it == q.end()) {
             notes.push_back("SIS " + c.service + ": an answer for no request waiting; ignored");
             return;
         }
-        Done d{it->send, p.type == s5066::kUnidataRequestConfirm ? End::confirmed : End::rejected, p.reason, ""};
+        Done d{it->send, p.type == s5066::kUnidataRequestConfirm ? End::confirmed : End::rejected, p.reason, "",
+               late};
         if (d.end == End::rejected) d.why = s5066::unidata_rejected_text(p.reason);
-        c.pending.erase(it);
+        q.erase(it);
         done.push_back(std::move(d));
         return;
     }
@@ -617,8 +629,14 @@ void SisControllerLink::run() {
                     done.push_back(Done{c.pending.front().send, End::unanswered, 0,
                                         "no answer from the station controller within " +
                                             std::to_string(cfg_.ttl_seconds + cfg_.answer_grace_s) + " s"});
+                    // Its answer may still come: kept, so it is not taken for another's.
+                    Pending l = std::move(c.pending.front());
                     c.pending.pop_front();
+                    l.deadline = now + std::chrono::seconds(cfg_.late_keep_s);
+                    c.late.push_back(std::move(l));
+                    if (c.late.size() > kSisLateMax) c.late.pop_front();
                 }
+                while (!c.late.empty() && now >= c.late.front().deadline) c.late.pop_front();
                 if (c.fd >= 0) {
                     fds.push_back(pollfd{c.fd, POLLIN, 0});
                     who.push_back(&c);
@@ -652,7 +670,7 @@ void SisControllerLink::run() {
         if (on_bound_)
             for (auto& b : bound) on_bound_(b.first, b.second);
         if (on_result_)
-            for (auto& d : done) on_result_(d.send, d.end, d.reason, d.why);
+            for (auto& d : done) on_result_(d.send, d.end, d.reason, d.why, d.late);
     }
 }
 
