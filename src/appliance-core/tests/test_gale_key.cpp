@@ -959,6 +959,8 @@ int main() {
             l << R"({"files":[{"file":")" << name << R"(.m110a.0.bin","bytes":)" << bytes.size() << R"(,"sha256":")"
               << sha256_hex(bytes) << R"("}]})";
         };
+        // FARSTN is a MARS station in the book: an orderwire to it takes its service.
+        CHECK(ok(call(*s.core, {{"cmd", "book_put"}, {"name", "FARSTN"}, {"kind", "station"}, {"world", "mars"}})));
         // A message to us, heard on P1's dial (the capture's name carries it).
         Frame in;
         in.type = FrameType::Msg;
@@ -1012,9 +1014,44 @@ int main() {
         auto heard = s.core->get("FARSTN-7");
         CHECK(heard && heard->state == "received");
 
+        // An ACK of a message with no service (a station not in the book, heard
+        // on a dial no channel of the plan is on) is never keyed, machine on.
+        {
+            const size_t before_n = s.core->answer_bursts();
+            Frame un = in;
+            un.id = "TEST-HAM5-1";
+            un.src = "TEST-HAM5";
+            un.body = "HEARD ON NO CHANNEL OF THE PLAN";
+            hear("un_9999kHz", un);
+            CHECK(wait_for([&] { return s.core->get("TEST-HAM5-1").has_value(); }, 10000));
+            CHECK(s.core->get("TEST-HAM5-1")->world.empty());
+            CHECK(wait_for([&] { return has(s.events_text(), "ack to TEST-HAM5 written to the outbox"); }, 10000));
+            std::this_thread::sleep_for(std::chrono::milliseconds(600));
+            CHECK(f.count("key") == 2);
+            CHECK(has(s.events_text(), "ack to TEST-HAM5") && has(s.events_text(), "has no service"));
+            (void)before_n;
+        }
+        // An ACK of a MARS message written while the controller reported an
+        // amateur channel: the route function refuses the crossing, never keyed.
+        {
+            s.set_channel(f, "AMX", "amateur");
+            Frame m8 = in;
+            m8.id = "FARSTN-8";
+            m8.body = "HELLO AGAIN FFF";
+            hear("in8_5000kHz", m8);
+            CHECK(wait_for([&] { return has(s.events_text(), "ack to FARSTN written to the outbox as") &&
+                                        s.core->get("FARSTN-8").has_value(); },
+                           10000));
+            std::this_thread::sleep_for(std::chrono::milliseconds(800));
+            CHECK(f.count("key") == 2);
+            CHECK(has(s.events_text(), "crossing: a mars message on an amateur channel (AMX)"));
+            s.set_channel(f, "P1");
+        }
+
         // A burst to a station the book marks amateur after it was written: never asked.
         CHECK(ok(call(*s.core, {{"cmd", "standing_off"}, {"mode", "machine"}})));
         const size_t before = s.core->answer_bursts();
+        CHECK(ok(call(*s.core, {{"cmd", "book_put"}, {"name", "TEST HAM Y"}, {"call", "TEST-HAM4"}, {"world", "mars"}})));
         CHECK(s.core->orderwire("TEST-HAM4", "QRV", &err));
         CHECK(wait_for([&] { return s.core->answer_bursts() == before + 1; }, 10000));
         CHECK(ok(call(*s.core, {{"cmd", "book_put"}, {"name", "TEST HAM Y"}, {"call", "TEST-HAM4"}, {"world", "amateur"}})));

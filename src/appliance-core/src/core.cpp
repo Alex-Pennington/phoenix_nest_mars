@@ -697,16 +697,17 @@ void Core::handle_tx_done(bool ok, const std::string& err) {
         const bool ow = f.id.compare(0, 3, "OW-") == 0;
         if (!ok) log(ow ? "" : f.id, (ow ? "orderwire to " : "ack to ") + f.dst + " failed: " + err);
         if (ok && !burst.empty()) {
-            // Written to the outbox, not on the air: gale-key keys it under
+            // Written to the outbox, not on the air: the controller keys it under
             // standing machine (key_answers), on the channel the radio is on.
-            // It takes the world of the message it answers, or of the station
-            // it goes to.
+            // It takes the service of the message it answers; an orderwire, or
+            // an ACK of something not held, that of the station it goes to in
+            // the book. None: it is never keyed (docs/api.md, ACK and orderwire).
             AnswerBurst a;
             a.about = ow ? std::string() : f.id;
             a.what = (ow ? "orderwire to " : "ack to ") + f.dst;
             a.dst = f.dst;
             auto m = ow ? std::nullopt : store_.get(f.id);
-            a.world = m && !m->world.empty() ? m->world : (world_refusal(f.dst).empty() ? "mars" : "amateur");
+            a.world = m ? m->world : route_for("", f.dst).service;
             a.channel = radio_label_locked();
             answer_bursts_[burst] = a;
             log(a.about, a.what + " written to the outbox as " + burst +
@@ -861,12 +862,16 @@ void Core::key_answers(bool machine_on) {
     for (auto& [burst, a] : answer_bursts_) {
         if (a.queued || a.asked) continue;
         std::string why;
-        if (a.world != "mars")
-            why = "it answers an item of the " + a.world + " world: the MARS message center never asks gale-key to key it";
+        if (a.world.empty())
+            why = "it has no service (the message it answers has none, or its station is not in the book)";
+        else if (a.world != "mars")
+            why = "it is of the " + a.world + " service: until stage 5 the core keys automatic sends in MARS only";
         else if (std::string w = world_refusal(a.dst); !w.empty())
             why = w + " (ask 40)";
         else if (a.channel.empty())
             why = "the controller reported no channel when it was written: never handed down";
+        else if (Route rt = route_for(a.world, a.dst, a.channel); !rt.ok)
+            why = rt.refusal;
         if (!why.empty()) {
             if (key_told_.insert(burst).second) log(a.about, a.what + " (" + burst + ") not asked of gale-key: " + why);
             continue;
@@ -881,6 +886,8 @@ void Core::key_answers(bool machine_on) {
                 if (x == answer_bursts_.end()) return false;
                 x->second.queued = false;
                 if (emcon_ || x->second.asked || !world_refusal(x->second.dst).empty()) return false;
+                // The route function again, as it goes.
+                if (!route_for(x->second.world, x->second.dst, x->second.channel).ok) return false;
                 x->second.asked = true;
                 return true;
             },
