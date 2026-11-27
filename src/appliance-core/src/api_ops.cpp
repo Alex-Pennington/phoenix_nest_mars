@@ -176,7 +176,7 @@ std::optional<std::string> handle_ops(Core& core, const std::string& cmd, std::m
         std::replace(members.begin(), members.end(), ',', ';');
         e.members = list_of(members, ';');
         e.note = req["note"];
-        e.world = req["world"];
+        e.world = req["service"].empty() ? req["world"] : req["service"];
         if (!ops->book_put(e, &err)) return err_reply(err);
         return ok_reply();
     }
@@ -199,7 +199,8 @@ std::optional<std::string> handle_ops(Core& core, const std::string& cmd, std::m
     }
     if (cmd == "book_import") {
         std::vector<std::string> dropped, errors;
-        int n = ops->book_import(req["csv"], req["source"], &dropped, &errors);
+        int n = ops->book_import(req["csv"], req["source"], &dropped, &errors,
+                                 req["service"].empty() ? req["world"] : req["service"]);
         JsonWriter w;
         w.begin_object().field("ok", errors.empty() || n > 0).field("imported", n);
         strings(w, "dropped_columns", dropped);
@@ -298,8 +299,8 @@ std::optional<std::string> handle_ops(Core& core, const std::string& cmd, std::m
         // Station design v1.9: the channel's world and HFLink label. Left
         // out, each keeps what the channel had (mars and none for a new one);
         // an empty label clears it.
-        if (req.count("world")) {
-            c.world = req["world"];
+        if (req.count("world") || req.count("service")) {
+            c.world = req["service"].empty() ? req["world"] : req["service"];
             for (auto& ch : c.world) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
             if (c.world != "mars" && c.world != "amateur") return err_reply("world: mars or amateur");
         }
@@ -332,7 +333,7 @@ std::optional<std::string> handle_ops(Core& core, const std::string& cmd, std::m
         if (c.mode.empty()) c.mode = "USB";  // a new channel with none given
         if (c.ant_rx == 0) c.ant_rx = old ? old->ant_rx : 1;
         if (c.ant_tx == 0) c.ant_tx = old ? old->ant_tx : 1;
-        if (c.world.empty()) c.world = old ? old->world : "mars";
+        if (c.world.empty() && old) c.world = old->world;  // a new channel names its service: no default
         if (!c.label_given) c.label = old ? old->label : "";
         c.label_given = true;
         bool same = old && old->hz == c.hz && old->mode == c.mode && old->use == c.use && old->ant_rx == c.ant_rx &&

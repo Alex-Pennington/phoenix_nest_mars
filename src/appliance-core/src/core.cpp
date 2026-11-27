@@ -889,8 +889,13 @@ size_t Core::answer_bursts() {
 // only, MARS only, on the channel they were written on (ask 40).
 void Core::key_answers(bool machine_on) {
     const auto now = std::chrono::steady_clock::now();
-    for (auto& [burst, a] : answer_bursts_) {
-        if (a.queued || a.asked) continue;
+    for (auto it = answer_bursts_.begin(); it != answer_bursts_.end();) {
+        const std::string burst = it->first;
+        AnswerBurst& a = it->second;
+        if (a.queued || a.asked) {
+            ++it;
+            continue;
+        }
         std::string why;
         if (a.world.empty())
             why = "it has no service (the message it answers has none, or its station is not in the book)";
@@ -903,9 +908,13 @@ void Core::key_answers(bool machine_on) {
         else if (Route rt = route_for(a.world, a.dst, a.channel); !rt.ok)
             why = rt.refusal;
         if (!why.empty()) {
-            if (key_told_.insert(burst).second) log(a.about, a.what + " (" + burst + ") not asked of gale-key: " + why);
+            // Never to be keyed: said once, and not held any longer.
+            log(a.about, a.what + " (" + burst + ") not handed to the controller: " + why);
+            key_told_.erase(burst);
+            it = answer_bursts_.erase(it);
             continue;
         }
+        ++it;
         if (!machine_on || now < a.retry) continue;
         a.queued = true;
         gk_->key_standing(

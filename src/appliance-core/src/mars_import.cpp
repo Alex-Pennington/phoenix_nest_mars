@@ -12,6 +12,11 @@
 #include <set>
 
 namespace pna {
+
+// The files this module reads (MARS rosters, frequency cards, checkerboards,
+// call lists) are MARS's: what they hold is of that service. Stage 2 takes
+// the service from the import request instead (greybeard-ale #18).
+constexpr const char* kMarsFiles = "mars";
 namespace marsio {
 
 namespace {
@@ -273,6 +278,7 @@ void stations(Ops& ops, const std::vector<Row>& rows, size_t head, const Fields&
         }
         if (!seen.insert(book_key(e.name)).second) continue;  // CALL and CALL/M: once
         std::string err;
+        if (e.world.empty()) e.world = kMarsFiles;
         if (!ops.book_put(e, &err)) {
             r.problems.push_back(where + err);
             continue;
@@ -293,6 +299,7 @@ void stations(Ops& ops, const std::vector<Row>& rows, size_t head, const Fields&
     // Collectives named in the file, then one per group or region column value.
     for (auto& c : collectives) {
         std::string err;
+        if (c.world.empty()) c.world = kMarsFiles;
         if (ops.book_put(c, &err)) {
             ++r.imported;
             r.names.push_back(book_key(c.name));
@@ -313,6 +320,7 @@ void stations(Ops& ops, const std::vector<Row>& rows, size_t head, const Fields&
         e.note = kind == "roster" ? "FROM THE ROSTER" : "FROM THE ADDRESS BOOK";
         e.source = source;
         std::string err;
+        if (e.world.empty()) e.world = kMarsFiles;
         if (ops.book_put(e, &err)) r.names.push_back(g);
     }
 }
@@ -355,6 +363,8 @@ void freqs(Ops& ops, const std::vector<Row>& rows, size_t head, const Fields& f,
         cs.push_back(c);
     }
     std::vector<std::string> errs;
+    for (auto& c : cs)
+        if (c.world.empty()) c.world = kMarsFiles;
     ops.channels().put_all(cs, &errs);
     for (auto& e : errs) r.problems.push_back(e);
     for (auto& c : cs)
@@ -709,6 +719,8 @@ bool channel_list(Ops& ops, const std::vector<Row>& rows, const std::string& sou
         cs.push_back(c);
     }
     std::vector<std::string> errs;
+    for (auto& c : cs)
+        if (c.world.empty()) c.world = kMarsFiles;
     ops.channels().put_all(cs, &errs);
     for (auto& e : errs) r.problems.push_back(e);
     for (auto& c : cs)

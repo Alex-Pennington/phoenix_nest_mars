@@ -420,7 +420,7 @@ int main() {
         Core k(CoreConfig{"K", db, 3, 1, true}, std::make_unique<GreybeardModem>(c));
         k.set_services(test_services());
         k.set_ops(std::make_shared<Ops>("K", db));
-        CHECK(ApiServer::handle(k, R"({"cmd":"channel_put","name":"P1","frequency":"13579"})").find("\"ok\":true") !=
+        CHECK(ApiServer::handle(k, R"({"cmd":"channel_put","name":"P1","frequency":"13579","world":"mars"})").find("\"ok\":true") !=
               std::string::npos);
         std::mutex lm;
         std::string lines;

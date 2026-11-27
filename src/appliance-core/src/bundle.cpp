@@ -491,6 +491,7 @@ FreqApplied apply_freqs(const Bundle& b, const std::vector<std::pair<std::string
             n = *have;
         } else {
             n.name = f.first;
+            n.world = "mars";  // a MARS bundle's channel (see the book entries above)
             for (auto& c : b.channels)
                 if (c.name == f.first) {
                     n.mode = c.mode;
@@ -538,6 +539,9 @@ Applied apply(const Bundle& b, Ops& ops, const std::string& source) {
     for (auto e : b.book) {
         auto old = ops.book_get(e.name);
         e.source = source;
+        // A startup bundle is the MARS net's (bundle.h): its entries are of
+        // that service until stage 2 takes it from the bundle (greybeard-ale #18).
+        if (e.world.empty()) e.world = old ? old->world : "mars";
         std::string err;
         if (old && same_entry(*old, e)) {
             ++a.book_same;

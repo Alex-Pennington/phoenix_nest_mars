@@ -124,7 +124,7 @@ int main() {
         "LOOP ONE,collective,,,,LOOP TWO,,\n"
         "LOOP TWO,collective,,,,LOOP ONE;STA-B,,\n"
         "BAD,station,not a call!,,,,,\n";
-    JsonValue r = call(a, {{"cmd", "book_import"}, {"csv", csv}, {"source", "test"}});
+    JsonValue r = call(a, {{"cmd", "book_import"}, {"csv", csv}, {"source", "test"}, {"service", "mars"}});
     CHECK(ok(r) && num(r, "imported") == 5);
     CHECK(first(r, "dropped_columns").s == "phone" && !str(r, "note").empty());
     CHECK(first(r, "errors").s.find("line 7") == 0);
@@ -136,9 +136,9 @@ int main() {
     CHECK(r.get("stations")->arr.size() == 1 && first(r, "loops").s == "LOOP ONE" && first(r, "unknown").s == "NOBODY");
     r = call(a, {{"cmd", "book_get"}, {"name", "RXXXB"}});  // found by RI
     CHECK(ok(r) && str(first(r, "entries"), "name") == "STA-B");
-    r = call(a, {{"cmd", "book_put"}, {"name", "STA-D"}, {"note", std::string(90, 'X')}});
+    r = call(a, {{"cmd", "book_put"}, {"world", "mars"}, {"name", "STA-D"}, {"note", std::string(90, 'X')}});
     CHECK(!ok(r) && str(r, "error").find("80") != std::string::npos);
-    CHECK(ok(call(a, {{"cmd", "book_put"}, {"name", "STA-D"}})));
+    CHECK(ok(call(a, {{"cmd", "book_put"}, {"world", "mars"}, {"name", "STA-D"}})));
     CHECK(call(a, {{"cmd", "book_export"}}).get("csv")->s.find("EXER NET,collective,,,,STA-B;STATION C") !=
           std::string::npos);
 

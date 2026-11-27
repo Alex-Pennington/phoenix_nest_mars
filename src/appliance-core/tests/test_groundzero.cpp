@@ -228,10 +228,12 @@ static void format_checks(const fs::path& dir) {
     e.call = "EOC-A";
     e.ale = "EOC@";
     e.note = "county eoc; callup #1";
+    e.world = "mars";
     CHECK(A.ops->book_put(e, nullptr));
     BookEntry f;
     f.name = "STA-F";
     f.note = "monitors 7.3455";
+    f.world = "mars";
     CHECK(A.ops->book_put(f, nullptr));
     std::string raw;
     JsonValue r = call(*A.core, {{"cmd", "bundle_make"}, {"label", "Practice Region"}, {"out", (dir / "fmt.pnb").string()}}, &raw);
@@ -283,6 +285,7 @@ static void format_checks(const fs::path& dir) {
         char name[16];
         std::snprintf(name, sizeof name, "STA-%03d", i);
         s.name = name;
+        s.world = "mars";
         s.ri = "UHA" + std::string(name).substr(4);
         s.note = "PRACTICE MEMBER NUMBER " + std::to_string(i) + " WITH A LONGER NOTE";
         CHECK(A.ops->book_put(s, nullptr));
@@ -536,6 +539,7 @@ static void sealed_frequencies(const fs::path& dir) {
     mine.name = "P1";
     mine.hz = 3330000;
     mine.mode = "USB";
+    mine.world = "mars";
     CHECK(E.ops->channels().put(mine, nullptr));
     r = call(*A.core, {{"cmd", "bundle_make"}, {"for", "STA-E"}});
     CHECK(ok(r) && str(r, "frequencies") == "sealed" && num(r, "frequencies_sealed") == 3);

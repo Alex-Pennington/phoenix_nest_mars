@@ -222,9 +222,9 @@ static void test_api(const fs::path& dir) {
     b.start();
 
     // The book: a tactical name for STA-B with its RI, STA-C, and a collective.
-    CHECK(ok(call(a, {{"cmd", "book_put"}, {"name", "IRONSIDE"}, {"call", "STA-B"}, {"ri", "RXXXB"}})));
-    CHECK(ok(call(a, {{"cmd", "book_put"}, {"name", "STA-C"}, {"ri", "RXXXC"}})));
-    CHECK(ok(call(a, {{"cmd", "book_put"}, {"name", "PRACTICE ROSTER"}, {"kind", "collective"},
+    CHECK(ok(call(a, {{"cmd", "book_put"}, {"world", "mars"}, {"name", "IRONSIDE"}, {"call", "STA-B"}, {"ri", "RXXXB"}})));
+    CHECK(ok(call(a, {{"cmd", "book_put"}, {"world", "mars"}, {"name", "STA-C"}, {"ri", "RXXXC"}})));
+    CHECK(ok(call(a, {{"cmd", "book_put"}, {"world", "mars"}, {"name", "PRACTICE ROSTER"}, {"kind", "collective"},
                       {"members", "IRONSIDE;STA-C;STA-Z"}})));
 
     // Schedules through the API, and the status feed's next net.

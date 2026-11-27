@@ -76,6 +76,7 @@ struct FakeController {
     std::string standing_service;  // when set, a standing prepare's summary names this service
     std::string refuse_prepare;    // when set, an air prepare is refused with this reason
     std::string refuse_key;        // when set, a key is not accepted, with this reason
+    bool no_accepted_field = false;  // a key's ok reply without "accepted"
     std::atomic<int> key_ms{0};    // how long a key lasts before its result file comes
     std::string radio, radio_service = "mars";  // where status says the radio is ("" none)
     std::mutex mu;
@@ -198,6 +199,7 @@ struct FakeController {
                 if (ms > 0) std::this_thread::sleep_for(std::chrono::milliseconds(ms));
                 result(wav, good, why);
             });
+            if (no_accepted_field) return R"({"ok":true,"send":"K-)" + std::to_string(++n) + R"("})";
             return R"({"ok":true,"accepted":true,"send":"K-)" + std::to_string(++n) + R"(","waiting":""})";
         }
         if (cmd == "grant") {
@@ -562,13 +564,16 @@ int main() {
         std::this_thread::sleep_for(std::chrono::milliseconds(600));
         CHECK(f.count("key") == keys_before_auto && s.state(r1) == "written");  // routing is off: not asked
 
+        // A mode needs its service named: none is never read as MARS.
+        rep = call(*s.core, {{"cmd", "standing_prepare"}, {"mode", "routing"}});
+        CHECK(!ok(rep) && has(str(parsed(rep), "error"), "service"));
         // amateur_auto is never asked for; nor a mode in another service until stage 5.
         CHECK(!ok(call(*s.core, {{"cmd", "standing_prepare"}, {"mode", "amateur_auto"}})));
         rep = call(*s.core, {{"cmd", "standing_prepare"}, {"mode", "routing"}, {"service", "amateur"}});
         CHECK(!ok(rep) && has(str(parsed(rep), "error"), "stage 5"));
         const int prepares2 = f.count("prepare");
 
-        rep = call(*s.core, {{"cmd", "standing_prepare"}, {"mode", "routing"}});
+        rep = call(*s.core, {{"cmd", "standing_prepare"}, {"mode", "routing"}, {"service", "mars"}});
         v = parsed(rep);
         CHECK(flag(v, "ok") && no_secret(rep, f));
         const std::string sid = str(v, "prepare_id");
@@ -621,13 +626,13 @@ int main() {
 
         // The controller's summary naming another service: no standing grant is held.
         f.standing_service = "amateur";
-        rep = call(*s.core, {{"cmd", "standing_prepare"}, {"mode", "machine"}});
+        rep = call(*s.core, {{"cmd", "standing_prepare"}, {"mode", "machine"}, {"service", "mars"}});
         CHECK(!ok(rep) && s.gk->held() == 0);
         f.standing_service.clear();
 
         // A mode on through the y, as the operator does it.
         auto grant = [&](const std::string& mode) {
-            std::string pr = call(*s.core, {{"cmd", "standing_prepare"}, {"mode", mode}});
+            std::string pr = call(*s.core, {{"cmd", "standing_prepare"}, {"mode", mode}, {"service", "mars"}});
             const std::string id = str(parsed(pr), "prepare_id");
             s.now = s.now + 2;
             return ok(call(*s.core, {{"cmd", "key_confirm"}, {"prepare_id", id}, {"confirm", "Y"}}));
@@ -638,7 +643,7 @@ int main() {
         s.core->set_emcon(true);
         CHECK(s.gk->standing().empty());
         CHECK(f.last("revoke") && str(*f.last("revoke"), "mode") == "all");
-        CHECK(!ok(call(*s.core, {{"cmd", "standing_prepare"}, {"mode", "machine"}})));  // not under EMCON
+        CHECK(!ok(call(*s.core, {{"cmd", "standing_prepare"}, {"mode", "machine"}, {"service", "mars"}})));  // not under EMCON
         s.core->set_emcon(false);
 
         // gale-key drops a grant by itself (its hourly cap): the controller accepts
@@ -758,6 +763,15 @@ int main() {
         s.now = s.now + 2;
         CHECK(ok(call(*s.core, {{"cmd", "key_confirm"}, {"prepare_id", p3}, {"confirm", "Y"}})));
         CHECK(wait_for([&] { return s.state(id2) == "sent"; }, 5000));
+        // An ok reply that leaves out "accepted" is taken as accepted: the result file decides.
+        f.no_accepted_field = true;
+        const std::string idn = s.written("FARSTN", "OK WITHOUT ACCEPTED");
+        const std::string pn = str(parsed(call(*s.core, {{"cmd", "key_prepare"}, {"msg_id", idn}})), "prepare_id");
+        s.now = s.now + 2;
+        rep = call(*s.core, {{"cmd", "key_confirm"}, {"prepare_id", pn}, {"confirm", "Y"}});
+        CHECK(ok(rep) && flag(sub(parsed(rep), "controller"), "accepted"));
+        CHECK(wait_for([&] { return s.state(idn) == "sent"; }, 5000));
+        f.no_accepted_field = false;
         // A refused result file fails the message, with the reason.
         {
             std::lock_guard<std::mutex> g(f.mu);
@@ -944,7 +958,7 @@ int main() {
             return n && n->type == JsonValue::Type::Number ? static_cast<int>(n->n) : -1;
         };
         auto grant = [&](const std::string& mode) {
-            std::string pr = call(*s.core, {{"cmd", "standing_prepare"}, {"mode", mode}});
+            std::string pr = call(*s.core, {{"cmd", "standing_prepare"}, {"mode", mode}, {"service", "mars"}});
             const std::string id = str(parsed(pr), "prepare_id");
             s.now = s.now + 2;
             return ok(call(*s.core, {{"cmd", "key_confirm"}, {"prepare_id", id}, {"confirm", "Y"}}));
@@ -1060,6 +1074,8 @@ int main() {
         std::this_thread::sleep_for(std::chrono::milliseconds(500));
         CHECK(f.count("key") == 2);
         CHECK(has(s.events_text(), "TEST-HAM4 is an amateur station"));
+        // A burst that will never be keyed is not held: answers_written goes back.
+        CHECK(wait_for([&] { return s.core->answer_bursts() == before; }, 3000));
     }
 
     // ---- radio_channel is the controller's report, not a label the core was told
@@ -1165,7 +1181,7 @@ int main() {
             s.core->set_emcon(false);
         }
 
-        std::string pr = call(*s.core, {{"cmd", "standing_prepare"}, {"mode", "routing"}});
+        std::string pr = call(*s.core, {{"cmd", "standing_prepare"}, {"mode", "routing"}, {"service", "mars"}});
         const std::string sid = str(parsed(pr), "prepare_id");
         s.now = s.now + 2;
         CHECK(ok(call(*s.core, {{"cmd", "key_confirm"}, {"prepare_id", sid}, {"confirm", "Y"}})));

@@ -221,11 +221,11 @@ static void first_start_service(const fs::path& dir) {
 
     // A frequency card by hand: no frequency in any reply or the log.
     std::string all;
-    all += cli(port, "channels add p1 5000.0 --mode USB --use PRIMARY");
-    all += cli(port, "channels add P2 10 --unit mhz --mode USB --use SECONDARY");
-    all += cli(port, "channels add S1 2500000 --unit hz --mode ALE --use SCAN");
+    all += cli(port, "channels add p1 5000.0 --mode USB --use PRIMARY --service mars");
+    all += cli(port, "channels add P2 10 --unit mhz --mode USB --use SECONDARY --service mars");
+    all += cli(port, "channels add S1 2500000 --unit hz --mode ALE --use SCAN --service mars");
     // And by the channel form: the CHU time signal, 3330 kHz.
-    std::string shown = cli(port, "form fill CHANNEL name=t1 frequency=3330 use=TIME");
+    std::string shown = cli(port, "form fill CHANNEL name=t1 frequency=3330 use=TIME world=MARS");
     r = parse(cli(port, "form show CHANNEL name=T1"));
     CHECK(ok(r) && yes(r, "prefilled"));
     shown += cli(port, "form show CHANNEL name=T1");  // lists the units, so no MHZ check
@@ -332,7 +332,7 @@ static void hand_entered_into_bundle(const fs::path& dir) {
     Box A = open_box(dir / "hand", "NCS-A");
     Box B = open_box(dir / "hand", "STA-B");
     std::string raw;
-    JsonValue r = api(*A.core, {{"cmd", "channel_put"}, {"name", "p1"}, {"frequency", "5000.0"}, {"mode", "usb"}, {"use", "Primary"}}, &raw);
+    JsonValue r = api(*A.core, {{"cmd", "channel_put"}, {"name", "p1"}, {"frequency", "5000.0"}, {"mode", "usb"}, {"use", "Primary"}, {"world", "mars"}}, &raw);
     CHECK(ok(r) && str(r, "name") == "P1" && str(r, "result") == "added" && str(r, "mode") == "USB");
     CHECK(!leaks(raw, "5000"));
     auto p1 = A.ops->channels().get("P1");
@@ -353,7 +353,7 @@ static void hand_entered_into_bundle(const fs::path& dir) {
     CHECK(!ok(api(*A.core, {{"cmd", "channel_put"}, {"name", "P2"}, {"frequency", "10000"}, {"unit", "ghz"}})));
     CHECK(!A.ops->channels().get("P2"));
     // A use that looks like a frequency isn't kept.
-    r = api(*A.core, {{"cmd", "channel_put"}, {"name", "P2"}, {"frequency", "10000"}, {"use", "ALT 10000.0 KHZ"}}, &raw);
+    r = api(*A.core, {{"cmd", "channel_put"}, {"name", "P2"}, {"frequency", "10000"}, {"use", "ALT 10000.0 KHZ"}, {"world", "mars"}}, &raw);
     CHECK(ok(r) && str(r, "use").empty() && !leaks(raw, "10000"));
     r = api(*A.core, {{"cmd", "channels_list"}}, &raw);
     CHECK(ok(r) && !leaks(raw, "5000") && !leaks(raw, "10000"));

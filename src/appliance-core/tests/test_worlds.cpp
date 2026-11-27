@@ -342,12 +342,26 @@ int main() {
     std::string e;
 
     // ---- the book and the channel plan carry the service --------------------
-    CHECK(ok(call(a, {{"cmd", "book_put"}, {"name", "STA-B"}, {"kind", "station"}})));
+    CHECK(ok(call(a, {{"cmd", "book_put"}, {"name", "STA-B"}, {"kind", "station"}, {"world", "mars"}})));
     CHECK(ok(call(a, {{"cmd", "book_put"}, {"name", "HAM ONE"}, {"call", "TEST-HAM1"}, {"world", "amateur"}})));
-    CHECK(ok(call(a, {{"cmd", "book_put"}, {"name", "MIXED"}, {"kind", "collective"}, {"members", "STA-B;HAM ONE"}})));
-    CHECK(ok(call(a, {{"cmd", "channel_put"}, {"name", "M1"}, {"frequency", "5100"}})));
+    CHECK(ok(call(a, {{"cmd", "book_put"}, {"name", "MIXED"}, {"kind", "collective"}, {"members", "STA-B;HAM ONE"}, {"world", "mars"}})));
+    CHECK(ok(call(a, {{"cmd", "channel_put"}, {"name", "M1"}, {"frequency", "5100"}, {"world", "mars"}})));
     CHECK(ok(call(a, {{"cmd", "channel_put"}, {"name", "H1"}, {"frequency", "5200"}, {"world", "amateur"}})));
     CHECK(ops->book_find("TEST-HAM1") && ops->book_find("TEST-HAM1")->world == "amateur");
+    // No service is never read as MARS: an entry or a new channel without one is refused.
+    CHECK(has(str(call(a, {{"cmd", "book_put"}, {"name", "NO SERVICE"}, {"call", "TEST-NONE"}}), "error"), "service"));
+    CHECK(!ops->book_find("TEST-NONE"));
+    CHECK(ok(call(a, {{"cmd", "book_put"}, {"name", "BY SERVICE"}, {"call", "TEST-SVC"}, {"service", "amateur"}})));
+    CHECK(ops->book_find("TEST-SVC") && ops->book_find("TEST-SVC")->world == "amateur");
+    CHECK(has(str(call(a, {{"cmd", "channel_put"}, {"name", "N1"}, {"frequency", "5400"}}), "error"), "service"));
+    CHECK(ok(call(a, {{"cmd", "channel_put"}, {"name", "M1"}, {"frequency", "5100"}})));  // an existing channel keeps its own
+    CHECK(ops->channels().get("M1") && ops->channels().get("M1")->world == "mars");
+    // status says when the tables are a test stand's, not root's.
+    {
+        JsonValue st = call(a, {{"cmd", "status"}});
+        CHECK(st.get("services_unlocked") && st.get("services_unlocked")->type == JsonValue::Type::Bool &&
+              st.get("services_unlocked")->b);
+    }
 
     // ---- services_list: the tables' columns that carry no frequency ---------
     {

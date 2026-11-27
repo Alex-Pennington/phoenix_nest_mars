@@ -143,7 +143,10 @@ void channels(const fs::path& dir) {
     Box A = open_box(dir / "ch", "NCS-A");
     Core& c = *A.core;
     std::string raw, all;
+    // A new channel names its service: none is never read as MARS.
     JsonValue r = api(c, {{"cmd", "channel_put"}, {"name", "p1"}, {"frequency", "5000"}, {"use", "primary"}}, &raw);
+    CHECK(!ok(r) && str(r, "error").find("service") != std::string::npos && !A.ops->channels().get("P1"));
+    r = api(c, {{"cmd", "channel_put"}, {"name", "p1"}, {"frequency", "5000"}, {"use", "primary"}, {"world", "mars"}}, &raw);
     all += raw;
     CHECK(ok(r) && str(r, "result") == "added" && str(r, "world") == "mars" && str(r, "label").empty());
 
@@ -237,7 +240,7 @@ void channels(const fs::path& dir) {
     CHECK(ok(r));
     // A call-up names ACP 126's three-letter channel.
     CHECK(ok(api(c, {{"cmd", "channel_put"}, {"name", "AMX"}, {"frequency", "15000"}, {"world", "amateur"}})));
-    CHECK(ok(api(c, {{"cmd", "channel_put"}, {"name", "QXA"}, {"frequency", "5000"}})));
+    CHECK(ok(api(c, {{"cmd", "channel_put"}, {"name", "QXA"}, {"frequency", "5000"}, {"world", "mars"}})));
     r = api(c, {{"cmd", "net_callup"}, {"service", "mars"}, {"channel", "AMX"}});
     CHECK(!ok(r) && str(r, "error").find("amateur channel") != std::string::npos);
     CHECK(ok(api(c, {{"cmd", "net_callup"}, {"service", "mars"}, {"channel", "QXA"}})));
@@ -249,7 +252,7 @@ void channels(const fs::path& dir) {
 void locks(const fs::path& dir) {
     Box A = open_box(dir / "lock", "NCS-A");
     Core& c = *A.core;
-    CHECK(ok(api(c, {{"cmd", "channel_put"}, {"name", "P1"}, {"frequency", "5000"}})));
+    CHECK(ok(api(c, {{"cmd", "channel_put"}, {"name", "P1"}, {"frequency", "5000"}, {"world", "mars"}})));
     std::string err;
     CHECK(!records::set_locked({"channels", "nothing"}, &err) && err.find("nothing") != std::string::npos);
     CHECK(records::locked().empty());
@@ -273,7 +276,7 @@ void locks(const fs::path& dir) {
     // Reading is never refused, and other kinds still change.
     CHECK(ok(api(c, {{"cmd", "channels_list"}})) && ok(api(c, {{"cmd", "channels_get_full"}})));
     CHECK(ok(api(c, {{"cmd", "sched_put"}, {"name", "TEST NET"}, {"days", "TUE"}, {"time", "1900"}})));
-    CHECK(ok(api(c, {{"cmd", "book_put"}, {"name", "STA-B"}})));
+    CHECK(ok(api(c, {{"cmd", "book_put"}, {"world", "mars"}, {"name", "STA-B"}})));
 
     // settings_list names each kind and its class.
     r = api(c, {{"cmd", "settings_list"}});
@@ -298,7 +301,7 @@ void locks(const fs::path& dir) {
     CHECK(ok(api(c, {{"cmd", "form_submit"}, {"form", "CHANNEL"}, {"name", "P1"}, {"mode", ""}})));
     CHECK(A.ops->channels().get("P1")->mode == "LSB");
     // A new channel with none given takes port 1.
-    CHECK(ok(api(c, {{"cmd", "form_submit"}, {"form", "CHANNEL"}, {"name", "P7"}, {"frequency", "7000"}})));
+    CHECK(ok(api(c, {{"cmd", "form_submit"}, {"form", "CHANNEL"}, {"name", "P7"}, {"frequency", "7000"}, {"world", "MARS"}})));
     CHECK(A.ops->channels().get("P7") && A.ops->channels().get("P7")->ant_tx == 1 &&
           A.ops->channels().get("P7")->ant_rx == 1 && A.ops->channels().get("P7")->mode == "USB");
     A.core->stop();
@@ -451,6 +454,7 @@ void add_heard(const fs::path& dir) {
     BookEntry mine;
     mine.name = "STA-A";
     mine.note = "KEPT";
+    mine.world = "mars";
     std::string err;
     CHECK(ob->book_put(mine, &err));
     send("THIRD");

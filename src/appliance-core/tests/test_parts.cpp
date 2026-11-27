@@ -407,7 +407,7 @@ static void drill(const fs::path& dir) {
     for (int i = 1; i <= 260; ++i) {
         char call_[16];
         std::snprintf(call_, sizeof call_, "STA-%03d", i);
-        r = call(*A.core, {{"cmd", "book_put"}, {"name", call_}, {"call", call_}, {"note", "practice member, made up"}});
+        r = call(*A.core, {{"cmd", "book_put"}, {"world", "mars"}, {"name", call_}, {"call", call_}, {"note", "practice member, made up"}});
         CHECK(ok(r));
     }
     radio_a->hold(true);
@@ -577,7 +577,7 @@ static void rally(const fs::path& dir) {
     for (int i = 1; i <= 260; ++i) {
         char n[24];
         std::snprintf(n, sizeof n, "PRACTICE-%03d", i);
-        CHECK(ok(call(*A.core, {{"cmd", "book_put"}, {"name", n}, {"call", n}, {"note", "made up for the drill"}})));
+        CHECK(ok(call(*A.core, {{"cmd", "book_put"}, {"world", "mars"}, {"name", n}, {"call", n}, {"note", "made up for the drill"}})));
     }
     CHECK(ok(form(*A.core, "BUNDLE_MAKE", {{"out", (stick / "region.pnb").string()}})));
     r = call(*A.core, {{"cmd", "bundle_send"}, {"service", "mars"}, {"to", everyone}, {"file", (stick / "region.pnb").string()}});

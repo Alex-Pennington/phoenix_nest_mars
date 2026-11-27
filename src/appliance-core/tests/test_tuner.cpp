@@ -178,6 +178,7 @@ static Channel chan(const std::string& name, int64_t hz, int rx, int tx) {
     c.name = name;
     c.hz = hz;
     c.mode = "USB";
+    c.world = "mars";
     c.ant_rx = rx;
     c.ant_tx = tx;
     return c;
@@ -263,7 +264,7 @@ static void channel_form(const fs::path& dir) {
     r = api(*core, R"({"cmd":"form_submit","form":"CHANNEL","name":"P1","frequency":"5000"})");
     CHECK(okv(r));
     CHECK(ops->channels().get("P1") && ops->channels().get("P1")->ant_rx == 1 && ops->channels().get("P1")->ant_tx == 2);
-    r = api(*core, R"({"cmd":"form_submit","form":"CHANNEL","name":"P5","frequency":"7000"})");
+    r = api(*core, R"({"cmd":"form_submit","form":"CHANNEL","name":"P5","frequency":"7000","world":"MARS"})");
     CHECK(okv(r));
     CHECK(ops->channels().get("P5") && ops->channels().get("P5")->ant_rx == 1 && ops->channels().get("P5")->ant_tx == 1);
     // RX on 1, TX on 1, then TX on 2.

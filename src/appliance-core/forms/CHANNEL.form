@@ -42,7 +42,7 @@ Tuner port this channel transmits on, 1 or 2. The tuner switches to it before ea
 END
 
 World:
-MARS or AMATEUR. The message center sends and routes only on MARS channels; an amateur channel is there to listen on. Blank keeps what the channel has (MARS for a new one).
+The channel's service, MARS or AMATEUR. A message goes only on a channel of its own service. Blank keeps what the channel has; a new channel needs one.
 END
 
 HFLink label:

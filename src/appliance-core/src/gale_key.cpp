@@ -132,7 +132,9 @@ GaleKeyReply GaleKeySocket::call(const std::string& request) {
     const JsonValue* ok = r.body.get("ok");
     r.ok = ok && ok->type == JsonValue::Type::Bool && ok->b;
     const JsonValue* acc = r.body.get("accepted");
-    r.accepted = acc && acc->type == JsonValue::Type::Bool && acc->b;
+    // An ok reply that leaves "accepted" out is taken as accepted: the
+    // result file decides what became of it.
+    r.accepted = acc ? acc->type == JsonValue::Type::Bool && acc->b : r.ok;
     const JsonValue* ex = r.body.get("exit");
     if (ex && ex->type == JsonValue::Type::Number) r.exit = static_cast<int>(ex->n);
     r.reason = text_of(r.body, "reason");

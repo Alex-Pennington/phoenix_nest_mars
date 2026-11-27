@@ -241,6 +241,7 @@ int main() {
         c.name = "P1";
         c.hz = 13579246;
         c.mode = "USB";
+        c.world = "mars";
         std::string err;
         CHECK(ops->channels().put(c, &err));
     }

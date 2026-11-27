@@ -32,7 +32,7 @@ struct BookEntry {
     std::vector<std::string> members;  // collective: names of stations or collectives
     std::string note;     // short, no personal details
     std::string source;   // "local" or what the import said
-    std::string world = "mars";  // mars or amateur: an amateur entry is never sent to (ask 37)
+    std::string world;  // the entry's service (mars or amateur until stage 2); required, never a default
 };
 
 struct Resolved {
@@ -186,10 +186,12 @@ public:
     // By name, call, RI or ALE address.
     std::optional<BookEntry> book_find(const std::string& any);
     std::vector<BookEntry> book_list();
-    // CSV with a header row: name,kind,call,ri,ale,members,note (members split
-    // on ';' or '|'). Other columns are dropped and named in *dropped.
+    // CSV with a header row: name,kind,call,ri,ale,members,note,world (members
+    // split on ';' or '|'; service is read as world). Other columns are dropped
+    // and named in *dropped. A row naming no service takes `service`; with
+    // neither, the row is refused (never read as MARS).
     int book_import(const std::string& csv, const std::string& source, std::vector<std::string>* dropped,
-                    std::vector<std::string>* errors);
+                    std::vector<std::string>* errors, const std::string& service = "");
     std::string book_export();
     Resolved resolve(const std::string& name_or_list);
     // The calls to send to for `to`: the book's resolution when it knows the

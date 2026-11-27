@@ -2942,6 +2942,8 @@ std::string ApiServer::handle_call(Core& core, const std::string& line) {
         }
         auto adv = compose::advisor();
         w.field("advisor", adv ? adv->name() : std::string());
+        // The service tables are a test stand's (--services-unlocked), not root's.
+        w.field("services_unlocked", core.services() ? core.services()->unlocked() : false);
         // Link state from greybeard-ale (link_monitor.h); "link": null with no source.
         write_link(w, s);
         // gale-key (gale_key.h): answering or not and why, standing modes on.

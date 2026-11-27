@@ -58,6 +58,9 @@ public:
     bool valid(const std::string& name) const { return find(name) != nullptr; }
     std::vector<const Service*> all() const;  // by name
     const std::string& dir() const { return dir_; }
+    // The root check was lifted (--services-unlocked, or tables given as
+    // texts): a test stand's tables, never a station's.
+    bool unlocked() const { return unlocked_; }
 
     // Whether a service needs a call and has none: listen_only_without_call
     // and no line of identity_file (under local_dir) matches call_pattern.
@@ -65,6 +68,7 @@ public:
 
 private:
     std::string dir_;
+    bool unlocked_ = false;
     std::map<std::string, Service> by_name_;
 };
 

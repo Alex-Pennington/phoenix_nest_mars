@@ -216,6 +216,7 @@ bool parse_service_table(const std::string& stem, const std::string& text, Servi
 std::shared_ptr<Services> Services::from_texts(const std::map<std::string, std::string>& files,
                                                std::vector<std::string>* refused) {
     auto out = std::make_shared<Services>();
+    out->unlocked_ = true;  // never read from root's files
     for (auto& [stem, text] : files) {
         Service s;
         std::string why;
@@ -233,6 +234,7 @@ std::shared_ptr<Services> Services::load(const std::string& dir, const Options& 
         if (refused) refused->push_back("no service tables: " + dir + " is not a directory");
         auto none = std::make_shared<Services>();
         none->dir_ = dir;
+        none->unlocked_ = !opt.require_root;
         return none;
     }
     std::vector<fs::path> files;
@@ -261,6 +263,7 @@ std::shared_ptr<Services> Services::load(const std::string& dir, const Options& 
     }
     auto out = from_texts(texts, refused);
     out->dir_ = dir;
+    out->unlocked_ = !opt.require_root;
     return out;
 }
 

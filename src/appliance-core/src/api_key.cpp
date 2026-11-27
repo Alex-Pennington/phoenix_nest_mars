@@ -115,7 +115,9 @@ std::optional<std::string> handle_key(Core& core, const std::string& cmd, std::m
     if (cmd == "standing_prepare") {
         const std::string mode = req["mode"];
         if (core.emcon()) return err("EMCON is on: no standing mode is turned on until it is off");
-        GaleKey::Prepared p = gk->prepare_standing(mode, req["service"].empty() ? std::string("mars") : req["service"]);
+        // The mode's service is named; none is never read as MARS.
+        if (req["service"].empty()) return err("give the service the mode is for (service)");
+        GaleKey::Prepared p = gk->prepare_standing(mode, req["service"]);
         if (!p.ok) return err(p.error);
         JsonWriter w;
         w.begin_object()
