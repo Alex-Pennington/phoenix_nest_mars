@@ -359,9 +359,10 @@ as MARS. Alex's hard rule stands: there is no forward or auto-copy route between
   formats its table lists in `formats`.
 - **No station-wide transmit world.** A send carries its own service. The settings row
   `tx-world` and the keying file's `tx_world` retire.
-- **The controller, not gale-key.** The core hands each burst to greybeard-ale's station
-  controller (greybeard-ale `docs/station-controller.md`) as a network message (D.4.2.8.3),
-  and never talks to gale-key (Keying, below). EMCON is the standard's "radio silence"
+- **The controller, not gale-key.** The core hands each message to greybeard-ale's station
+  controller (greybeard-ale `docs/station-controller.md`) as a network message (D.4.2.8.3):
+  the frame over STANAG 5066 SIS, unopened, and its control part on the controller's local
+  socket (decision D11, greybeard-ale #18). It never talks to gale-key (Keying, below). EMCON is the standard's "radio silence"
   (D.5.2.7, table D-IX), a network management setting.
   `radio_channel` in `status` is the controller's report of the radio's channel and its service.
   It is no longer a label the core was told.
@@ -1786,93 +1787,103 @@ nothing. In training it writes to the practice station's folder, as `export` doe
 
 ## Transmit: written, then sent
 
-The core never keys the radio. With the greybeard modem it writes each burst
-to the outbox as `BURST.wav` and marks the message `written`. The core hands
-it to greybeard-ale's station controller (next section), which orders
-gale-key. For every key the controller accepts, one result file is written
-beside the WAV: gale-key's, or the controller's own `refused` when it never
-ordered the key. It is written whole, as `.BURST.key.json.tmp` renamed to
-`BURST.key.json`:
+The core never keys the radio. With the station controller it doesn't build the burst either. It
+writes each message as its frame, marks it `written`, and hands the frame down unopened over
+STANAG 5066 SIS (next section). The controller builds the 110A burst, orders gale-key, and
+answers the frame on SIS. That answer is the result:
 
-```
-{"version":1,"burst":"BURST.wav","result":"keyed","why":"","at":"2026-11-26T15:00:00Z"}
-```
+- `S_UNIDATA_REQUEST_CONFIRM`: keyed. The message becomes `sent`, and its ack clock starts then.
+- `S_UNIDATA_REQUEST_REJECTED`: not keyed. The message becomes `failed`, shown to the operator as
+  "not keyed: why". `why` is the controller's sentence, read from its `status` under the frame's
+  sha256, because SIS carries only a reason code. A reject that follows `key_cancel` puts the
+  message back to `written`.
+- No answer within the time to live plus 30 s, or a dropped connection, fails the message, and the
+  queue treats it as any failed send.
+- A result for an ack or orderwire is logged only.
+- The SIS answer is the one source of truth. The controller's replies on its local socket are
+  logged and shown to the operator, and never change a message's state.
+- `status` counts `written`.
 
-- `result` is `keyed` or `refused`; `why` says why it refused (shown to the
-  operator as "not keyed: why").
-- On `keyed` the message becomes `sent` and its ack clock starts then.
-- The core reads and removes each result file. One it can't read, or one
-  naming another burst, is renamed `.key.json.bad` and changes nothing.
-- A result for an ack or orderwire burst is logged only.
-- There is no timeout: a burst stays `written` until a result comes.
-- The result file is the one source of truth. The controller's reply on its
-  socket is logged and shown to the operator, and never changes a message's
-  state.
-- `status` counts `written`. `tools/stub_channel.py --key-results` writes
-  these files for testing.
+`link = burst`, with no controller, is unchanged: practice, test stands, and
+`tools/stub_channel.py --key-results`. The core runs gale-tx into the outbox and reads
+`BURST.key.json` beside each WAV.
+
+*Until 2026-11-27 (D11) the core built every burst itself and learnt the result only from
+`BURST.key.json`, written by gale-key or by the controller. Superseded by the SIS answer. The old
+text is in this file's git history.*
 
 ## Keying: the core asks the station controller
 
-greybeard-ale's station controller (gale-rx grown, greybeard-ale
-`docs/station-controller.md`) is the link controller for the one radio. The
-core is the networking controller, and the controller's socket is its
-interface to link controllers (141B D.4.2.8). The core hands down a burst
-already in the outbox and never keys the radio itself. It never talks to
-gale-key: the controller orders it. There is no VOX. The socket is
-`--controller-socket` (default `/run/gale-rx/control.sock`; `none` sets no
-controller). `--gale-key-socket` is read as it for one release. Only a station
-on the greybeard modem has one. Training refuses every call here.
+greybeard-ale's station controller (gale-rx grown, greybeard-ale `docs/station-controller.md`)
+is the link controller for the station's radios. The core is the networking controller. The
+interface between them is 141B D.4.2.8, and it runs on two sockets (decision D11, greybeard-ale
+#18):
 
-The interface has the three parts of D.4.2.8. No channel number and no
-frequency cross it.
+- **SIS** (STANAG 5066 Annex A) carries the network message. This is the core's 5066 client
+  (docs/stanag-5066-client.md) with `link = controller`, connected to the controller at
+  `s5066-port` (default 5066) and bound to SAP `s5066-sap` (3). Each frame goes as one
+  `S_UNIDATA_REQUEST` to the all-stations address. Stage 1 makes no link, and the addressee is
+  in the frame header and in `to` (below). Priority comes from the precedence, as in that
+  document, and the time to live is `s5066-ttl` (600 s). The controller's MTU holds the largest
+  frame, so a frame is never cut into pieces. The client waits for one confirm or reject per
+  request, a broadcast included. Receive stays as `link = burst` has it: the modems' captures.
+- **The local socket** carries what SIS has no field for: each message's control part (`to`,
+  `service`, the `channel` label the operator picked, `kind`, `control`, `final`, and the token or
+  a standing mode), the y, grants, and status. The socket is `--controller-socket` (default
+  `/run/gale-rx/control.sock`, `none` sets no controller), one JSON line each way.
+  `--gale-key-socket` is read as it for one release.
 
-1. **Link control** (D.4.2.8.1). The core asks for the radio, and names the
-   destination by its link-level address. The controller reports success or
-   failure, who is linked, and why a send waits: `claim`, `release` and
-   `status`. `key_status` sends `{"cmd":"status"}`.
-2. **Link quality reporting** (D.4.2.8.2). Reports per station, which feed the
-   core's stations heard. They name no channel. Today they come from the
-   scanner, and stage 1 adds none.
-3. **Network messages** (D.4.2.8.3). Each burst goes down in two parts. The
-   first is `message`, which the controller carries unopened. The second is
-   `control`, the control information: the link-level addressee `to`, the
-   `service`, and the requirements for the transmission (the `channel` label
-   the operator picked, `kind`, `control`, `final`, and the token or a
-   standing mode).
+The core never talks to gale-key, and it never keys the radio: the controller orders gale-key.
+There is no VOX. `tx-mode` and `tx-cmd` leave the core for this link, because the controller
+runs gale-tx (its own `waveform-mode`). Only a station on the greybeard modem has a controller.
+Training refuses every call here. No channel number and no frequency cross either socket.
 
-| When | The core sends the controller |
+A message's control part names its frame by the frame's sha256. The core always sends the frame
+first and the control part after it:
+
+| When | The core sends |
 |---|---|
-| `key_prepare` | `{"cmd":"prepare","message":{"wav":"/abs/OUTBOX/BURST.wav"},"control":{"to":"<ADDRESS>","service":"S","channel":"<LABEL>","kind":"air","control":"local","final":false}}` |
-| `key_confirm` on a send | the same with `"cmd":"key"` and `"token"` in `control` |
-| an automatic send, once written | `{"cmd":"key","message":{"wav":...},"control":{"to":"<ADDRESS>","service":"S","channel":"<LABEL>","kind":"air","control":"automatic","final":false,"standing":"routing"}}` |
+| `key_prepare` | the frame on SIS, then `{"cmd":"prepare","message":{"sha256":"<hex>"},"control":{"to":"<ADDRESS>","service":"S","channel":"<LABEL>","kind":"air","control":"local","final":false}}` |
+| `key_confirm` on a send | `{"cmd":"key","message":{"sha256":...},"control":{... the same, "token":...}}` |
+| `key_cancel` | `{"cmd":"cancel","message":{"sha256":...}}` |
+| an automatic send, once written | the frame on SIS, then `key` with `"control":"automatic","standing":"routing"` and no token |
 | an ACK or orderwire, once written | the same with `"standing":"machine"` |
 | `standing_prepare` | `{"cmd":"prepare","kind":"standing:routing","service":"S"}` |
 | `key_confirm` on a mode | `{"cmd":"grant","mode":"routing","service":"S","token":...}` |
 | `standing_off`, or the BBS mode turned off | `{"cmd":"revoke","mode":"routing"}` (or `"all"`) |
 | `key_status` | `{"cmd":"status"}` |
 
-Grants and revocations are network management, and the controller passes them
-to gale-key.
+The three parts of D.4.2.8:
 
-**The reply comes when the controller accepts the send.** The controller
-takes custody of what it accepts and answers at once. It then claims the
-radio, tunes it, reads it back and orders gale-key. `--controller-timeout-ms`
-(default 5000) bounds that reply, never the key. The result follows when the
-key is over, as the result file (Transmit, above).
+1. **Link control** (D.4.2.8.1). The controller claims the radio for each send itself, so in
+   stage 1 the core asks for no link. `key_status` reads why a send waits.
+2. **Link quality reporting** (D.4.2.8.2). Reports per station feed the core's stations heard.
+   They name no channel. Today they come from the scanner, and stage 1 adds none.
+3. **Network messages** (D.4.2.8.3). The frame, handled transparently, goes over SIS. The control
+   part goes on the local socket.
 
-A burst is handed down only when all of these hold. Otherwise the call is
-refused with the reason, or, for an automatic send, the reason is logged once:
+Grants and revocations are network management, and the controller passes them to gale-key.
 
-- it is a burst of a message of ours, still `written`, that the controller
-  hasn't accepted yet (once accepted, its result file decides);
-- the route function gives it a route: the burst's, the message's, the
-  destination's and the channel's services are one (see Services);
-- it has a channel (see Services, "A send's channel"); a burst with none is
-  never handed down, so requeue it once one is set;
+**Answers.** The controller answers `prepare` once gale-key has run its gates, and `key` at once,
+when it takes custody. `--controller-timeout-ms` (default 5000) bounds those local replies, never
+the key. The result is the SIS answer, which comes when the key is over (Transmit, above).
+
+A frame is handed down only when all of these hold. Otherwise the call is refused with the
+reason, or, for an automatic send, the reason is logged once:
+
+- it is a message of ours, still `written`, that the controller doesn't hold yet;
+- the route function gives it a route: the message's, the destination's and the channel's
+  services are one (see Services);
+- it has a channel (see Services, "A send's channel"). A message with none is never handed down:
+  requeue it once one is set;
 - EMCON is off.
 
-The controller tells the tuner daemon the channel as part of its sequence.
-The core is no longer in that path.
+The controller tells the tuner daemon the channel as part of its sequence. The core is no longer
+in that path.
+
+*Until 2026-11-27 (D11) the core handed down `message.wav`, a burst in its outbox, on the JSON
+socket alone. Superseded by SIS for the message and the local socket for its control part. The
+old text is in this file's git history.*
 
 ### ACK and orderwire bursts
 
@@ -1885,8 +1896,9 @@ it in memory only, until its result comes. It is keyed under the standing mode
   the route function like every send. Until stage 5 it is keyed only where
   automatic modes run today (see Services);
 - its channel is the one the core was on when it was written;
-- with no `machine` grant it stays in the outbox, unkeyed, and `status` counts
-  it in `keying.answers_written`;
+- with no `machine` grant it stays unkeyed, in the outbox or, with the
+  controller, held in the core and not handed down, and `status` counts it in
+  `keying.answers_written`;
 - its result is logged only (see "Transmit: written, then sent").
 
 ### key_prepare, key_confirm, key_cancel: the operator's y
@@ -1954,6 +1966,21 @@ stays `written` and may be prepared again.
 `{"cmd":"key_cancel","prepare_id":"KP-..."}` → `{"ok":true,"prepare_id":"KP-...","dropped":true}`
 drops a held token (`dropped` false when none was held). Send it when the
 operator answers No or leaves the dialog.
+
+**With the controller** (`link = controller`) there is no WAV in the core, and
+`burst` is not taken. In place of the WAV, the frame's sha256 is used:
+
+- `key_prepare` hands the frame down on SIS, then sends `prepare` naming its
+  sha256 (Keying, above). gale-key binds its token to the burst the controller
+  built from that frame. The core binds the prepare it holds to the frame's
+  sha256, the message's service and the channel.
+- `key_confirm` sends `key`. Its `note` says the message stays `written` until
+  the controller's SIS answer: a confirm (`sent`) or a reject (`failed`).
+- `key_cancel`, an expired prepare, or a closed connection also sends `cancel`.
+  The controller rejects the frame, and the message is `written` again.
+
+*Until 2026-11-27 (D11) this section had only the WAV form above. The SIS form
+is added; the WAV form stays for `link = burst`.*
 
 ### standing_prepare, standing_off: automatic sends
 
