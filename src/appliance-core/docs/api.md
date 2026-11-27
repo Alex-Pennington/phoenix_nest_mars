@@ -204,6 +204,9 @@ the operator sends, ACKs and orderwire have no per-hour cap.
 
 `advisor` names the helper plugged in with `--advisor`, or is empty.
 
+`services_unlocked` is true when the service tables were read with the root check lifted
+(`--services-unlocked`): a test stand's tables, never a station's.
+
 With the station book on, `status` also has `on_duty`, `net` (the open net) and
 `next_net`, the scheduled net that matters now (see Net schedules), or null:
 
@@ -313,7 +316,9 @@ as MARS. Alex's hard rule stands: there is no forward or auto-copy route between
   `book_list`, and a `service` column in `book_import`/`book_export`), routing rule
   (`route_list`, `route_set`), channel (`channels_list`, `channels_get_full`, `channel_put`) and
   message (`list`, `get`, the in-box row) carries `service`. A route's service is stored. A
-  record with no service, or one that names no table, is refused.
+  record with no service, or one that names no table, is refused. `book_put` and `channel_put`
+  need `service`, and `book_import` takes `service` as the default for rows that name none
+  (`world` is read for each, for one release). `appliance-cli channels add NAME FREQ --service S`.
 - **A message's service.** A message takes the service of its destination's book entry. An
   address the book does not hold takes the `service` the operator picks at compose. A broadcast
   (ALL) is a Network-layer address (D.5.2.8), so it needs a network named with it: a broadcast
@@ -322,6 +327,8 @@ as MARS. Alex's hard rule stands: there is no forward or auto-copy route between
 - **Received traffic** takes the service of the channel it was heard on: the channel plan's
   channel on the dial its capture's name carries. A link that names no channel (loopback,
   STANAG 5066, Appendix A) gives its traffic the service `--rx-service S` names, or none.
+  `--rx-service` applies to those links only; on `link = burst` or `controller` it is ignored,
+  and the start says so.
 - **Where the tables are.** `--services-dir DIR` (default `/etc/greybeard-ale/services`) is read
   once at start. A file not root's is refused; `--services-unlocked` lifts that on a test stand
   only. A refused file is said at start and the other services still load.
@@ -356,6 +363,9 @@ as MARS. Alex's hard rule stands: there is no forward or auto-copy route between
   from its destination's, its route's or its channel's. The refusal names both services, and the
   item is never rerouted or queued: `refused: crossing: an amateur message on a MARS channel
   (<LABEL>)`. Each send path has a test that refuses a crossing.
+- **One send is one service.** Format and encryption are checked against that service's table
+  on every send path, as it is queued. Traffic whose service has no table waits queued, with the
+  reason, and goes once the table is there; it is never failed for it.
 - **A plain format.** The `PLAIN` procedure is the operator's text alone: no ACP 127 envelope, no
   MSC digest, no signature and no cipher. It is sent with link format `plain`. `compose_templates`
   lists each procedure and template with the `services` it may go in. A service offers only the
@@ -1825,34 +1835,42 @@ greybeard-ale #18): STANAG 5066 Annex A, with no field added. The core never tal
 and never keys the radio. There is no VOX. Only a station on the greybeard modem has a
 controller. Training refuses every call here. No channel number and no frequency cross.
 
-This is the core's 5066 client (docs/stanag-5066-client.md) with `link = controller`:
+This is the core's 5066 client (docs/stanag-5066-client.md) with `link = controller`
+(`--link controller`, with `--captures` and `--controller-socket`). Its primitives are STANAG
+5066 Annex A v1.2 (A.2.1, A.2.2), held in `msc-handoff/standards/stanag-5066/`:
 
 - **Where.** One Unix socket per service, `--controller-sis-dir` (default `/run/gale-rx`) plus
   `sis-<service>.sock`. The core sends each message on its service's socket, and that is how the
   controller knows the service. The controller accepts only the core's systemd unit, by its peer
   check. SIS framing is unchanged; only the transport is local, because a TCP peer has no
   `SO_PEERCRED`. The core's 5066 client gains this socket-path setting.
-- **Two SAPs, with their Annex F meaning.** A SAP names the client application. Annex F Table
-  F-1, as the Wireshark dissector quotes it (greybeard-ale `docs/station-controller.md`, part 3;
-  we hold no copy of STANAG 5066), leaves 13 to 15 "available for arbitrary use", and the core's
-  frames are none of its assigned protocols. On each service's socket the operator's sender binds
+- **Two SAPs, with their Annex F meaning.** A SAP names the client application. Annex F v1.2
+  Table F-1 leaves 12 to 15 "available for arbitrary use" (10 and 11 are reserved), and the
+  core's frames are none of its assigned protocols. *Until 2026-11-27 this line quoted Table F-1
+  through the Wireshark dissector as leaving 13 to 15. Corrected from Annex F itself; 13 and 14
+  are in either range.* On each service's socket the operator's sender binds
   SAP 13, and the automatic sender (routing, machine answers, ACKs, orderwires) binds SAP 14 where
   the service has automatic modes: MARS only until stage 5. The controller treats SAP 14 as
-  control automatic.
+  control automatic. Each sender has its own connection, bound with S_BIND_REQUEST: non-ARQ,
+  no delivery confirmation, in order, no retransmission (A.2.2.3, Figure A-3). A dropped
+  connection binds again every 3 s.
 - **One frame per request,** non-ARQ, with no delivery confirmation asked, to the all-stations
-  address. Stage 1 makes no link, and the frame's
+  address as a group address (A.2.2.28.1). Stage 1 makes no link, and the frame's
   header names the addressee, as on every path. Priority comes from the precedence, as in that
   document, and the time to live is `s5066-ttl` (600 s).
-- **At most 2048 bytes.** The SIS MTU is 2048 bytes (Koski, Nieto and Stringer, "STANAG 5066 for
-  Wideband HF", Harris; we hold no copy of STANAG 5066 itself). The core never cuts a frame into
+- **At most 2048 bytes.** The SIS MTU is 2048 bytes: Annex A A.2.1.3 (7) fixes it for a
+  general-purpose node, and S_BIND_ACCEPTED gives it. The core never cuts a frame into
   pieces on this link, because the controller would have to open the message to join them. A
   message whose frame is over 2048 bytes is refused before the y: "too long for one burst: N
   bytes, the station controller takes 2048". Tapes and bundles go as parts of up to 6000 bytes
   (Parts of long tapes and bundles), so a part over 2048 bytes is refused the same way.
-- **One answer per request,** a broadcast included: a confirm or a reject. Receive stays as
-  `link = burst` has it: the modems' captures.
+- **One answer per request,** a broadcast included: a confirm or a reject. Annex A issues these
+  only when confirmation was asked (A.2.1.7 (2)); the controller departs and answers every request.
+  The answer carries the U_PDU's first bytes, which name the request it answers (A.2.1.7 (7)).
+  S_KEEP_ALIVE is answered in kind. Receive stays as `link = burst` has it: the modems' captures.
 - **Settings that leave.** `tx-mode` and `tx-cmd` leave the core for this link, because the
-  controller runs gale-tx.
+  controller runs gale-tx. The core writes each frame whole to the outbox as `BURST.frame`, and
+  reads no `BURST.key.json`. It sends no `prepare`, `key` or `cancel` on the local socket.
 
 The three parts of D.4.2.8:
 
@@ -1886,11 +1904,12 @@ An ACK or an orderwire written to the outbox is not a message: the core keeps
 it in memory only, until its result comes. It is keyed under the standing mode
 `machine`, once, on the core's own thread, as an automatic send is:
 
-- its service is that of the message it answers, or, for an orderwire or an
-  ACK of something not held, that of the station it goes to. It goes through
+- its service is that of the message it answers, else that of the station it
+  goes to in the book. With neither, it is never keyed. It goes through
   the route function like every send. Until stage 5 it is keyed only where
   automatic modes run today (see Services);
-- its channel is the one the core was on when it was written;
+- its channel is the one the core was on when it was written. With the
+  controller, the controller chooses it, and it goes on SAP 14;
 - with no `machine` grant it stays unkeyed, in the outbox or, with the
   controller, held in the core and not handed down, and `status` counts it in
   `keying.answers_written`;
@@ -1974,7 +1993,9 @@ token. The y is the core's own:
 - `key_confirm` with `Y` first reads `status.send_channel` again. If the
   channel differs from the one the y showed (the radio moved on its schedule),
   nothing is sent: the call answers `"asked":false` with the new channel, and
-  the kiosk asks the y again. Otherwise it hands the frame down on SAP 13, the
+  the kiosk asks the y again. The answer holds the new dialog, and the old one is spent:
+  `{"ok":true,"kind":"air","msg_id":"ID","asked":false,"channel_was":"<LABEL>","channel":"<LABEL>",
+  "prepare_id":"KP-...","expires_s":120,"confirm":{...}}`. Otherwise it hands the frame down on SAP 13, the
   only thing sent. The window left is the milliseconds between that read and
   the frame's arrival, and the controller still checks the channel it keys on
   against the table. `status.last` names that channel, and the core shows it
@@ -2002,6 +2023,9 @@ controller keys it as control automatic (greybeard-ale
 
 `{"cmd":"standing_prepare","mode":"routing","service":"S"}` →
 `{"ok":true,"prepare_id":"KP-...","expires_s":120,"confirm":{"kind":"standing","mode":"routing","service":"S"}}`
+
+`service` is required; none is never read as MARS. With the controller, no prepare goes to it,
+and `grant` carries no token.
 
 then `key_confirm` with that `prepare_id` and `confirm` `Y` sends `grant` →
 `{"ok":true,"kind":"standing","mode":"routing","service":"S","on":true,"controller":{...}}`.
