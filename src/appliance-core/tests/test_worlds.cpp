@@ -107,8 +107,11 @@ static void write(const fs::path& p, const std::string& s) {
 static void set_world(const fs::path& db, const std::string& id, const std::string& world) {
     sqlite3* h = nullptr;
     sqlite3_open(db.c_str(), &h);
-    sqlite3_exec(h, ("UPDATE messages SET world = '" + world + "' WHERE id = '" + id + "'").c_str(), nullptr, nullptr,
-                 nullptr);
+    // The core writes this file too. Wait for its lock: a write that met it
+    // was dropped unsaid, and the checks after it then read the old service.
+    sqlite3_busy_timeout(h, 5000);
+    CHECK(sqlite3_exec(h, ("UPDATE messages SET world = '" + world + "' WHERE id = '" + id + "'").c_str(), nullptr,
+                       nullptr, nullptr) == SQLITE_OK);
     sqlite3_close(h);
 }
 static std::string chat(const std::string& to, const std::string& from, const std::string& text) {
@@ -367,6 +370,45 @@ int main() {
     CHECK(!ops->book_find("TEST-NONE"));
     CHECK(ok(call(a, {{"cmd", "book_put"}, {"name", "BY SERVICE"}, {"call", "TEST-SVC"}, {"service", "amateur"}})));
     CHECK(ops->book_find("TEST-SVC") && ops->book_find("TEST-SVC")->world == "amateur");
+    // Every entry a reply carries says its `service` (docs/api.md, "service on
+    // every record"), and `world` with the same value for one release.
+    {
+        auto both = [](const JsonValue& entry, const std::string& s) {
+            return str(entry, "service") == s && str(entry, "world") == s;
+        };
+        JsonValue g = call(a, {{"cmd", "book_get"}, {"name", "TEST-SVC"}});
+        const JsonValue* es = g.get("entries");
+        CHECK(ok(g) && es && es->is_array() && es->arr.size() == 1 && both(es->arr[0], "amateur"));
+        JsonValue l = call(a, {{"cmd", "book_list"}});
+        es = l.get("entries");
+        CHECK(ok(l) && es && es->is_array() && es->arr.size() == 4);
+        int mars = 0, amateur = 0;
+        if (es && es->is_array())
+            for (auto& x : es->arr) {
+                mars += both(x, "mars");
+                amateur += both(x, "amateur");
+            }
+        CHECK(mars == 2 && amateur == 2);  // STA-B and MIXED; HAM ONE and BY SERVICE
+        JsonValue rs = call(a, {{"cmd", "book_resolve"}, {"to", "STA-B"}});
+        es = rs.get("stations");
+        CHECK(ok(rs) && es && es->is_array() && es->arr.size() == 1 && both(es->arr[0], "mars"));
+    }
+    // book_export: the CSV's column is `service` (docs/api.md), and it reads
+    // back with no default service given. A file of the last release, with a
+    // `world` column, is still read.
+    {
+        const std::string csv = str(call(a, {{"cmd", "book_export"}}), "csv");
+        CHECK(csv.rfind("name,kind,call,ri,ale,members,note,service\n", 0) == 0);
+        CHECK(has(csv, "\nBY SERVICE,station,TEST-SVC,,,,,amateur\n") && has(csv, "\nSTA-B,station,STA-B,,,,,mars\n"));
+        Ops copy("STA-X", (dir / "x-ops.db").string());
+        std::vector<std::string> dropped, errors;
+        CHECK(copy.book_import(csv, "", &dropped, &errors, "") == 4 && dropped.empty() && errors.empty());
+        CHECK(copy.book_find("TEST-SVC") && copy.book_find("TEST-SVC")->world == "amateur");
+        CHECK(copy.book_find("STA-B") && copy.book_find("STA-B")->world == "mars");
+        Ops old("STA-Y", (dir / "y-ops.db").string());
+        CHECK(old.book_import("name,kind,call,world\nOLD ONE,station,TEST-OLD,amateur\n", "", &dropped, &errors, "") == 1);
+        CHECK(old.book_find("TEST-OLD") && old.book_find("TEST-OLD")->world == "amateur");
+    }
     CHECK(has(str(call(a, {{"cmd", "channel_put"}, {"name", "N1"}, {"frequency", "5400"}}), "error"), "service"));
     CHECK(ok(call(a, {{"cmd", "channel_put"}, {"name", "M1"}, {"frequency", "5100"}})));  // an existing channel keeps its own
     CHECK(ops->channels().get("M1") && ops->channels().get("M1")->world == "mars");
@@ -546,6 +588,38 @@ int main() {
     {
         auto m = a.get(in_id);
         CHECK(m && m->world == "mars");  // the service of the link it was heard on
+    }
+    // A message in a reply says its `service` (docs/api.md, "service on every
+    // record"), and `world` with the same value for one release.
+    auto both = [](const JsonValue& row, const std::string& s) {
+        return str(row, "service") == s && str(row, "world") == s;
+    };
+    auto row_of = [&](const JsonValue& reply, const char* key) -> const JsonValue* {
+        const JsonValue* rows = reply.get(key);
+        if (rows && rows->is_array())
+            for (auto& x : rows->arr)
+                if (str(x, "id") == in_id) return &x;
+        return nullptr;
+    };
+    {
+        JsonValue g = call(a, {{"cmd", "get"}, {"id", in_id}});
+        const JsonValue* x = row_of(g, "messages");
+        CHECK(ok(g) && x && both(*x, "mars"));
+        JsonValue l = call(a, {{"cmd", "list"}, {"limit", "100"}});
+        x = row_of(l, "messages");
+        CHECK(ok(l) && x && both(*x, "mars"));
+    }
+    // The in-box row says it too: in `get`, in the in-box's `list` and in a search.
+    {
+        JsonValue g = call(a, {{"cmd", "get"}, {"id", in_id}});
+        const JsonValue* x = row_of(g, "inbox");
+        CHECK(ok(g) && x && both(*x, "mars"));
+        JsonValue l = call(a, {{"cmd", "list"}, {"dir", "in"}, {"limit", "100"}});
+        x = row_of(l, "messages");
+        CHECK(ok(l) && x && both(*x, "mars"));
+        JsonValue s = call(a, {{"cmd", "search"}, {"sender", "STA-B"}});
+        x = row_of(s, "messages");
+        CHECK(ok(s) && x && both(*x, "mars"));
     }
     CHECK(crossed(call(a, {{"cmd", "retransmit"}, {"id", in_id}, {"to", "TEST-HAM1"}, {"confirm", "Y"}}), "mars", "amateur"));
     CHECK(crossed(call(a, {{"cmd", "retransmit"}, {"id", in_id}, {"to", "STA-B"}, {"confirm", "Y"}, {"service", "amateur"}}),

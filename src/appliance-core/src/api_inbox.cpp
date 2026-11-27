@@ -357,6 +357,9 @@ void write_item(JsonWriter& w, const Item& it, bool with_body = false) {
         .field("type", it.type)
         .field("state", it.label)
         .field("core_state", it.row.m.state)
+        // The message's service (docs/api.md, Services); `world` carries the
+        // same value for one release.
+        .field("service", it.row.m.world)
         .field("world", it.row.m.world)
         .field("unverified", it.row.m.state == "unverified")
         .field("mine", it.mine)

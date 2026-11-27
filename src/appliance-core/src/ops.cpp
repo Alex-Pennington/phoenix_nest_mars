@@ -437,7 +437,9 @@ int Ops::book_import(const std::string& csv, const std::string& source, std::vec
 }
 
 std::string Ops::book_export() {
-    std::string out = "name,kind,call,ri,ale,members,note,world\n";
+    // The last column is the entry's service (docs/api.md, Services).
+    // book_import reads it under this name, and under `world` for one release.
+    std::string out = "name,kind,call,ri,ale,members,note,service\n";
     for (auto& e : book_list())
         out += csv_cell(e.name) + "," + e.kind + "," + e.call + "," + e.ri + "," + e.ale + "," +
                csv_cell(join(e.members, ';')) + "," + csv_cell(e.note) + "," + e.world + "\n";
