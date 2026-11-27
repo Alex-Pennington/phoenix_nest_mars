@@ -367,6 +367,29 @@ int main() {
     CHECK(!ops->book_find("TEST-NONE"));
     CHECK(ok(call(a, {{"cmd", "book_put"}, {"name", "BY SERVICE"}, {"call", "TEST-SVC"}, {"service", "amateur"}})));
     CHECK(ops->book_find("TEST-SVC") && ops->book_find("TEST-SVC")->world == "amateur");
+    // Every entry a reply carries says its `service` (docs/api.md, "service on
+    // every record"), and `world` with the same value for one release.
+    {
+        auto both = [](const JsonValue& entry, const std::string& s) {
+            return str(entry, "service") == s && str(entry, "world") == s;
+        };
+        JsonValue g = call(a, {{"cmd", "book_get"}, {"name", "TEST-SVC"}});
+        const JsonValue* es = g.get("entries");
+        CHECK(ok(g) && es && es->is_array() && es->arr.size() == 1 && both(es->arr[0], "amateur"));
+        JsonValue l = call(a, {{"cmd", "book_list"}});
+        es = l.get("entries");
+        CHECK(ok(l) && es && es->is_array() && es->arr.size() == 4);
+        int mars = 0, amateur = 0;
+        if (es && es->is_array())
+            for (auto& x : es->arr) {
+                mars += both(x, "mars");
+                amateur += both(x, "amateur");
+            }
+        CHECK(mars == 2 && amateur == 2);  // STA-B and MIXED; HAM ONE and BY SERVICE
+        JsonValue rs = call(a, {{"cmd", "book_resolve"}, {"to", "STA-B"}});
+        es = rs.get("stations");
+        CHECK(ok(rs) && es && es->is_array() && es->arr.size() == 1 && both(es->arr[0], "mars"));
+    }
     CHECK(has(str(call(a, {{"cmd", "channel_put"}, {"name", "N1"}, {"frequency", "5400"}}), "error"), "service"));
     CHECK(ok(call(a, {{"cmd", "channel_put"}, {"name", "M1"}, {"frequency", "5100"}})));  // an existing channel keeps its own
     CHECK(ops->channels().get("M1") && ops->channels().get("M1")->world == "mars");

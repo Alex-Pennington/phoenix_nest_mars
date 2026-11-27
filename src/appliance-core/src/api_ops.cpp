@@ -56,7 +56,9 @@ void write_entry(JsonWriter& w, const BookEntry& e) {
     w.begin_object().field("name", e.name).field("kind", e.kind).field("call", e.call).field("ri", e.ri)
         .field("ale", e.ale);
     strings(w, "members", e.members);
-    w.field("note", e.note).field("source", e.source).field("world", e.world).end_object();
+    // The entry's service (docs/api.md, Services); `world` carries the same
+    // value for one release.
+    w.field("note", e.note).field("source", e.source).field("service", e.world).field("world", e.world).end_object();
 }
 
 void write_net(JsonWriter& w, const Net& n, bool with_checkins) {
