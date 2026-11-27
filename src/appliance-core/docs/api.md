@@ -1816,14 +1816,17 @@ That answer is the result:
 - `S_UNIDATA_REQUEST_REJECTED`: not keyed. The message becomes `failed`, shown to the operator as
   "not keyed: why". `why` is the controller's sentence, read from its `status.last` under the
   frame's sha256, because SIS carries only a reason code.
-- No answer within the time to live plus 30 s, or a dropped connection, fails the message, and the
-  queue treats it as any failed send.
+- No answer within the time to live plus 270 s, or a dropped connection, is not a failure by
+  itself: the frame may have been keyed. The message is settled from `status.last` (below). The
+  270 s are the controller's `claim-max-s` (120 s) plus its order timeout (150 s): the time to
+  live bounds only the wait before the key starts, and the answer comes after the key.
 - A result for an ack or orderwire is logged only.
 - `status` counts `written`.
 
 **A frame nobody is waiting on.** A message `written` and handed down when the core stops has
-no one waiting for its SIS answer. At start the core settles each such message from the
-controller's `status.last`, under the sha256 of the frame in the outbox:
+no one waiting for its SIS answer. Nor has one whose answer did not come in time, or whose
+connection dropped. At start, at the deadline and at the drop, the core settles each such
+message from the controller's `status.last`, under the frame's sha256:
 
 - `result` `keyed`: `sent`, and the ack clock starts, as for a confirm.
 - `result` `refused`: `failed`, "not keyed: why", with the controller's `why`.

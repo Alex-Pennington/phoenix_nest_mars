@@ -788,8 +788,10 @@ void GaleKey::set_sis(std::shared_ptr<SisControllerLink> sis) {
         settle_retry_ms_ = std::max(50, sis_->config().settle_retry_ms);
     }
     sis_->start(
-        [this](const SisSend& s, bool confirmed, uint8_t, const std::string& why) {
-            on_sis(s.burst, s.sha256, confirmed, why);
+        [this](const SisSend& s, SisControllerLink::End end, uint8_t, const std::string& why) {
+            // No answer in time, or a drop: it may have been keyed, so status.last decides.
+            if (end == SisControllerLink::End::unanswered) unanswered(s.burst, s.msg_id, s.sha256, why);
+            else on_sis(s.burst, s.sha256, end == SisControllerLink::End::confirmed, why);
         },
         [this](const std::string& text) { note("", text); },
         // Every bind, the first and each reconnect: what is unsettled is looked up now.
@@ -815,6 +817,19 @@ void GaleKey::settle(const std::vector<KeyItem>& asked, const std::string& becau
                 continue;
             unsettled_.push_back(Unsettled{it.burst, it.msg_id, "", because, until});
         }
+        settle_now_ = true;
+    }
+    cv_.notify_all();
+}
+
+void GaleKey::unanswered(const std::string& burst, const std::string& msg_id, const std::string& sha256,
+                         const std::string& because) {
+    {
+        std::lock_guard<std::mutex> g(mu_);
+        if (stop_) return;
+        if (std::none_of(unsettled_.begin(), unsettled_.end(), [&](const Unsettled& u) { return u.burst == burst; }))
+            unsettled_.push_back(Unsettled{burst, msg_id, sha256, because,
+                                           std::chrono::steady_clock::now() + std::chrono::seconds(settle_wait_s_)});
         settle_now_ = true;
     }
     cv_.notify_all();

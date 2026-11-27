@@ -130,8 +130,11 @@ private:
 //    or S_UNIDATA_REQUEST_REJECTED (A.2.1.8). Annex A issues these only when
 //    confirmation was asked; the controller departs and answers every request,
 //    after the key ends. The answer names its U_PDU by a copy of its first
-//    bytes (A.2.1.7 (7)), which matches it to its request. No answer within the
-//    time to live plus a grace, or a dropped connection, is a failure.
+//    bytes (A.2.1.7 (7)), which matches it to its request.
+//  - No answer within the time to live plus a grace, or a dropped connection,
+//    is not a failure: the frame may have been keyed. The request ends
+//    unanswered, and its frame is settled from the controller's status.last
+//    (gale_key.h, settle).
 //  - S_KEEP_ALIVE (A.2.1.17) is answered in kind.
 // The controller's own bounds (greybeard-ale docs/station-controller.md and
 // tools/gale_rx.py): no claim on the radio is held past claim-max-s, and an
@@ -144,7 +147,11 @@ struct SisLinkConfig {
     uint8_t sap_operator = 13;
     uint8_t sap_automatic = 14;
     uint32_t ttl_seconds = 600;        // s5066-ttl, per U_PDU, sent in 2 s units (Figure A-20); 0 no limit
-    int answer_grace_s = 30;           // waited past the TTL for the answer
+    // Waited past the TTL for the answer. The TTL bounds only the wait before
+    // the key starts (A.2.2.20; station-controller.md, part 3). After it the
+    // controller may still hold the radio for claim-max-s and wait on
+    // gale-key for the order timeout, and it answers only then.
+    int answer_grace_s = kSisClaimMaxS + kSisOrderTimeoutS;
     int reconnect_ms = 3000;
     uint16_t mtu = 2048;               // A.2.1.3 (7), and the controller's
     // A frame nobody is waiting on the answer of is settled from the
@@ -166,9 +173,13 @@ struct SisSend {
 
 class SisControllerLink {
 public:
-    // confirmed: S_UNIDATA_REQUEST_CONFIRM. Otherwise reason is the
-    // REJECTED reason (A.2.1.8), or 0 with why for no answer or a drop.
-    using Result = std::function<void(const SisSend& s, bool confirmed, uint8_t reason, const std::string& why)>;
+    // How a request ended.
+    //  confirmed   S_UNIDATA_REQUEST_CONFIRM (A.2.1.7): keyed
+    //  rejected    S_UNIDATA_REQUEST_REJECTED (A.2.1.8), with its reason: not keyed
+    //  unanswered  the deadline passed or the connection dropped, and why says
+    //              which. The frame may have been keyed: never a failure by itself
+    enum class End { confirmed, rejected, unanswered };
+    using Result = std::function<void(const SisSend& s, End end, uint8_t reason, const std::string& why)>;
 
     explicit SisControllerLink(SisLinkConfig cfg);
     ~SisControllerLink();
@@ -212,7 +223,7 @@ private:
     };
     struct Done {
         SisSend send;
-        bool confirmed = false;
+        End end = End::unanswered;
         uint8_t reason = 0;
         std::string why;
     };

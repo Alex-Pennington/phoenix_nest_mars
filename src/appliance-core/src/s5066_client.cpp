@@ -527,7 +527,7 @@ void SisControllerLink::open(Conn& c, std::vector<std::string>& notes) {
     c.reader = s5066::Reader();
 }
 
-// Caller holds mu_. Every request without its answer fails.
+// Caller holds mu_. Every request without its answer ends unanswered.
 void SisControllerLink::drop(Conn& c, const std::string& why, std::vector<Done>& done,
                              std::vector<std::string>& notes) {
     if (c.fd >= 0) ::close(c.fd);
@@ -535,7 +535,7 @@ void SisControllerLink::drop(Conn& c, const std::string& why, std::vector<Done>&
     const bool was = c.bound;
     c.bound = false;
     c.next_try = std::chrono::steady_clock::now() + std::chrono::milliseconds(cfg_.reconnect_ms);
-    for (auto& p : c.pending) done.push_back(Done{p.send, false, 0, why});
+    for (auto& p : c.pending) done.push_back(Done{p.send, End::unanswered, 0, why});
     c.pending.clear();
     if (was) {
         const std::string w = "SIS " + c.service + " SAP " + std::to_string(c.sap) + ": " + why;
@@ -585,8 +585,8 @@ void SisControllerLink::handle(Conn& c, const s5066::Prim& p, std::vector<Done>&
             notes.push_back("SIS " + c.service + ": an answer for no request waiting; ignored");
             return;
         }
-        Done d{it->send, p.type == s5066::kUnidataRequestConfirm, p.reason, ""};
-        if (!d.confirmed) d.why = s5066::unidata_rejected_text(p.reason);
+        Done d{it->send, p.type == s5066::kUnidataRequestConfirm ? End::confirmed : End::rejected, p.reason, ""};
+        if (d.end == End::rejected) d.why = s5066::unidata_rejected_text(p.reason);
         c.pending.erase(it);
         done.push_back(std::move(d));
         return;
@@ -612,9 +612,9 @@ void SisControllerLink::run() {
                     open(c, notes);
                     if (c.fd < 0) c.next_try = now + std::chrono::milliseconds(cfg_.reconnect_ms);
                 }
-                // The time to live plus the grace, and no answer: failed.
+                // The time to live plus the grace, and no answer: unanswered.
                 while (!c.pending.empty() && now >= c.pending.front().deadline) {
-                    done.push_back(Done{c.pending.front().send, false, 0,
+                    done.push_back(Done{c.pending.front().send, End::unanswered, 0,
                                         "no answer from the station controller within " +
                                             std::to_string(cfg_.ttl_seconds + cfg_.answer_grace_s) + " s"});
                     c.pending.pop_front();
@@ -652,7 +652,7 @@ void SisControllerLink::run() {
         if (on_bound_)
             for (auto& b : bound) on_bound_(b.first, b.second);
         if (on_result_)
-            for (auto& d : done) on_result_(d.send, d.confirmed, d.reason, d.why);
+            for (auto& d : done) on_result_(d.send, d.end, d.reason, d.why);
     }
 }
 

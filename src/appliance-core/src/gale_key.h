@@ -243,8 +243,10 @@ public:
     bool controller_link() const { return sis_ != nullptr; }
     SisControllerLink* sis() const { return sis_.get(); }
     // Called once per frame handed down over SIS, from the link's thread or
-    // this object's: keyed (S_UNIDATA_REQUEST_CONFIRM), refused (REJECTED, no
-    // answer, a drop) or unknown (settle, below), with why: the controller's
+    // this object's: keyed (S_UNIDATA_REQUEST_CONFIRM), refused (REJECTED) or,
+    // for a frame settled from status.last (settle, below; no answer in time
+    // and a dropped connection are settled so too), any of the three, with
+    // why: the controller's
     // sentence from status.last under the frame's sha256, else the Annex A
     // reason. For a keyed frame, why names the channel status.last gives (""
     // when it gives none). For unknown it is kSisResultUnknown.
@@ -302,6 +304,9 @@ private:
     // y's), bytes of another sha256 are not submitted.
     GaleKeyReply submit_sis(const KeyItem& it, bool automatic, const std::string& sha256);
     void on_sis(const std::string& burst, const std::string& sha256, bool confirmed, const std::string& why);
+    // A request that ended with no answer: its frame joins the unsettled.
+    void unanswered(const std::string& burst, const std::string& msg_id, const std::string& sha256,
+                    const std::string& because);
     std::shared_ptr<SisControllerLink> sis_;
     SisResult sis_result_;
     struct Unsettled {

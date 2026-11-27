@@ -103,7 +103,9 @@ struct FakeController {
     };
     fs::path dir;
     std::map<std::string, std::string> send_channel{{"mars", "P1"}, {"amateur", "AMX"}};
-    std::string mode = "confirm";  // confirm, reject, hold, drop
+    // confirm, reject, hold, drop (the connection closes on the request), drop-keyed (it
+    // closes after the key: status.last says keyed, and no answer was sent)
+    std::string mode = "confirm";
     std::string radio_channel = "P1", radio_service = "mars";  // where the transmitting radio is
     std::string reject_why = "refused: channel P1: passband outside the data segments of service mars";
     std::mutex mu;
@@ -274,6 +276,11 @@ struct FakeController {
     void note_last(const std::string& frame, const std::string& service, const std::string& result,
                    const std::string& why = "") {
         std::lock_guard<std::mutex> g(mu);
+        put_last(frame, service, result, why);
+    }
+    // The same, for a caller holding mu.
+    void put_last(const std::string& frame, const std::string& service, const std::string& result,
+                  const std::string& why = "") {
         JsonWriter e;
         e.begin_object()
             .field("send", "K-2")
@@ -335,7 +342,8 @@ struct FakeController {
                         reqs.back().answered = true;
                     } else if (mode == "confirm") answer(reqs.back(), true);
                     else if (mode == "reject") answer(reqs.back(), false, 0);
-                    else if (mode == "drop") {
+                    else if (mode == "drop" || mode == "drop-keyed") {
+                        if (mode == "drop-keyed") put_last(p.data, service, "keyed");
                         ::shutdown(c, SHUT_RDWR);
                         return;
                     }
@@ -669,21 +677,43 @@ int main() {
         CHECK(has(s.events_text(), "standing routing OFF"));
         f.reject_why = "refused: channel P1: passband outside the data segments of service mars";
 
-        // ---- no answer within the TTL plus the grace: failed
+        // ---- no answer within the TTL plus the grace: not failed outright, but settled
+        //      from status.last under the frame's sha256
         f.mode = "hold";
-        const std::string ho = s.written("FARSTN", "NO ANSWER");
-        v = s.y(ho);
-        CHECK(flag(v, "asked"));
-        CHECK(wait_for([&] { return s.state(ho) == "failed"; }, 10000));
-        CHECK(has(s.core->get(ho)->last_error, "no answer from the station controller within 5 s"));
+        const size_t h0 = f.count_reqs();
+        const std::string ho = s.written("FARSTN", "NO ANSWER AND NO WORD");
+        CHECK(flag(s.y(ho), "asked"));
+        const std::string hk = s.written("FARSTN", "NO ANSWER BUT KEYED");
+        CHECK(flag(s.y(hk), "asked"));
+        const std::string hr = s.written("FARSTN", "NO ANSWER BUT REFUSED");
+        CHECK(flag(s.y(hr), "asked"));
+        CHECK(wait_for([&] { return f.count_reqs() == h0 + 3; }, 5000));
+        f.note_last(f.req(h0 + 1).p.data, "mars", "keyed");
+        f.note_last(f.req(h0 + 2).p.data, "mars", "refused", "refused: the radio was not free");
+        CHECK(wait_for([&] { return s.state(hk) == "sent"; }, 10000));  // keyed is never failed
+        CHECK(s.core->get(hk)->sends == 1);
+        CHECK(wait_for([&] { return s.state(hr) == "failed"; }, 5000));
+        CHECK(has(s.core->get(hr)->last_error, "not keyed: refused: the radio was not free"));
+        CHECK(wait_for([&] { return s.state(ho) == "failed"; }, 5000));
+        CHECK(s.core->get(ho)->last_error == kSisResultUnknown);
+        CHECK(has(s.events_text(), "no answer from the station controller within 5 s"));
+        // The grace past the TTL covers the longest key and gale-key's order timeout.
+        CHECK(SisLinkConfig().answer_grace_s >= 120 + 150);
 
-        // ---- a dropped connection fails what it held, and the link binds again
+        // ---- a dropped connection: what it held is settled the same way, and the link binds again
+        f.mode = "drop-keyed";
+        const std::string dk = s.written("FARSTN", "KEYED, THEN THE CONNECTION DROPPED");
+        CHECK(flag(s.y(dk), "asked"));
+        CHECK(wait_for([&] { return s.state(dk) == "sent"; }, 5000));  // keyed is never failed
+        CHECK(s.core->get(dk)->sends == 1);
+        CHECK(has(s.events_text(), "the connection to the station controller dropped"));
+        CHECK(wait_for([&] { return s.link->bound("mars", false); }, 5000));
         f.mode = "drop";
         const std::string dr = s.written("FARSTN", "DROPPED");
         v = s.y(dr);
         CHECK(flag(v, "asked"));
         CHECK(wait_for([&] { return s.state(dr) == "failed"; }, 5000));
-        CHECK(has(s.core->get(dr)->last_error, "dropped"));
+        CHECK(s.core->get(dr)->last_error == kSisResultUnknown);
         f.mode = "confirm";
         CHECK(wait_for([&] { return s.link->bound("mars", false); }, 5000));
         const std::string again = s.written("FARSTN", "AFTER THE DROP");
