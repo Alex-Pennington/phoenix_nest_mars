@@ -1796,7 +1796,9 @@ standing mode the core holds, it hands the frame down unopened over STANAG 5066 
 section). The controller builds the 110A burst, orders gale-key, and answers the frame on SIS.
 That answer is the result:
 
-- `S_UNIDATA_REQUEST_CONFIRM`: keyed. The message becomes `sent`, and its ack clock starts then.
+- `S_UNIDATA_REQUEST_CONFIRM`: keyed, not delivered. Nothing below the core knows whether a
+  station heard it. The message becomes `sent`, and its Transport ack clock (QSL, the resend
+  queue) starts then.
 - `S_UNIDATA_REQUEST_REJECTED`: not keyed. The message becomes `failed`, shown to the operator as
   "not keyed: why". `why` is the controller's sentence, read from its `status.last` under the
   frame's sha256, because SIS carries only a reason code.
@@ -1825,12 +1827,20 @@ controller. Training refuses every call here. No channel number and no frequency
 
 This is the core's 5066 client (docs/stanag-5066-client.md) with `link = controller`:
 
-- **Where.** The controller's Unix socket, `--controller-sis` (default `/run/gale-rx/sis.sock`).
-  The controller accepts only the core's systemd unit, by its peer check.
-- **One SAP per service.** The core binds each service's SAP, the table's `sap` column, on one
-  connection per service. It sends each message on its service's SAP, and that is how the
-  controller knows the service.
-- **One frame per request,** to the all-stations address. Stage 1 makes no link, and the frame's
+- **Where.** One Unix socket per service, `--controller-sis-dir` (default `/run/gale-rx`) plus
+  `sis-<service>.sock`. The core sends each message on its service's socket, and that is how the
+  controller knows the service. The controller accepts only the core's systemd unit, by its peer
+  check. SIS framing is unchanged; only the transport is local, because a TCP peer has no
+  `SO_PEERCRED`. The core's 5066 client gains this socket-path setting.
+- **Two SAPs, with their Annex F meaning.** A SAP names the client application. Annex F Table
+  F-1, as the Wireshark dissector quotes it (greybeard-ale `docs/station-controller.md`, part 3;
+  we hold no copy of STANAG 5066), leaves 13 to 15 "available for arbitrary use", and the core's
+  frames are none of its assigned protocols. On each service's socket the operator's sender binds
+  SAP 13, and the automatic sender (routing, machine answers, ACKs, orderwires) binds SAP 14 where
+  the service has automatic modes: MARS only until stage 5. The controller treats SAP 14 as
+  control automatic.
+- **One frame per request,** non-ARQ, with no delivery confirmation asked, to the all-stations
+  address. Stage 1 makes no link, and the frame's
   header names the addressee, as on every path. Priority comes from the precedence, as in that
   document, and the time to live is `s5066-ttl` (600 s).
 - **At most 2048 bytes.** The SIS MTU is 2048 bytes (Koski, Nieto and Stringer, "STANAG 5066 for
@@ -1854,7 +1864,8 @@ The three parts of D.4.2.8:
    controller chooses the channel.
 
 **The core reads the controller's `status`** on its local socket, `--controller-socket` (default
-`/run/gale-rx/control.sock`), for the y question and `key_status`. It sends nothing else there.
+`/run/gale-rx/control.sock`), for the y question and `key_status`. The only other requests it
+sends there are `grant` and `revoke`, for the standing modes.
 
 A frame is handed down only when all of these hold. Otherwise the call is refused with the
 reason, or, for an automatic send, the reason is logged once:
@@ -1960,27 +1971,34 @@ token. The y is the core's own:
   channel in `send_channel` is refused with the controller's `why`. The core
   binds the prepare it holds to the frame's sha256, the service and that
   channel. It keeps the same connection rule and the same 120 s life.
-- `key_confirm` with `Y` hands the frame down on SIS, the only thing sent. Its
-  `note` says the message stays `written` until the SIS answer: a confirm
-  (`sent`) or a reject (`failed`). If the controller's choice has changed
-  since the question (the radio moved on its schedule), the key goes on the
-  channel it then chose, and `status.last` names that channel. The core shows
-  it on the message.
+- `key_confirm` with `Y` first reads `status.send_channel` again. If the
+  channel differs from the one the y showed (the radio moved on its schedule),
+  nothing is sent: the call answers `"asked":false` with the new channel, and
+  the kiosk asks the y again. Otherwise it hands the frame down on SAP 13, the
+  only thing sent. The window left is the milliseconds between that read and
+  the frame's arrival, and the controller still checks the channel it keys on
+  against the table. `status.last` names that channel, and the core shows it
+  on the message. The `note` says the message stays `written` until the SIS
+  answer: a confirm (`sent`) or a reject (`failed`).
 - `key_cancel` drops the held prepare. Nothing was sent.
 
 *Until 2026-11-27 (D11, "lean SIS now") this paragraph sent `prepare`, `key`
-and `cancel` to the controller, naming the frame by its sha256. Superseded.*
+and `cancel` to the controller, naming the frame by its sha256. Superseded.
+Later the same day, the service was briefly the bound SAP (the tables' `sap`
+column). Superseded by one socket per service, so the SAP keeps its Annex F
+meaning.*
 
 ### standing_prepare, standing_off: automatic sends
 
 Routing, machine-mode answers and auto-QSL key under a standing grant per
 mode, `machine`, `routing` or `auto_qsl`, each for one service. The core never
 asks for `amateur_auto`. A mode goes on only through the same prepare and y,
-sent through the controller. With `link = controller` the core holds the grant
-itself: `key_confirm` sends nothing, `standing_off` and EMCON turn the mode off
-in the core alone, and each written frame of that mode goes down on SIS as an
-operator's send does (the controller cannot tell them apart; greybeard-ale
-`docs/station-controller.md`, part 3). With `link = burst`:
+sent through the controller. With `link = controller` the grant, revocation
+and EMCON work exactly as below, through the controller's local `grant` and
+`revoke`, and gale-key keeps its standing-grant gate. Each written frame of a
+mode that is on goes down on SIS on its service's socket, SAP 14, and the
+controller keys it as control automatic (greybeard-ale
+`docs/station-controller.md`, part 3):
 
 `{"cmd":"standing_prepare","mode":"routing","service":"S"}` →
 `{"ok":true,"prepare_id":"KP-...","expires_s":120,"confirm":{"kind":"standing","mode":"routing","service":"S"}}`
