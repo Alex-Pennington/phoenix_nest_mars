@@ -609,6 +609,18 @@ int main() {
         x = row_of(l, "messages");
         CHECK(ok(l) && x && both(*x, "mars"));
     }
+    // The in-box row says it too: in `get`, in the in-box's `list` and in a search.
+    {
+        JsonValue g = call(a, {{"cmd", "get"}, {"id", in_id}});
+        const JsonValue* x = row_of(g, "inbox");
+        CHECK(ok(g) && x && both(*x, "mars"));
+        JsonValue l = call(a, {{"cmd", "list"}, {"dir", "in"}, {"limit", "100"}});
+        x = row_of(l, "messages");
+        CHECK(ok(l) && x && both(*x, "mars"));
+        JsonValue s = call(a, {{"cmd", "search"}, {"sender", "STA-B"}});
+        x = row_of(s, "messages");
+        CHECK(ok(s) && x && both(*x, "mars"));
+    }
     CHECK(crossed(call(a, {{"cmd", "retransmit"}, {"id", in_id}, {"to", "TEST-HAM1"}, {"confirm", "Y"}}), "mars", "amateur"));
     CHECK(crossed(call(a, {{"cmd", "retransmit"}, {"id", in_id}, {"to", "STA-B"}, {"confirm", "Y"}, {"service", "amateur"}}),
                   "amateur", "mars"));
