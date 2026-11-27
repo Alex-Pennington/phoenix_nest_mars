@@ -259,9 +259,13 @@ std::optional<std::string> handle_ops(Core& core, const std::string& cmd, std::m
         JsonWriter w;
         w.begin_object().field("ok", true).begin_array("channels");
         for (auto& c : list) {
+            // The channel's service as the plan holds it (docs/api.md,
+            // Services), never mapped here; `world` carries the same value
+            // for one release.
             w.begin_object()
                 .field("name", c.name)
-                .field("world", c.world == "amateur" ? "amateur" : "mars")
+                .field("service", c.world)
+                .field("world", c.world)
                 .field("label", c.label);
             if (full) w.field("frequency_hz", static_cast<long long>(c.hz));
             w.field("mode", c.mode)
@@ -358,6 +362,7 @@ std::optional<std::string> handle_ops(Core& core, const std::string& cmd, std::m
             .field("use", now ? now->use : c.use)
             .field("ant_rx", now ? now->ant_rx : c.ant_rx)
             .field("ant_tx", now ? now->ant_tx : c.ant_tx)
+            .field("service", now ? now->world : c.world)
             .field("world", now ? now->world : c.world)
             .field("label", now ? now->label : c.label)
             .end_object();

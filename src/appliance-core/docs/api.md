@@ -761,8 +761,10 @@ available to copy.
   file should look like is in docs/formats.md. Personal details are never
   imported, and frequencies go only to the channel plan's file.
 - `channels_list`: the channel plan as `channels`, each with `name` (the
-  designator), `world` (`mars` or `amateur`), `label` (its HFLink label, or
-  ""), `mode`, `use`, `source`, `ant_rx` and `ant_tx`. Never a frequency.
+  designator), `service` (the channel's service, as the plan holds it; see
+  Services), `world` (the same value, for one release), `label` (its HFLink
+  label, or ""), `mode`, `use`, `source`, `ant_rx` and `ant_tx`. Never a
+  frequency.
 - `channels_get_full {}`: the same, with each channel's `frequency_hz` (a
   whole number of Hz) after `label`. **It is the one reply that carries a
   frequency** (Alex's ruling 4 of 2026-11-26, asks 27 and 29: CHANNELS is the
@@ -771,24 +773,26 @@ available to copy.
   frequencies (N channels)`), never with a frequency. Every other reply, log
   line and event stays frequency-free.
 - `channel_put {name, frequency?, unit?, mode?, use?, ant_rx?, ant_tx?,
-  world?, label?}`: enters or changes one channel by hand. `frequency` reads
+  service?, label?}`: enters or changes one channel by hand. `frequency` reads
   as kHz (5000), unless `unit` is `khz`, `mhz` or `hz`. **Left out, a channel
   already in the plan keeps its frequency**, so a change to its ports, mode,
-  use, world or label needs no retyping; a new channel needs one, and
+  use, service or label needs no retyping; a new channel needs one, and
   `frequency` sent empty is refused. A mode, use or antenna left out keeps
   the old one; a mode left out or blank is `USB` on a new channel. The
   CHANNEL form leaves out a mode left blank, so it never resets a held
-  sideband. `world` is `mars` or `amateur`; left out, it keeps the
-  channel's (`mars` for a new one). `label` is the channel's HFLink label: 1
+  sideband. `service` is `mars` or `amateur` (`world` is read for one
+  release); left out, it keeps the channel's, and a new channel needs one.
+  `label` is the channel's HFLink label: 1
   to 16 letters, digits or `- / . _`, with a letter, never a frequency, kept
   in capitals; left out it is kept, sent empty it is cleared. `ant_rx` and `ant_tx` are the tuner
   ports the channel receives and transmits on: `1` or `2`, blank meaning 1;
   anything else is refused. Left out, each keeps the channel's port (the
   CHANNEL form leaves out a port left blank). A new channel, and every channel in a plan
   written before these fields, is 1 and 1. A frequency card imported again
-  keeps the ports set by hand, and the world and label. Returns `name`,
+  keeps the ports set by hand, and the service and label. Returns `name`,
   `result` (`added`, `replaced` or `same`), `frequency_changed`, `mode`,
-  `use`, `ant_rx`, `ant_tx`, `world` and `label`. The frequency is stored like
+  `use`, `ant_rx`, `ant_tx`, `service`, `world` (the same value, for one
+  release) and `label`. The frequency is stored like
   an imported one and never comes back in a reply or the log; only
   `channels_get_full` reads it back.
 - `channel_remove {name}`: takes a channel out of the plan.

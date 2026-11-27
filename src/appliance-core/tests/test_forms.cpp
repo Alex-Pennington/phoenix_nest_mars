@@ -429,6 +429,38 @@ static void drill(const fs::path& dir) {
     }
     r = form(*A.core, "BOOK", {{"name", "PRACTICE NET"}, {"kind", "collective"}, {"members", "STA-B, STA-C"}});
     CHECK(ok(r) && A.ops->book_get("PRACTICE NET") && A.ops->book_get("PRACTICE NET")->members.size() == 2);
+    // The BOOK form asks for the entry's service (docs/api.md, Services:
+    // book_put needs `service`). A screen sends only the answers to the
+    // fields form_get shows, so each answer here goes out only under a key
+    // the form lists, and nothing else names a service.
+    {
+        auto shown = [&](std::vector<std::pair<std::string, std::string>> answers) {
+            JsonValue f = show(*A.core, "BOOK");
+            std::string line = "{\"cmd\":\"form_submit\",\"form\":\"BOOK\"";
+            for (auto& [k, v] : answers)
+                if (field_of(f, k)) line += ",\"" + k + "\":\"" + esc(v) + "\"";
+            return parsed(ApiServer::handle(*A.core, line + "}"));
+        };
+        r = shown({{"name", "STA-H"}, {"call", "STA-H"}, {"service", "amateur"}});
+        CHECK(ok(r) && A.ops->book_get("STA-H") && A.ops->book_get("STA-H")->world == "amateur");
+        // Opened again, the form shows the service the entry holds, and the
+        // entry sent back as shown keeps it.
+        r = show(*A.core, "BOOK", "name", "STA-H");
+        CHECK(field_of(r, "service") && str(*field_of(r, "service"), "value") == "amateur");
+        if (field_of(r, "service")) {
+            r = shown({{"name", "STA-H"}, {"call", "STA-H"}, {"note", "changed"},
+                       {"service", str(*field_of(r, "service"), "value")}});
+            CHECK(ok(r) && A.ops->book_get("STA-H")->world == "amateur" && A.ops->book_get("STA-H")->note == "changed");
+        }
+        // Left blank, or naming a service the core doesn't know: book_put's
+        // own refusal comes back, and nothing is added.
+        r = shown({{"name", "STA-J"}, {"call", "STA-J"}});
+        CHECK(!ok(r) && str(r, "error").find("service: give the entry's service") == 0 && !A.ops->book_get("STA-J"));
+        r = shown({{"name", "STA-J"}, {"call", "STA-J"}, {"service", "cb"}});
+        CHECK(!ok(r) && str(r, "error") == "world: mars or amateur" && !A.ops->book_get("STA-J"));
+        A.ops->book_remove("STA-H");
+        CHECK(!A.ops->book_get("STA-H"));
+    }
     r = show(*A.core, "BOOK", "name", "PRACTICE NET");
     CHECK(str(*field_of(r, "kind"), "value") == "COLLECTIVE" && str(*field_of(r, "members"), "value") == "STA-B, STA-C");
     r = form(*A.core, "SCHEDULE", {{"name", "PRACTICE NET"}, {"days", "TUE,THU"}, {"time", "2460"}});
