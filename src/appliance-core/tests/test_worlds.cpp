@@ -589,6 +589,26 @@ int main() {
         auto m = a.get(in_id);
         CHECK(m && m->world == "mars");  // the service of the link it was heard on
     }
+    // A message in a reply says its `service` (docs/api.md, "service on every
+    // record"), and `world` with the same value for one release.
+    auto both = [](const JsonValue& row, const std::string& s) {
+        return str(row, "service") == s && str(row, "world") == s;
+    };
+    auto row_of = [&](const JsonValue& reply, const char* key) -> const JsonValue* {
+        const JsonValue* rows = reply.get(key);
+        if (rows && rows->is_array())
+            for (auto& x : rows->arr)
+                if (str(x, "id") == in_id) return &x;
+        return nullptr;
+    };
+    {
+        JsonValue g = call(a, {{"cmd", "get"}, {"id", in_id}});
+        const JsonValue* x = row_of(g, "messages");
+        CHECK(ok(g) && x && both(*x, "mars"));
+        JsonValue l = call(a, {{"cmd", "list"}, {"limit", "100"}});
+        x = row_of(l, "messages");
+        CHECK(ok(l) && x && both(*x, "mars"));
+    }
     CHECK(crossed(call(a, {{"cmd", "retransmit"}, {"id", in_id}, {"to", "TEST-HAM1"}, {"confirm", "Y"}}), "mars", "amateur"));
     CHECK(crossed(call(a, {{"cmd", "retransmit"}, {"id", in_id}, {"to", "STA-B"}, {"confirm", "Y"}, {"service", "amateur"}}),
                   "amateur", "mars"));

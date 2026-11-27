@@ -98,6 +98,9 @@ void write_message(JsonWriter& w, const Message& m, bool waiting_for_link = fals
         .field("state", m.state)
         .field("attempts", m.attempts)
         .field("sends", m.sends)
+        // The message's service (docs/api.md, Services); `world` carries the
+        // same value for one release.
+        .field("service", m.world)
         .field("world", m.world)
         .field("created_at", static_cast<long long>(m.created_at))
         .field("updated_at", static_cast<long long>(m.updated_at))
