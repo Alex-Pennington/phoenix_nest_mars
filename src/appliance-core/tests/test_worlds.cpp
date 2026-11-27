@@ -390,6 +390,22 @@ int main() {
         es = rs.get("stations");
         CHECK(ok(rs) && es && es->is_array() && es->arr.size() == 1 && both(es->arr[0], "mars"));
     }
+    // book_export: the CSV's column is `service` (docs/api.md), and it reads
+    // back with no default service given. A file of the last release, with a
+    // `world` column, is still read.
+    {
+        const std::string csv = str(call(a, {{"cmd", "book_export"}}), "csv");
+        CHECK(csv.rfind("name,kind,call,ri,ale,members,note,service\n", 0) == 0);
+        CHECK(has(csv, "\nBY SERVICE,station,TEST-SVC,,,,,amateur\n") && has(csv, "\nSTA-B,station,STA-B,,,,,mars\n"));
+        Ops copy("STA-X", (dir / "x-ops.db").string());
+        std::vector<std::string> dropped, errors;
+        CHECK(copy.book_import(csv, "", &dropped, &errors, "") == 4 && dropped.empty() && errors.empty());
+        CHECK(copy.book_find("TEST-SVC") && copy.book_find("TEST-SVC")->world == "amateur");
+        CHECK(copy.book_find("STA-B") && copy.book_find("STA-B")->world == "mars");
+        Ops old("STA-Y", (dir / "y-ops.db").string());
+        CHECK(old.book_import("name,kind,call,world\nOLD ONE,station,TEST-OLD,amateur\n", "", &dropped, &errors, "") == 1);
+        CHECK(old.book_find("TEST-OLD") && old.book_find("TEST-OLD")->world == "amateur");
+    }
     CHECK(has(str(call(a, {{"cmd", "channel_put"}, {"name", "N1"}, {"frequency", "5400"}}), "error"), "service"));
     CHECK(ok(call(a, {{"cmd", "channel_put"}, {"name", "M1"}, {"frequency", "5100"}})));  // an existing channel keeps its own
     CHECK(ops->channels().get("M1") && ops->channels().get("M1")->world == "mars");
