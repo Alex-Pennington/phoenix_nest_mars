@@ -30,7 +30,7 @@ namespace pna {
 Core::Core(CoreConfig cfg, std::unique_ptr<ModemDriver> modem)
     : cfg_(std::move(cfg)), modem_(std::move(modem)), store_(cfg_.db_path) {
     emcon_ = store_.flag("emcon");
-    rx_service_ = cfg_.rx_service;
+    rx_service_ = loose_service_ = cfg_.rx_service;
 }
 
 bool valid_link_format(const std::string& f) { return f == "pna1" || f == "plain"; }
@@ -587,8 +587,10 @@ void Core::tick() {
     age_queue();
     // Bare text that stopped part-way is taken as it stands.
     if (!loose_.empty() &&
-        std::chrono::steady_clock::now() - last_loose_ >= std::chrono::seconds(cfg_.loose_quiet_s))
+        std::chrono::steady_clock::now() - last_loose_ >= std::chrono::seconds(cfg_.loose_quiet_s)) {
+        rx_service_ = loose_service_;  // the held text's own service
         cut_loose(true);
+    }
 
     if (emcon_) return;
     if (on_air_ || !modem_->ready() || modem_->busy()) return;
@@ -1042,8 +1044,10 @@ void Core::decode_in(const ModemDecode& d) {
     // Received traffic takes the service of the channel it was heard on: the
     // plan's channel on the dial its capture's name carries. The messages the
     // same bytes hold (handle_rx, next) take it too.
-    rx_service_ = heard_service(d.source);
-    if (rx_service_.empty()) rx_service_ = cfg_.rx_service;
+    pending_service_ = heard_service(d.source);
+    if (pending_service_.empty()) pending_service_ = cfg_.rx_service;
+    pending_decode_ = true;
+    rx_service_ = pending_service_;  // the decode's own row
     if (store_.exists(id)) {
         log(id, "the same modem decode came again (" + d.source + "), not stored twice");
         return;
@@ -1058,6 +1062,16 @@ void Core::handle_rx(const std::string& bytes) {
     raw_rx(bytes);
     std::lock_guard<std::mutex> g(mu_);
     if (!bytes.empty()) last_air_ = std::chrono::steady_clock::now();
+    // These bytes' service: their decode's, else the link's.
+    const std::string svc = pending_decode_ ? pending_service_ : cfg_.rx_service;
+    pending_decode_ = false;
+    // Bare text held from a capture of another service is taken as it stands
+    // first, in its own service, before these bytes join it.
+    if (!loose_.empty() && loose_service_ != svc) {
+        rx_service_ = loose_service_;
+        cut_loose(true);
+    }
+    rx_service_ = loose_service_ = svc;
     auto frames = parser_.feed(bytes);
     for (const Frame& f : parser_.take_garbled()) {
         // The header checked, the body didn't: keep what came, ack nothing,

@@ -391,7 +391,15 @@ private:
     std::shared_ptr<TunerKeying> tuner_ = std::make_shared<TunerKeying>(nullptr);
     std::shared_ptr<Ops> ops_;
     std::shared_ptr<const Services> services_;
-    std::string rx_service_;  // the service of the channel the last decode was heard on
+    // The service the bytes being read now were heard in: what store_in and
+    // the answers they make take (caller holds mu_).
+    std::string rx_service_;
+    // A decode's service, waiting for its bytes (on_decode, then on_rx).
+    std::string pending_service_;
+    bool pending_decode_ = false;
+    // The service of the bare text held in loose_: a capture of another
+    // service flushes it first, so two captures' text is never mixed.
+    std::string loose_service_;
     std::shared_ptr<keys::Keyring> keys_;
     void tie_cipher();
     mutable std::mutex cipher_mu_;

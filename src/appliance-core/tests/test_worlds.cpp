@@ -5,11 +5,14 @@
 // never rerouted. One crossing test per send path, and the airtime point behind
 // them. Automatic modes keep their MARS-only refusals until stage 5.
 // Every call and every frequency here is made up.
+#include "../src/acp127.h"
 #include "../src/api_server.h"
 #include "../src/bbs.h"
 #include "../src/core.h"
 #include "../src/json.h"
+#include "../src/frame.h"
 #include "../src/loopback_modem.h"
+#include "../src/modem.h"
 #include "../src/ops.h"
 #include "../src/route.h"
 #include "../src/services.h"
@@ -25,6 +28,7 @@
 #include <filesystem>
 #include <fstream>
 #include <functional>
+#include <optional>
 #include <sstream>
 #include <thread>
 
@@ -113,6 +117,108 @@ static std::string chat(const std::string& to, const std::string& from, const st
 static CoreConfig link_in(CoreConfig c, const std::string& service) {
     c.rx_service = service;
     return c;
+}
+
+// A modem that hears bursts as the greybeard modem does: each capture's decode
+// (its name carries the dial) and then the same bytes (modem.h, on_decode).
+struct FakeDecoder : ModemDriver {
+    Callbacks cb;
+    std::vector<std::thread> done;
+    void start(Callbacks c) override { cb = std::move(c); }
+    void stop() override {
+        for (auto& t : done) t.join();
+        done.clear();
+    }
+    bool ready() const override { return true; }
+    bool busy() const override { return false; }
+    bool send(const std::string&) override {
+        done.emplace_back([this] { cb.on_tx_done(true, ""); });
+        return true;
+    }
+    std::string describe() const override { return "fake decoder"; }
+    void hear(const std::string& capture, const std::string& bytes) {
+        ModemDecode d;
+        d.bytes = bytes;
+        d.source = capture;
+        d.waveform = "110A";
+        if (cb.on_decode) cb.on_decode(d);
+        if (cb.on_rx) cb.on_rx(bytes);
+    }
+};
+
+static std::string acp127_to(const std::string& to, const std::string& text) {
+    acp127::Message m;
+    m.channel = "QXA";
+    m.routing = {to};
+    m.originator_ri = "TEST-OR";
+    m.station_serial = "1";
+    m.mars_fl3 = true;
+    m.from = {"TEST-OR", "TEST ORIGINATOR"};
+    m.to = {{to, "TEST STATION"}};
+    m.text = text;
+    m.dtg.year = 2099;
+    std::string e;
+    return acp127::build(m, &e);
+}
+
+// Received traffic takes the service of the channel it was heard on, through
+// the decode path: the plan's channel on the dial the capture's name carries.
+static void decode_path(const fs::path& dir) {
+    auto md = std::make_unique<FakeDecoder>();
+    FakeDecoder* air = md.get();
+    CoreConfig cz{"STA-Z", (dir / "z.db").string(), 3, 1, true};
+    cz.loose_quiet_s = 1;
+    Core z(cz, std::move(md));
+    z.set_services(test_services());
+    auto ops = std::make_shared<Ops>("STA-Z", (dir / "z-ops.db").string());
+    z.set_ops(ops);
+    std::string e;
+    Channel m1, h1;
+    m1.name = "M1", m1.hz = 5100000, m1.world = "mars";
+    h1.name = "H1", h1.hz = 5200000, h1.world = "amateur";
+    CHECK(ops->channels().put(m1, &e) && ops->channels().put(h1, &e));
+    z.start();
+    auto frame = [](const std::string& id, const std::string& body) {
+        Frame f;
+        f.type = FrameType::Msg;
+        f.id = id;
+        f.src = "TEST-FAR";
+        f.dst = "STA-Z";
+        f.body = body;
+        return encode(f);
+    };
+    air->hear("a_5100kHz.m110a.0.bin", frame("TEST-FAR-1", "ON THE MARS CHANNEL"));
+    air->hear("b_5200kHz.m110a.0.bin", frame("TEST-FAR-2", "ON THE AMATEUR CHANNEL"));
+    CHECK(wait_for([&] { return z.get("TEST-FAR-1") && z.get("TEST-FAR-2"); }));
+    CHECK(z.get("TEST-FAR-1") && z.get("TEST-FAR-1")->world == "mars");
+    CHECK(z.get("TEST-FAR-2") && z.get("TEST-FAR-2")->world == "amateur");
+    // The decode's own row, kept as it came, takes its capture's channel's service too.
+    for (auto& m : z.list(100))
+        if (m.state == "unverified" && has(m.body, "ON THE AMATEUR CHANNEL")) CHECK(m.world == "amateur");
+
+    // Bare text cut short in one capture, and a whole message in the next of
+    // another service: the first is taken as it stands with its own capture's
+    // service, never mixed into the next one's.
+    const std::string whole = acp127_to("STA-Z", "WHOLE ON MARS");
+    std::string part = acp127_to("STA-Z", "CUT SHORT ON THE AMATEUR CHANNEL");
+    part = part.substr(0, part.find("CUT SHORT") + 9);
+    air->hear("c_5200kHz.m110a.0.bin", part);
+    air->hear("d_5100kHz.m110a.0.bin", whole);
+    std::optional<Message> cut, full;
+    CHECK(wait_for(
+        [&] {
+            for (auto& m : z.list(100)) {
+                if (m.direction != "in" || m.state == "unverified") continue;  // not the decode's own row
+                if (has(m.body, "CUT SHORT")) cut = m;
+                if (has(m.body, "WHOLE ON MARS") && !has(m.body, "CUT SHORT")) full = m;
+            }
+            return cut && full;
+        },
+        8000));
+    CHECK(cut && cut->world == "amateur" && !has(cut->body, "WHOLE ON MARS"));
+    CHECK(full && full->world == "mars");
+    z.stop();
+    air->stop();
 }
 
 // ---------------------------------------------------------------- the tables
@@ -459,6 +565,7 @@ int main() {
     {
         ChannelPlan& cp = ops->channels();
         CHECK(cp.service_for(5100000) == "mars" && cp.service_for(5200000) == "amateur" && cp.service_for(9999000).empty());
+        decode_path(dir);
     }
 
     // ---- automatic modes stay MARS only until stage 5 -----------------------
