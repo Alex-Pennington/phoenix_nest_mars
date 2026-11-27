@@ -4,6 +4,7 @@
 #include "gale_key.h"
 #include "json.h"
 #include "ops.h"
+#include "route.h"
 #include "tuner.h"
 
 #include <filesystem>
@@ -103,6 +104,16 @@ std::optional<std::string> handle_key(Core& core, const std::string& cmd, std::m
                        (it.service.empty() ? std::string("of no service") : "of the " + it.service + " service"));
         GaleKey::Prepared p = gk->prepare(it);
         if (!p.ok) return err(p.error);
+        if (gk->controller_link()) {
+            // The route function with the channel the controller would send on.
+            JsonValue cf;
+            parse_json(p.confirm, cf);
+            const JsonValue* ch = cf.get("channel");
+            if (Route rt = core.route_for(it.service, it.to, ch ? ch->s : std::string()); !rt.ok) {
+                gk->cancel(p.prepare_id);
+                return err("not keyed: " + rt.refusal);
+            }
+        }
         JsonWriter w;
         w.begin_object()
             .field("ok", true)
@@ -162,6 +173,33 @@ std::optional<std::string> handle_key(Core& core, const std::string& cmd, std::m
         // The very burst the token was prepared for: same WAV, same bytes, and
         // (claim_key) still written, same world and channel, not yet asked.
         if (!gk->unchanged(h, &why)) return err(why);
+        if (gk->controller_link()) {
+            // Just before the submit, status.send_channel again: if the radio
+            // moved, nothing is sent and the y is asked again on the new channel.
+            const std::string now = gk->send_channel(h.item.service, &why);
+            if (now.empty()) return err("not keyed: " + why + "; " + h.item.burst + " stays written");
+            if (now != h.item.channel) {
+                KeyItem again = h.item;
+                again.channel = now;
+                GaleKey::Prepared p = gk->prepare(again);
+                if (!p.ok) return err(p.error);
+                w.begin_object()
+                    .field("ok", true)
+                    .field("kind", "air")
+                    .field("msg_id", h.item.msg_id)
+                    .field("burst", h.item.burst)
+                    .field("asked", false)
+                    .field("channel_was", h.item.channel)
+                    .field("channel", now)
+                    .field("prepare_id", p.prepare_id)
+                    .field("expires_s", p.expires_s)
+                    .raw("confirm", p.confirm)
+                    .field("note", "the station controller's channel moved from " + h.item.channel + " to " + now +
+                                       ": nothing sent; ask the y again")
+                    .end_object();
+                return w.str();
+            }
+        }
         if (!core.claim_key(h.item, &why)) return err(why);
         GaleKeyReply r = gk->key(h);
         if (!r.reached) {
@@ -181,7 +219,9 @@ std::optional<std::string> handle_key(Core& core, const std::string& cmd, std::m
             .field("burst", h.item.burst)
             .field("asked", true);
         write_reply(w, r);
-        w.field("note", "the message stays written until BURST.key.json says keyed (sent) or refused (failed)")
+        w.field("note", gk->controller_link()
+                            ? "the message stays written until the SIS answer: a confirm (sent) or a reject (failed)"
+                            : "the message stays written until BURST.key.json says keyed (sent) or refused (failed)")
             .end_object();
         return w.str();
     }

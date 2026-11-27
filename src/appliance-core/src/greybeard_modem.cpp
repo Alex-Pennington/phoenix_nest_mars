@@ -115,6 +115,7 @@ void GreybeardModem::stop() {
 }
 
 std::string GreybeardModem::describe() const {
+    if (cfg_.frames_only) return "greybeard-ale station controller over STANAG 5066 SIS (frames to the outbox)";
     return "greybeard-ale " + cfg_.waveform + " " + (cfg_.mode.empty() ? "(no mode)" : cfg_.mode) + " via " +
            (cfg_.tx_cmd.empty() ? "?" : fs::path(cfg_.tx_cmd.back()).filename().string());
 }
@@ -155,6 +156,29 @@ void GreybeardModem::tx_loop() {
 
         bool ok = false;
         std::string why;
+        if (cfg_.frames_only) {
+            // The frame, whole, appears in the outbox only when written.
+            fs::path frame = fs::path(cfg_.outbox_dir) / (base + ".frame");
+            fs::path tmp = fs::path(cfg_.outbox_dir) / ("." + base + ".frame.tmp");
+            {
+                std::ofstream f(tmp, std::ios::binary | std::ios::trunc);
+                f.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
+                if (!f) why = "cannot write the frame to the outbox";
+            }
+            std::error_code ec;
+            if (why.empty()) fs::rename(tmp, frame, ec);
+            if (why.empty() && ec) why = "cannot move the frame into the outbox";
+            if (!why.empty()) fs::remove(tmp, ec);
+            ok = why.empty();
+            if (ok) {
+                std::lock_guard<std::mutex> g(mu_);
+                last_burst_ = frame.string();
+            }
+            sending_ = false;
+            if (ok && cb_.on_tx_written) cb_.on_tx_written(frame.filename().string());
+            if (cb_.on_tx_done) cb_.on_tx_done(ok, why);
+            continue;
+        }
         {
             std::ofstream f(payload, std::ios::binary | std::ios::trunc);
             f.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
@@ -208,7 +232,7 @@ void GreybeardModem::tx_loop() {
 void GreybeardModem::rx_loop() {
     while (running_) {
         scan_captures();
-        if (cfg_.await_key) scan_key_results();
+        if (cfg_.await_key && !cfg_.frames_only) scan_key_results();
         std::unique_lock<std::mutex> lk(mu_);
         cv_.wait_for(lk, std::chrono::milliseconds(cfg_.poll_ms), [this] { return !running_.load(); });
     }

@@ -254,6 +254,11 @@ static void tables() {
     CHECK(s->find("amateur")->station_id && !s->find("mars")->station_id);
     CHECK(no_table("narnia") == "no table for service `narnia`");
 
+    // The fixture tables load whatever mode the checkout gave them (a umask
+    // of 0002 makes them group-writable): the tests read a 0644 copy.
+    CHECK(test_services()->valid("mars") && test_services()->valid("amateur"));
+    CHECK(test_services_dir() != test_services_source_dir());
+
     // A third service needs a table only, never code.
     std::string third;
     {
@@ -284,6 +289,15 @@ static void tables() {
                              &why);
     CHECK(x->all().empty() && why.size() == 7);
     for (auto& w : why) CHECK(!has(w, "1800000") && !has(w, "14000000"));
+
+    // All digital traffic is USB: the table has no sideband column, and a
+    // table that still carries one is refused whole, as any unknown key is.
+    CHECK(!has(third, "default_sideband"));
+    why.clear();
+    x = Services::from_texts(
+        {{"amateur", with("\"passband_hz\"", "\"default_sideband\": \"usb\", \"passband_hz\"")}}, &why);
+    CHECK(x->all().empty() && why.size() == 1);
+    CHECK(!why.empty() && has(why[0], "amateur.json refused: unknown key radio.default_sideband"));
 
     // On disk: a file anyone else can write is refused, and the others still load.
     fs::path d = fs::temp_directory_path() / ("pna_services_" + std::to_string(::getpid()));

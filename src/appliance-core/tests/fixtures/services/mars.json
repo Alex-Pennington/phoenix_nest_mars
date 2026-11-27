@@ -9,7 +9,6 @@
     "data_segments_hz": null,
     "auto_segments_hz": null,
     "default_mode": "DIG",
-    "default_sideband": "usb",
     "passband_hz": 3000,
     "waveforms": ["110a"]
   },

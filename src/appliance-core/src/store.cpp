@@ -378,6 +378,16 @@ std::vector<Store::KeyRow> Store::written_automatic(int limit) {
     return out;
 }
 
+std::vector<Store::KeyRow> Store::written_asked() {
+    Stmt s(db_, (std::string("SELECT ") + kKeyCols +
+                 " FROM messages WHERE direction = 'out' AND state = 'written' AND key_asked = 1"
+                 " AND burst <> '' ORDER BY updated_at, rowid")
+                    .c_str());
+    std::vector<KeyRow> out;
+    while (s.step()) out.push_back(key_row_of(s));
+    return out;
+}
+
 void Store::set_key_mode(const std::string& id, const std::string& mode) {
     Stmt s(db_, "UPDATE messages SET key_mode = ? WHERE id = ? AND direction = 'out'");
     s.bind(1, mode).bind(2, id);

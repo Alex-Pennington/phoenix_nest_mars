@@ -343,7 +343,18 @@ private:
     void handle_tx_done(bool ok, const std::string& err);
     // The outbox write-back: gale-key keyed a burst (sent from now) or
     // refused it (failed, with why).
-    void handle_key_result(const std::string& burst, bool keyed, const std::string& why);
+    // by names who keyed it, for the log ("gale-key", "the station controller").
+    void handle_key_result(const std::string& burst, bool keyed, const std::string& why,
+                           const std::string& by = "gale-key");
+    // link = controller: a frame handed down whose result the controller's
+    // status does not give (gale_key.h, settle). The message fails with why,
+    // never as "not keyed": it may have been.
+    void handle_key_unknown(const std::string& burst, const std::string& why);
+    // link = controller: frames go down over STANAG 5066 SIS (gale_key.h set_sis).
+    bool sis_link() const { return gk_ && gk_->controller_link(); }
+    // link = controller: a reject saying "no standing grant for service S"
+    // turns off every mode granted for S here too (caller holds mu_).
+    void no_grant_for(const std::string& service, const std::string& why);
     // The service of the channel a capture was heard on, from the dial its
     // name carries ("" when no channel of the plan is on that dial).
     std::string heard_service(const std::string& source);
@@ -421,7 +432,9 @@ private:
     // standing mode, once each (caller holds mu_).
     void key_automatic();
     // The checks key_item and claim_key share (caller holds mu_).
-    bool key_checks(const Store::KeyRow& r, std::string* error);
+    // channel: the one it goes on when not the row's (the controller's
+    // send_channel, link = controller; "" none known yet).
+    bool key_checks(const Store::KeyRow& r, std::string* error, const std::string* channel = nullptr);
     std::shared_ptr<GaleKey> gk_;
     std::set<std::string> key_queued_;    // automatic keys handed to gale-key's thread, not yet claimed
     std::map<std::string, std::chrono::steady_clock::time_point> key_retry_;  // gale-key wasn't reached: not before

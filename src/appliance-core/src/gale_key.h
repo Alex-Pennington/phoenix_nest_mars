@@ -36,6 +36,7 @@
 #include "json.h"
 
 #include <atomic>
+#include <chrono>
 #include <condition_variable>
 #include <deque>
 #include <functional>
@@ -133,7 +134,18 @@ private:
 // it goes on, and the link-level addressee.
 struct KeyItem {
     std::string msg_id, burst, service, channel, to;
+    bool station_id = false;  // the service's table sends a station ID (the y shows it)
 };
+
+class SisControllerLink;
+
+// link = controller: what became of a frame handed down over SIS.
+//  keyed    S_UNIDATA_REQUEST_CONFIRM, or status.last says keyed
+//  refused  S_UNIDATA_REQUEST_REJECTED, or status.last says refused
+//  unknown  nobody is waiting on its answer and the controller's status does
+//           not say: it may or may not have been keyed
+enum class SisOutcome { keyed, refused, unknown };
+constexpr const char* kSisResultUnknown = "result unknown: check the log before resending";
 
 class GaleKey {
 public:
@@ -204,6 +216,10 @@ public:
     GaleKeyReply revoke(const std::string& mode, const std::string& why);
     // The mode goes off here only (gale-key already dropped it); nothing is sent.
     void forget(const std::string& mode);
+    // Every mode granted for this service goes off here only; nothing is sent.
+    // The controller's standing gate is per service (station-controller.md,
+    // part 3). Returns the modes turned off.
+    std::vector<std::string> forget_service(const std::string& service);
         bool standing_on(const std::string& mode);
     std::vector<std::string> standing();
 
@@ -218,6 +234,38 @@ public:
     // stop() so no callback reaches a core that is going away.
     void halt();
     GaleKeyReply key_standing_now(const KeyItem& it, const std::string& mode);
+
+    // link = controller (docs/api.md, "Keying"): frames go down over STANAG 5066
+    // SIS on this link, never as prepare, key or cancel on the local socket,
+    // and their SIS answer is the result. The local socket keeps status, grant
+    // and revoke. Set before the core's set_gale_key; this starts the link.
+    void set_sis(std::shared_ptr<SisControllerLink> sis);
+    bool controller_link() const { return sis_ != nullptr; }
+    SisControllerLink* sis() const { return sis_.get(); }
+    // Called once per frame handed down over SIS, from the link's thread or
+    // this object's: keyed (S_UNIDATA_REQUEST_CONFIRM), refused (REJECTED) or,
+    // for a frame settled from status.last (settle, below; no answer in time
+    // and a dropped connection are settled so too), any of the three, with
+    // why: the controller's
+    // sentence from status.last under the frame's sha256, else the Annex A
+    // reason. For a keyed frame, why names the channel status.last gives (""
+    // when it gives none). For unknown it is kSisResultUnknown.
+    using SisResult = std::function<void(const std::string& burst, SisOutcome outcome, const std::string& why)>;
+    void set_sis_result(SisResult r);
+    // Frames handed down whose answer nobody is waiting for (the core stopped
+    // before it came): each is settled from the controller's status.last
+    // under the frame's sha256, on this object's thread, through the SIS
+    // result. keyed and refused are the controller's word. A frame status.last
+    // does not name is unknown. One it names with no result yet (gale-key has
+    // the order) waits, as does every one while status does not answer; the
+    // wait ends as unknown after settle_wait_s. Status is read at once, again
+    // at every bind of the link, and every settle_retry_ms while any waits.
+    // because: said in the log, for example "the core restarted".
+    void settle(const std::vector<KeyItem>& asked, const std::string& because);
+    size_t unsettled();
+    // The controller's status.send_channel for a service: the label it would
+    // send on now. "" with *why (the controller's) when it names none.
+    std::string send_channel(const std::string& service, std::string* why);
 
     // `status`, as the controller answers it. Every status read updates radio().
     GaleKeyReply status();
@@ -236,7 +284,9 @@ public:
 
 private:
     GaleKeyReply ask(const std::string& request);
-    GaleKeyReply send_key(const KeyItem& it, const std::string& request);  // through around_
+    // Through around_. sha256: link = controller, the operator's y; the frame's
+    // sha256 the y was given for ("" for an automatic send, which has no y).
+    GaleKeyReply send_key(const KeyItem& it, const std::string& request, const std::string& sha256 = "");
     // {"cmd":CMD,"message":{"wav":ABS},"control":{to, service, channel, kind, control, final, EXTRA}}.
     // extra: members for `control`, as JSON text "\"k\":v,..." ("" none).
     std::string air_request(const char* cmd, const KeyItem& it, const std::string& control,
@@ -248,6 +298,31 @@ private:
     void note(const std::string& msg_id, const std::string& text);
     void worker();
 
+    // link = controller
+    Prepared prepare_sis(const KeyItem& it);
+    // Reads the frame once and submits those bytes. With sha256 given (the
+    // y's), bytes of another sha256 are not submitted.
+    GaleKeyReply submit_sis(const KeyItem& it, bool automatic, const std::string& sha256);
+    // late: the answer of a request that had ended unanswered. It settles that
+    // frame, waiting on status or already settled, and no other.
+    void on_sis(const std::string& burst, const std::string& msg_id, const std::string& sha256, bool confirmed,
+                const std::string& why, bool late);
+    // A request that ended with no answer: its frame joins the unsettled.
+    void unanswered(const std::string& burst, const std::string& msg_id, const std::string& sha256,
+                    const std::string& because);
+    std::shared_ptr<SisControllerLink> sis_;
+    SisResult sis_result_;
+    struct Unsettled {
+        std::string burst, msg_id;
+        std::string sha256;   // "" until read from the frame in the outbox
+        std::string because;
+        std::chrono::steady_clock::time_point until;
+    };
+    std::deque<Unsettled> unsettled_;
+    bool settle_now_ = false;
+    int settle_wait_s_ = 270, settle_retry_ms_ = 2000;  // the link's (SisLinkConfig)
+    void settle_pass();  // on the worker thread
+
     std::shared_ptr<GaleKeyLink> link_;
     std::string outbox_;
     std::function<double()> clock_;
@@ -256,6 +331,7 @@ private:
     std::mutex mu_;
     std::map<std::string, Held> held_;
     std::map<std::string, bool> standing_;
+    std::map<std::string, std::string> standing_service_;  // mode -> the service it was granted for
     std::string last_, last_why_;
     RadioReport radio_;
     int poll_ms_ = 0;

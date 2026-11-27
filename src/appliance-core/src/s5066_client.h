@@ -24,8 +24,10 @@
 #include <chrono>
 #include <functional>
 #include <map>
+#include <memory>
 #include <mutex>
 #include <string>
+#include <deque>
 #include <thread>
 #include <vector>
 
@@ -102,6 +104,157 @@ private:
     std::atomic<bool> bound_{false};
     std::atomic<bool> sending_{false};
     std::atomic<bool> flow_off_{false};
+    std::atomic<bool> running_{false};
+    std::thread worker_;
+};
+
+// ---- link = controller ----------------------------------------------------
+// The core as the networking controller over STANAG 5066 SIS to greybeard-ale's
+// station controller, the link controller (MIL-STD-188-141B D.4.2.8.3; docs/api.md,
+// "Keying"; decision D11, "lean SIS"). The primitives and their encoding are
+// STANAG 5066 Annex A v1.2, A.2.1 and A.2.2; the codec is s5066.h.
+//
+//  - One Unix socket per service, DIR/sis-<service>.sock. The transport is the
+//    only departure: the controller checks the core's unit by SO_PEERCRED,
+//    which a TCP peer has not got. Framing is Annex A A.2.2.2.
+//  - On each service's socket the operator's sender binds SAP 13 and, where
+//    the service has automatic modes, the automatic sender binds SAP 14, each
+//    on its own connection (S_BIND_REQUEST, A.2.1.1 and A.2.2.3). The service
+//    type is non-ARQ (Transmission Mode 0010), no delivery confirmation, in
+//    order, no retransmission (Figure A-3).
+//  - One frame per S_UNIDATA_REQUEST (A.2.1.6, Figure A-20), to the all-stations
+//    address as a group address (A.2.2.28.1), with the same delivery mode
+//    given explicitly (Figure A-29). A U_PDU over the MTU of S_BIND_ACCEPTED
+//    (A.2.1.3: 2048 for a general-purpose node) is never submitted.
+//  - Every request waits for its one answer, S_UNIDATA_REQUEST_CONFIRM (A.2.1.7)
+//    or S_UNIDATA_REQUEST_REJECTED (A.2.1.8). Annex A issues these only when
+//    confirmation was asked; the controller departs and answers every request,
+//    after the key ends. The answer names its U_PDU by a copy of its first
+//    bytes (A.2.1.7 (7)), which matches it to its request.
+//  - No answer within the time to live plus a grace, or a dropped connection,
+//    is not a failure: the frame may have been keyed. The request ends
+//    unanswered, and its frame is settled from the controller's status.last
+//    (gale_key.h, settle).
+//  - A request that ran out of time is kept on its connection's late list.
+//    An answer is matched against that list first, oldest first, and only
+//    then against the requests waiting: the answer of a request that ran out
+//    of time is never taken for a later request of the same bytes.
+//  - S_KEEP_ALIVE (A.2.1.17) is answered in kind.
+// The controller's own bounds (greybeard-ale docs/station-controller.md and
+// tools/gale_rx.py): no claim on the radio is held past claim-max-s, and an
+// order to gale-key is waited on for the order timeout.
+constexpr int kSisClaimMaxS = 120;
+constexpr int kSisOrderTimeoutS = 150;
+
+struct SisLinkConfig {
+    std::string dir = "/run/gale-rx";  // --controller-sis-dir: DIR/sis-<service>.sock
+    uint8_t sap_operator = 13;
+    uint8_t sap_automatic = 14;
+    uint32_t ttl_seconds = 600;        // s5066-ttl, per U_PDU, sent in 2 s units (Figure A-20); 0 no limit
+    // Waited past the TTL for the answer. The TTL bounds only the wait before
+    // the key starts (A.2.2.20; station-controller.md, part 3). After it the
+    // controller may still hold the radio for claim-max-s and wait on
+    // gale-key for the order timeout, and it answers only then.
+    int answer_grace_s = kSisClaimMaxS + kSisOrderTimeoutS;
+    int reconnect_ms = 3000;
+    uint16_t mtu = 2048;               // A.2.1.3 (7), and the controller's
+    // A frame nobody is waiting on the answer of is settled from the
+    // controller's status.last (gale_key.h, settle). How long it may wait there
+    // for a result the controller does not have yet, and how often status is
+    // read again meanwhile.
+    int settle_wait_s = kSisClaimMaxS + kSisOrderTimeoutS;
+    int settle_retry_ms = 2000;
+    // How long a request that ran out of time stays on the late list for its
+    // answer. The controller waits on gale-key for the order timeout twice
+    // (the order, then its result file) before it answers.
+    int late_keep_s = 2 * kSisOrderTimeoutS;
+};
+
+constexpr size_t kSisMtu = 2048;
+constexpr size_t kSisLateMax = 16;  // requests kept on one connection's late list
+
+// One frame handed down.
+struct SisSend {
+    std::string service, burst, msg_id, frame, sha256;
+    bool automatic = false;  // SAP 14, else SAP 13
+    uint8_t priority = 0;    // 0-15 (A.2.1.6 (2))
+};
+
+class SisControllerLink {
+public:
+    // How a request ended.
+    //  confirmed   S_UNIDATA_REQUEST_CONFIRM (A.2.1.7): keyed
+    //  rejected    S_UNIDATA_REQUEST_REJECTED (A.2.1.8), with its reason: not keyed
+    //  unanswered  the deadline passed or the connection dropped, and why says
+    //              which. The frame may have been keyed: never a failure by itself
+    // late: a confirm or a reject for a request that had already ended
+    // unanswered at its deadline. It is that request's, and no other's.
+    enum class End { confirmed, rejected, unanswered };
+    using Result =
+        std::function<void(const SisSend& s, End end, uint8_t reason, const std::string& why, bool late)>;
+
+    explicit SisControllerLink(SisLinkConfig cfg);
+    ~SisControllerLink();
+    SisControllerLink(const SisControllerLink&) = delete;
+    SisControllerLink& operator=(const SisControllerLink&) = delete;
+
+    // Before start: a connection for this service's operator sender, and one
+    // for its automatic sender when automatic is set.
+    void add(const std::string& service, bool automatic);
+    // on_bound: called from the link's thread at every S_BIND_ACCEPTED, the
+    // first and each one after a dropped connection.
+    using Bound = std::function<void(const std::string& service, bool automatic)>;
+    void start(Result on_result, std::function<void(const std::string&)> log, Bound on_bound = {});
+    void stop();
+
+    // Writes one S_UNIDATA_REQUEST. False with *why when it was not written:
+    // no such connection, not bound, or a U_PDU over the MTU.
+    bool submit(const SisSend& s, std::string* why);
+    bool bound(const std::string& service, bool automatic) const;
+    bool has(const std::string& service, bool automatic) const;
+    size_t outstanding() const;
+    std::string path_for(const std::string& service) const;
+    const SisLinkConfig& config() const { return cfg_; }
+
+private:
+    struct Pending {
+        SisSend send;
+        std::chrono::steady_clock::time_point deadline;
+    };
+    struct Conn {
+        std::string service;
+        bool automatic = false;
+        uint8_t sap = 0;
+        int fd = -1;
+        bool bound = false;
+        uint16_t mtu = 0;
+        s5066::Reader reader;
+        std::deque<Pending> pending;
+        std::deque<Pending> late;  // ran out of time, answer still owed; deadline: when it is forgotten
+        std::chrono::steady_clock::time_point next_try{};
+        std::string told;  // the last state logged, so it is said once
+    };
+    struct Done {
+        SisSend send;
+        End end = End::unanswered;
+        uint8_t reason = 0;
+        std::string why;
+        bool late = false;
+    };
+    void run();
+    void open(Conn& c, std::vector<std::string>& notes);  // caller holds mu_
+    void drop(Conn& c, const std::string& why, std::vector<Done>& done, std::vector<std::string>& notes);
+    void handle(Conn& c, const s5066::Prim& p, std::vector<Done>& done, std::vector<std::string>& notes);
+    std::vector<std::pair<std::string, bool>> bound_now_;  // binds accepted, not yet told (mu_)
+    Bound on_bound_;
+    Conn* find(const std::string& service, bool automatic);
+    const Conn* find(const std::string& service, bool automatic) const;
+
+    SisLinkConfig cfg_;
+    Result on_result_;
+    std::function<void(const std::string&)> log_;
+    mutable std::mutex mu_;
+    std::vector<std::unique_ptr<Conn>> conns_;
     std::atomic<bool> running_{false};
     std::thread worker_;
 };
