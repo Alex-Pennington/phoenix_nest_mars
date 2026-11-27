@@ -107,8 +107,11 @@ static void write(const fs::path& p, const std::string& s) {
 static void set_world(const fs::path& db, const std::string& id, const std::string& world) {
     sqlite3* h = nullptr;
     sqlite3_open(db.c_str(), &h);
-    sqlite3_exec(h, ("UPDATE messages SET world = '" + world + "' WHERE id = '" + id + "'").c_str(), nullptr, nullptr,
-                 nullptr);
+    // The core writes this file too. Wait for its lock: a write that met it
+    // was dropped unsaid, and the checks after it then read the old service.
+    sqlite3_busy_timeout(h, 5000);
+    CHECK(sqlite3_exec(h, ("UPDATE messages SET world = '" + world + "' WHERE id = '" + id + "'").c_str(), nullptr,
+                       nullptr, nullptr) == SQLITE_OK);
     sqlite3_close(h);
 }
 static std::string chat(const std::string& to, const std::string& from, const std::string& text) {
