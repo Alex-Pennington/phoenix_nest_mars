@@ -27,6 +27,7 @@
 #include <chrono>
 #include <cstring>
 #include <filesystem>
+#include <fstream>
 #include <functional>
 #include <map>
 #include <mutex>
@@ -556,6 +557,32 @@ int main() {
         CHECK(wait_for([&] { return s.state(mv) == "sent"; }, 5000));
         CHECK(f.count_reqs() == before + 1);
         CHECK(has(s.events_text(), "on P2"));
+
+        // ---- the frame changes after the y's check: the changed bytes are never submitted
+        {
+            const std::string sw = s.written("FARSTN", "VERIFIED BYTES");
+            KeyItem it;
+            std::string why;
+            CHECK(s.core->key_item(sw, "", it, &why));
+            GaleKey::Prepared p = s.gk->prepare(it);
+            CHECK(p.ok);
+            s.now = s.now + 2;
+            GaleKey::Held h;
+            CHECK(s.gk->take(p.prepare_id, h, &why));
+            CHECK(s.gk->unchanged(h, &why));
+            // Swapped between the check and the submit.
+            {
+                std::ofstream o(fs::path(s.gc.outbox_dir) / h.item.burst, std::ios::binary | std::ios::trunc);
+                o << "NOT THE FRAME THE OPERATOR SAW";
+            }
+            const size_t b0 = f.count_reqs();
+            GaleKeyReply r = s.gk->key(h);
+            CHECK(!r.reached && has(r.reason, "sha256 differs"));
+            std::this_thread::sleep_for(std::chrono::milliseconds(300));
+            CHECK(f.count_reqs() == b0);
+            CHECK(s.state(sw) == "written");
+            CHECK(s.core->cancel(sw, &why));
+        }
 
         // ---- no send_channel for the service: refused with the controller's why
         {

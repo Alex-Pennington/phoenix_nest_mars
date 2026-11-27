@@ -261,7 +261,9 @@ public:
 
 private:
     GaleKeyReply ask(const std::string& request);
-    GaleKeyReply send_key(const KeyItem& it, const std::string& request);  // through around_
+    // Through around_. sha256: link = controller, the operator's y; the frame's
+    // sha256 the y was given for ("" for an automatic send, which has no y).
+    GaleKeyReply send_key(const KeyItem& it, const std::string& request, const std::string& sha256 = "");
     // {"cmd":CMD,"message":{"wav":ABS},"control":{to, service, channel, kind, control, final, EXTRA}}.
     // extra: members for `control`, as JSON text "\"k\":v,..." ("" none).
     std::string air_request(const char* cmd, const KeyItem& it, const std::string& control,
@@ -275,7 +277,9 @@ private:
 
     // link = controller
     Prepared prepare_sis(const KeyItem& it);
-    GaleKeyReply submit_sis(const KeyItem& it, bool automatic);
+    // Reads the frame once and submits those bytes. With sha256 given (the
+    // y's), bytes of another sha256 are not submitted.
+    GaleKeyReply submit_sis(const KeyItem& it, bool automatic, const std::string& sha256);
     void on_sis(const std::string& burst, const std::string& sha256, bool confirmed, const std::string& why);
     std::shared_ptr<SisControllerLink> sis_;
     SisResult sis_result_;

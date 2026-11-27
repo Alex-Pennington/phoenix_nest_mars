@@ -2002,7 +2002,9 @@ token. The y is the core's own:
   the kiosk asks the y again. The answer holds the new dialog, and the old one is spent:
   `{"ok":true,"kind":"air","msg_id":"ID","asked":false,"channel_was":"<LABEL>","channel":"<LABEL>",
   "prepare_id":"KP-...","expires_s":120,"confirm":{...}}`. Otherwise it hands the frame down on SAP 13, the
-  only thing sent. The window left is the milliseconds between that read and
+  only thing sent. The frame is read once for the submit: those bytes are checked against the
+  y's sha256, and those bytes are what goes down. Bytes of another sha256 are refused ("its sha256
+  differs"), nothing is sent, and the message stays `written`. The window left is the milliseconds between that read and
   the frame's arrival, and the controller still checks the channel it keys on
   against the table. `status.last` names that channel, and the core shows it
   on the message. The `note` says the message stays `written` until the SIS

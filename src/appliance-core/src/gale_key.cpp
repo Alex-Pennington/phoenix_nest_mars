@@ -236,7 +236,7 @@ void GaleKey::set_around(Around around) {
     around_ = std::move(around);
 }
 
-GaleKeyReply GaleKey::send_key(const KeyItem& it, const std::string& request) {
+GaleKeyReply GaleKey::send_key(const KeyItem& it, const std::string& request, const std::string& sha256) {
     Around a;
     {
         std::lock_guard<std::mutex> g(mu_);
@@ -245,7 +245,7 @@ GaleKeyReply GaleKey::send_key(const KeyItem& it, const std::string& request) {
     // link = controller: request is empty for the operator's send (SAP 13)
     // and "automatic" for an automatic one (SAP 14).
     std::function<GaleKeyReply()> send = [this, &request] { return ask(request); };
-    if (sis_) send = [this, &it, &request] { return submit_sis(it, request == "automatic"); };
+    if (sis_) send = [this, &it, &request, &sha256] { return submit_sis(it, request == "automatic", sha256); };
     if (!a) return send();
     return a(it, send);
 }
@@ -544,7 +544,8 @@ bool GaleKey::unchanged(const Held& h, std::string* error) const {
 
 GaleKeyReply GaleKey::key(const Held& h) {
     if (sis_) {
-        GaleKeyReply r = send_key(h.item, "");
+        // The y's sha256 goes with it: the bytes submitted are the bytes checked.
+        GaleKeyReply r = send_key(h.item, "", h.sha256);
         note(h.item.msg_id, "handed " + h.item.burst + " (" + h.item.service + ") to the station controller on SAP 13 " +
                                 "on the operator's y, for " + h.item.channel + ": " +
                                 (r.reached ? std::string("its SIS answer decides") : no_frequency(r.reason)));
@@ -860,11 +861,18 @@ GaleKey::Prepared GaleKey::prepare_sis(const KeyItem& it) {
     return p;
 }
 
-GaleKeyReply GaleKey::submit_sis(const KeyItem& it, bool automatic) {
+GaleKeyReply GaleKey::submit_sis(const KeyItem& it, bool automatic, const std::string& sha256) {
     GaleKeyReply r;
+    // Read once. These bytes are checked against the y's sha256, and these
+    // bytes are submitted: the file is not read again in between.
     std::string bytes;
     if (!read_whole(wav_path(it.burst), bytes) || bytes.empty()) {
         r.reason = it.burst + " is no longer in the outbox";
+        return r;
+    }
+    const std::string digest = sha256_hex(bytes);
+    if (!sha256.empty() && digest != sha256) {
+        r.reason = it.burst + " changed since the y dialog opened (its sha256 differs): not keyed; open it again";
         return r;
     }
     SisSend s;
@@ -872,7 +880,7 @@ GaleKeyReply GaleKey::submit_sis(const KeyItem& it, bool automatic) {
     s.burst = it.burst;
     s.msg_id = it.msg_id;
     s.frame = bytes;
-    s.sha256 = sha256_hex(bytes);
+    s.sha256 = digest;
     s.automatic = automatic;
     // The 5066 priority from the precedence the frame's header carries (Z 15,
     // O 10, P 5, R 0); a plain frame, with no header, goes at 0.
