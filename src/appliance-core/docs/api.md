@@ -336,7 +336,10 @@ as MARS. Alex's hard rule stands: there is no forward or auto-copy route between
   controller reports the radio on, when that channel's service is the message's. On
   `compose_send`, `send_acp127` and `send_acp126` the label is `radio_channel`, because their
   `channel` is already the ACP 127 channel letters after VZCZC; `send` and `send_chat` take
-  either name.
+  either name. With the station controller (`link = controller`) the controller chooses the
+  channel itself: the radio's current channel when it is of the message's service, else the
+  service's park channel. The core takes no channel then, and one given is refused: "the station
+  controller chooses the channel". The y question shows the choice (Keying, below).
 - **The routing table** follows D.4.2.1.1 and D.5.2.1.2. It has one entry per destination,
   and each entry also names the destination's service. Operator entries are kept, and nothing
   automatic ever overwrites them. Each `route_set` rule is an operator entry, and it is refused
@@ -359,9 +362,10 @@ as MARS. Alex's hard rule stands: there is no forward or auto-copy route between
   formats its table lists in `formats`.
 - **No station-wide transmit world.** A send carries its own service. The settings row
   `tx-world` and the keying file's `tx_world` retire.
-- **The controller, not gale-key.** The core hands each burst to greybeard-ale's station
-  controller (greybeard-ale `docs/station-controller.md`) as a network message (D.4.2.8.3),
-  and never talks to gale-key (Keying, below). EMCON is the standard's "radio silence"
+- **The controller, not gale-key.** The core hands each message to greybeard-ale's station
+  controller (greybeard-ale `docs/station-controller.md`) as a network message (D.4.2.8.3):
+  the frame over STANAG 5066 SIS, unopened, with nothing else (decision D11, "lean SIS now",
+  greybeard-ale #18). It never talks to gale-key (Keying, below). EMCON is the standard's "radio silence"
   (D.5.2.7, table D-IX), a network management setting.
   `radio_channel` in `status` is the controller's report of the radio's channel and its service.
   It is no longer a label the core was told.
@@ -1786,93 +1790,95 @@ nothing. In training it writes to the practice station's folder, as `export` doe
 
 ## Transmit: written, then sent
 
-The core never keys the radio. With the greybeard modem it writes each burst
-to the outbox as `BURST.wav` and marks the message `written`. The core hands
-it to greybeard-ale's station controller (next section), which orders
-gale-key. For every key the controller accepts, one result file is written
-beside the WAV: gale-key's, or the controller's own `refused` when it never
-ordered the key. It is written whole, as `.BURST.key.json.tmp` renamed to
-`BURST.key.json`:
+The core never keys the radio. With the station controller it doesn't build the burst either. It
+writes each message as its frame and marks it `written`. After the operator's y, or under a
+standing mode the core holds, it hands the frame down unopened over STANAG 5066 SIS (next
+section). The controller builds the 110A burst, orders gale-key, and answers the frame on SIS.
+That answer is the result:
 
-```
-{"version":1,"burst":"BURST.wav","result":"keyed","why":"","at":"2026-11-26T15:00:00Z"}
-```
+- `S_UNIDATA_REQUEST_CONFIRM`: keyed, not delivered. Nothing below the core knows whether a
+  station heard it. The message becomes `sent`, and its Transport ack clock (QSL, the resend
+  queue) starts then.
+- `S_UNIDATA_REQUEST_REJECTED`: not keyed. The message becomes `failed`, shown to the operator as
+  "not keyed: why". `why` is the controller's sentence, read from its `status.last` under the
+  frame's sha256, because SIS carries only a reason code.
+- No answer within the time to live plus 30 s, or a dropped connection, fails the message, and the
+  queue treats it as any failed send.
+- A result for an ack or orderwire is logged only.
+- `status` counts `written`.
 
-- `result` is `keyed` or `refused`; `why` says why it refused (shown to the
-  operator as "not keyed: why").
-- On `keyed` the message becomes `sent` and its ack clock starts then.
-- The core reads and removes each result file. One it can't read, or one
-  naming another burst, is renamed `.key.json.bad` and changes nothing.
-- A result for an ack or orderwire burst is logged only.
-- There is no timeout: a burst stays `written` until a result comes.
-- The result file is the one source of truth. The controller's reply on its
-  socket is logged and shown to the operator, and never changes a message's
-  state.
-- `status` counts `written`. `tools/stub_channel.py --key-results` writes
-  these files for testing.
+`link = burst`, with no controller, is unchanged: practice, test stands, and
+`tools/stub_channel.py --key-results`. The core runs gale-tx into the outbox and reads
+`BURST.key.json` beside each WAV.
+
+*Until 2026-11-27 (D11) the core built every burst itself and learnt the result only from
+`BURST.key.json`. That text was then replaced by a version that also sent a control part on the
+controller's socket. Both are superseded by lean SIS. The old text is in this file's git
+history.*
 
 ## Keying: the core asks the station controller
 
-greybeard-ale's station controller (gale-rx grown, greybeard-ale
-`docs/station-controller.md`) is the link controller for the one radio. The
-core is the networking controller, and the controller's socket is its
-interface to link controllers (141B D.4.2.8). The core hands down a burst
-already in the outbox and never keys the radio itself. It never talks to
-gale-key: the controller orders it. There is no VOX. The socket is
-`--controller-socket` (default `/run/gale-rx/control.sock`; `none` sets no
-controller). `--gale-key-socket` is read as it for one release. Only a station
-on the greybeard modem has one. Training refuses every call here.
+greybeard-ale's station controller (gale-rx grown, greybeard-ale `docs/station-controller.md`)
+is the link controller for the station's radios. The core is the networking controller. The
+interface between them is 141B D.4.2.8. **SIS is its only link** (decision D11, "lean SIS now",
+greybeard-ale #18): STANAG 5066 Annex A, with no field added. The core never talks to gale-key
+and never keys the radio. There is no VOX. Only a station on the greybeard modem has a
+controller. Training refuses every call here. No channel number and no frequency cross.
 
-The interface has the three parts of D.4.2.8. No channel number and no
-frequency cross it.
+This is the core's 5066 client (docs/stanag-5066-client.md) with `link = controller`:
 
-1. **Link control** (D.4.2.8.1). The core asks for the radio, and names the
-   destination by its link-level address. The controller reports success or
-   failure, who is linked, and why a send waits: `claim`, `release` and
-   `status`. `key_status` sends `{"cmd":"status"}`.
-2. **Link quality reporting** (D.4.2.8.2). Reports per station, which feed the
-   core's stations heard. They name no channel. Today they come from the
-   scanner, and stage 1 adds none.
-3. **Network messages** (D.4.2.8.3). Each burst goes down in two parts. The
-   first is `message`, which the controller carries unopened. The second is
-   `control`, the control information: the link-level addressee `to`, the
-   `service`, and the requirements for the transmission (the `channel` label
-   the operator picked, `kind`, `control`, `final`, and the token or a
-   standing mode).
+- **Where.** One Unix socket per service, `--controller-sis-dir` (default `/run/gale-rx`) plus
+  `sis-<service>.sock`. The core sends each message on its service's socket, and that is how the
+  controller knows the service. The controller accepts only the core's systemd unit, by its peer
+  check. SIS framing is unchanged; only the transport is local, because a TCP peer has no
+  `SO_PEERCRED`. The core's 5066 client gains this socket-path setting.
+- **Two SAPs, with their Annex F meaning.** A SAP names the client application. Annex F Table
+  F-1, as the Wireshark dissector quotes it (greybeard-ale `docs/station-controller.md`, part 3;
+  we hold no copy of STANAG 5066), leaves 13 to 15 "available for arbitrary use", and the core's
+  frames are none of its assigned protocols. On each service's socket the operator's sender binds
+  SAP 13, and the automatic sender (routing, machine answers, ACKs, orderwires) binds SAP 14 where
+  the service has automatic modes: MARS only until stage 5. The controller treats SAP 14 as
+  control automatic.
+- **One frame per request,** non-ARQ, with no delivery confirmation asked, to the all-stations
+  address. Stage 1 makes no link, and the frame's
+  header names the addressee, as on every path. Priority comes from the precedence, as in that
+  document, and the time to live is `s5066-ttl` (600 s).
+- **At most 2048 bytes.** The SIS MTU is 2048 bytes (Koski, Nieto and Stringer, "STANAG 5066 for
+  Wideband HF", Harris; we hold no copy of STANAG 5066 itself). The core never cuts a frame into
+  pieces on this link, because the controller would have to open the message to join them. A
+  message whose frame is over 2048 bytes is refused before the y: "too long for one burst: N
+  bytes, the station controller takes 2048". Tapes and bundles go as parts of up to 6000 bytes
+  (Parts of long tapes and bundles), so a part over 2048 bytes is refused the same way.
+- **One answer per request,** a broadcast included: a confirm or a reject. Receive stays as
+  `link = burst` has it: the modems' captures.
+- **Settings that leave.** `tx-mode` and `tx-cmd` leave the core for this link, because the
+  controller runs gale-tx.
 
-| When | The core sends the controller |
-|---|---|
-| `key_prepare` | `{"cmd":"prepare","message":{"wav":"/abs/OUTBOX/BURST.wav"},"control":{"to":"<ADDRESS>","service":"S","channel":"<LABEL>","kind":"air","control":"local","final":false}}` |
-| `key_confirm` on a send | the same with `"cmd":"key"` and `"token"` in `control` |
-| an automatic send, once written | `{"cmd":"key","message":{"wav":...},"control":{"to":"<ADDRESS>","service":"S","channel":"<LABEL>","kind":"air","control":"automatic","final":false,"standing":"routing"}}` |
-| an ACK or orderwire, once written | the same with `"standing":"machine"` |
-| `standing_prepare` | `{"cmd":"prepare","kind":"standing:routing","service":"S"}` |
-| `key_confirm` on a mode | `{"cmd":"grant","mode":"routing","service":"S","token":...}` |
-| `standing_off`, or the BBS mode turned off | `{"cmd":"revoke","mode":"routing"}` (or `"all"`) |
-| `key_status` | `{"cmd":"status"}` |
+The three parts of D.4.2.8:
 
-Grants and revocations are network management, and the controller passes them
-to gale-key.
+1. **Link control** (D.4.2.8.1). The controller claims the radio for each message itself. The
+   core asks for no link.
+2. **Link quality reporting** (D.4.2.8.2). Reports per station feed the core's stations heard,
+   and they name no channel. Today they come from the scanner, and stage 1 adds none.
+3. **Network messages** (D.4.2.8.3). The frame goes over SIS. The service is its SAP, and the
+   controller chooses the channel.
 
-**The reply comes when the controller accepts the send.** The controller
-takes custody of what it accepts and answers at once. It then claims the
-radio, tunes it, reads it back and orders gale-key. `--controller-timeout-ms`
-(default 5000) bounds that reply, never the key. The result follows when the
-key is over, as the result file (Transmit, above).
+**The core reads the controller's `status`** on its local socket, `--controller-socket` (default
+`/run/gale-rx/control.sock`), for the y question and `key_status`. The only other requests it
+sends there are `grant` and `revoke`, for the standing modes.
 
-A burst is handed down only when all of these hold. Otherwise the call is
-refused with the reason, or, for an automatic send, the reason is logged once:
+A frame is handed down only when all of these hold. Otherwise the call is refused with the
+reason, or, for an automatic send, the reason is logged once:
 
-- it is a burst of a message of ours, still `written`, that the controller
-  hasn't accepted yet (once accepted, its result file decides);
-- the route function gives it a route: the burst's, the message's, the
-  destination's and the channel's services are one (see Services);
-- it has a channel (see Services, "A send's channel"); a burst with none is
-  never handed down, so requeue it once one is set;
+- it is a message of ours, still `written`, not handed down yet;
+- the route function gives it a route: the message's and the destination's services are one (see
+  Services);
+- the controller's `status` names a channel for its service (`send_channel`);
+- its frame is at most 2048 bytes;
 - EMCON is off.
 
-The controller tells the tuner daemon the channel as part of its sequence.
-The core is no longer in that path.
+The controller tells the tuner daemon the channel as part of its sequence. The core is no longer
+in that path.
 
 ### ACK and orderwire bursts
 
@@ -1885,8 +1891,9 @@ it in memory only, until its result comes. It is keyed under the standing mode
   the route function like every send. Until stage 5 it is keyed only where
   automatic modes run today (see Services);
 - its channel is the one the core was on when it was written;
-- with no `machine` grant it stays in the outbox, unkeyed, and `status` counts
-  it in `keying.answers_written`;
+- with no `machine` grant it stays unkeyed, in the outbox or, with the
+  controller, held in the core and not handed down, and `status` counts it in
+  `keying.answers_written`;
 - its result is logged only (see "Transmit: written, then sent").
 
 ### key_prepare, key_confirm, key_cancel: the operator's y
@@ -1955,12 +1962,43 @@ stays `written` and may be prepared again.
 drops a held token (`dropped` false when none was held). Send it when the
 operator answers No or leaves the dialog.
 
+**With the controller** (`link = controller`) there is no WAV and no gale-key
+token. The y is the core's own:
+
+- `key_prepare` reads the controller's `status` and answers with `confirm`:
+  `service`, `channel` (the controller's `send_channel` for that service), and
+  `id` (whether the service's table needs a station ID). A service with no
+  channel in `send_channel` is refused with the controller's `why`. The core
+  binds the prepare it holds to the frame's sha256, the service and that
+  channel. It keeps the same connection rule and the same 120 s life.
+- `key_confirm` with `Y` first reads `status.send_channel` again. If the
+  channel differs from the one the y showed (the radio moved on its schedule),
+  nothing is sent: the call answers `"asked":false` with the new channel, and
+  the kiosk asks the y again. Otherwise it hands the frame down on SAP 13, the
+  only thing sent. The window left is the milliseconds between that read and
+  the frame's arrival, and the controller still checks the channel it keys on
+  against the table. `status.last` names that channel, and the core shows it
+  on the message. The `note` says the message stays `written` until the SIS
+  answer: a confirm (`sent`) or a reject (`failed`).
+- `key_cancel` drops the held prepare. Nothing was sent.
+
+*Until 2026-11-27 (D11, "lean SIS now") this paragraph sent `prepare`, `key`
+and `cancel` to the controller, naming the frame by its sha256. Superseded.
+Later the same day, the service was briefly the bound SAP (the tables' `sap`
+column). Superseded by one socket per service, so the SAP keeps its Annex F
+meaning.*
+
 ### standing_prepare, standing_off: automatic sends
 
 Routing, machine-mode answers and auto-QSL key under a standing grant per
 mode, `machine`, `routing` or `auto_qsl`, each for one service. The core never
 asks for `amateur_auto`. A mode goes on only through the same prepare and y,
-sent through the controller:
+sent through the controller. With `link = controller` the grant, revocation
+and EMCON work exactly as below, through the controller's local `grant` and
+`revoke`, and gale-key keeps its standing-grant gate. Each written frame of a
+mode that is on goes down on SIS on its service's socket, SAP 14, and the
+controller keys it as control automatic (greybeard-ale
+`docs/station-controller.md`, part 3):
 
 `{"cmd":"standing_prepare","mode":"routing","service":"S"}` →
 `{"ok":true,"prepare_id":"KP-...","expires_s":120,"confirm":{"kind":"standing","mode":"routing","service":"S"}}`
