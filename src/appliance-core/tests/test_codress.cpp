@@ -198,9 +198,9 @@ static void stations(const fs::path& dir) {
     auto mb = std::make_unique<LoopbackModem>(0);
     LoopbackModem::connect(*ma, *mb);
     std::string adb = (dir / "NCS-A.db").string(), bdb = (dir / "STA-B.db").string();
-    Core a(CoreConfig{"NCS-A", adb, 3, 1, true}, std::move(ma));
+    Core a(on_mars_link(CoreConfig{"NCS-A", adb, 3, 1, true}), std::move(ma));
     a.set_services(test_services());
-    Core b(CoreConfig{"STA-B", bdb, 3, 1, true}, std::move(mb));
+    Core b(on_mars_link(CoreConfig{"STA-B", bdb, 3, 1, true}), std::move(mb));
     b.set_services(test_services());
     auto ka = std::make_shared<keys::Keyring>((dir / "NCS-A.keys").string());
     auto kb = std::make_shared<keys::Keyring>((dir / "STA-B.keys").string());
@@ -350,9 +350,9 @@ static void garbled(const fs::path& dir) {
     auto ma = std::make_unique<LoopbackModem>(0);
     auto mb = std::make_unique<LoopbackModem>(0);
     LoopbackModem::connect(*ma, *mb);
-    Core a(CoreConfig{"NCS-A", (dir / "g-a.db").string(), 3, 1, true}, std::move(ma));
+    Core a(on_mars_link(CoreConfig{"NCS-A", (dir / "g-a.db").string(), 3, 1, true}), std::move(ma));
     a.set_services(test_services());
-    Core b(CoreConfig{"STA-B", (dir / "g-b.db").string(), 3, 1, true}, std::move(mb));
+    Core b(on_mars_link(CoreConfig{"STA-B", (dir / "g-b.db").string(), 3, 1, true}), std::move(mb));
     b.set_services(test_services());
     a.start();
     b.start();

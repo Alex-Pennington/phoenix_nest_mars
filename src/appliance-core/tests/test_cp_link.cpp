@@ -175,6 +175,7 @@ static std::unique_ptr<Core> make_core(const fs::path& dir, const std::string& c
     auto m = std::make_unique<ScriptModem>();
     modem = m.get();
     CoreConfig cfg{call, (dir / (call + ".db")).string(), 3, 1, true};
+    cfg.rx_service = "mars";  // a channel-less test link: MARS traffic
     cfg.ack_timeout_s = 1;
     cfg.ack_retries = 1;
     cfg.loose_quiet_s = 1;

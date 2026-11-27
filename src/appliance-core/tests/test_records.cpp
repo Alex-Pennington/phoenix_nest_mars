@@ -129,7 +129,7 @@ Box open_box(const fs::path& dir, const std::string& call) {
     Box b;
     fs::create_directories(dir);
     std::string base = (dir / call).string();
-    b.core = std::make_unique<Core>(CoreConfig{call, base + ".db", 3, 1, true}, std::make_unique<LoopbackModem>(0));
+    b.core = std::make_unique<Core>(on_mars_link(CoreConfig{call, base + ".db", 3, 1, true}), std::make_unique<LoopbackModem>(0));
     b.core->set_services(test_services());
     b.ops = std::make_shared<Ops>(call, base + ".db");
     b.core->set_ops(b.ops);
@@ -420,9 +420,9 @@ void add_heard(const fs::path& dir) {
     auto ma = std::make_unique<LoopbackModem>(0);
     auto mb = std::make_unique<LoopbackModem>(0);
     LoopbackModem::connect(*ma, *mb);
-    Core a(CoreConfig{"STA-A", (dir / "heard" / "a.db").string(), 3, 1, true}, std::move(ma));
+    Core a(on_mars_link(CoreConfig{"STA-A", (dir / "heard" / "a.db").string(), 3, 1, true}), std::move(ma));
     a.set_services(test_services());
-    Core b(CoreConfig{"STA-B", (dir / "heard" / "b.db").string(), 3, 1, true}, std::move(mb));
+    Core b(on_mars_link(CoreConfig{"STA-B", (dir / "heard" / "b.db").string(), 3, 1, true}), std::move(mb));
     b.set_services(test_services());
     auto ob = std::make_shared<Ops>("STA-B", (dir / "heard" / "b.db").string());
     b.set_ops(ob);

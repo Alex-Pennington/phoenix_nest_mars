@@ -306,7 +306,7 @@ static Box make_box(const fs::path& dir, const std::string& call, std::unique_pt
     Box b;
     fs::create_directories(dir);
     std::string base = (dir / call).string();
-    b.core = std::make_unique<Core>(CoreConfig{call, base + ".db", 3, 1, true}, std::move(modem));
+    b.core = std::make_unique<Core>(on_mars_link(CoreConfig{call, base + ".db", 3, 1, true}), std::move(modem));
     b.core->set_services(test_services());
     b.keys = std::make_shared<keys::Keyring>(base + ".keys");
     std::string err;

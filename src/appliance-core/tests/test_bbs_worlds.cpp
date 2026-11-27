@@ -141,19 +141,20 @@ int main() {
     auto md = std::make_unique<LoopbackModem>(0);
     LoopbackModem::share({ma.get(), mb.get(), mc.get(), mk.get(), md.get()});
     CoreConfig ca{"AAM499", (dir / "a.db").string(), 3, 1, true};
+    ca.rx_service = "mars";  // a channel-less test link: MARS traffic
     ca.ack_timeout_s = 1;
     ca.ack_retries = 0;
     ca.rx_service = "mars";  // a loopback link: the network it belongs to
     Core a(ca, std::move(ma));
     a.set_services(test_services());
-    Core b(CoreConfig{"AAR9AA", (dir / "b.db").string(), 3, 1, true}, std::move(mb));
+    Core b(on_mars_link(CoreConfig{"AAR9AA", (dir / "b.db").string(), 3, 1, true}), std::move(mb));
     b.set_services(test_services());
-    Core c(CoreConfig{"AAR7ZZ", (dir / "c.db").string(), 3, 1, true}, std::move(mc));
+    Core c(on_mars_link(CoreConfig{"AAR7ZZ", (dir / "c.db").string(), 3, 1, true}), std::move(mc));
     c.set_services(test_services());
     // K7AMA: a station the book marks amateur. AAR3HM: not on the air yet.
-    Core k(CoreConfig{"K7AMA", (dir / "k.db").string(), 3, 1, true}, std::move(mk));
+    Core k(on_mars_link(CoreConfig{"K7AMA", (dir / "k.db").string(), 3, 1, true}), std::move(mk));
     k.set_services(test_services());
-    Core d(CoreConfig{"AAR3HM", (dir / "d.db").string(), 3, 1, true}, std::move(md));
+    Core d(on_mars_link(CoreConfig{"AAR3HM", (dir / "d.db").string(), 3, 1, true}), std::move(md));
     d.set_services(test_services());
     auto ops = std::make_shared<Ops>("AAM499", (dir / "a-ops.db").string());
     a.set_ops(ops);

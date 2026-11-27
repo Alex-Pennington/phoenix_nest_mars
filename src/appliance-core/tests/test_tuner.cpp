@@ -246,7 +246,7 @@ static void channel_form(const fs::path& dir) {
               contains(f->help, "Blank keeps the port the channel has (1 for a new one)"));
     }
 
-    auto core = std::make_unique<Core>(CoreConfig{"STA-A", (dir / "STA-A.db").string(), 3, 1, true},
+    auto core = std::make_unique<Core>(on_mars_link(CoreConfig{"STA-A", (dir / "STA-A.db").string(), 3, 1, true}),
                                        std::make_unique<LoopbackModem>(0));
     core->set_services(test_services());
     auto ops = std::make_shared<Ops>("STA-A", (dir / "STA-A.db").string());
@@ -599,7 +599,7 @@ static void socket_framing(const fs::path& dir) {
 // ---------------------------------------------------------------- status and the guide page
 
 static void status_and_guide(const fs::path& dir) {
-    auto core = std::make_unique<Core>(CoreConfig{"STA-B", (dir / "STA-B.db").string(), 3, 1, true},
+    auto core = std::make_unique<Core>(on_mars_link(CoreConfig{"STA-B", (dir / "STA-B.db").string(), 3, 1, true}),
                                        std::make_unique<LoopbackModem>(0));
     core->set_services(test_services());
     core->set_ops(std::make_shared<Ops>("STA-B", (dir / "STA-B.db").string()));

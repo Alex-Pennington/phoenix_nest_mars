@@ -103,7 +103,8 @@ static JsonValue routed_row(Core& a, const std::string& msg_id) {
 }
 static std::string in_id(Core& a, const std::string& text) {
     for (auto& m : a.list(1000))
-        if (m.direction == "in" && m.body.find(text) != std::string::npos) return m.id;
+        // A garbled partial copy cut under load is not the one routed.
+        if (m.direction == "in" && m.state != "garbled" && m.body.find(text) != std::string::npos) return m.id;
     return "";
 }
 
@@ -116,14 +117,15 @@ int main() {
     auto mc = std::make_unique<LoopbackModem>(0);
     LoopbackModem::share({ma.get(), mb.get(), mc.get()});
     CoreConfig ca{"AAM499", (dir / "a.db").string(), 3, 1, true};
+    ca.rx_service = "mars";  // a channel-less test link: MARS traffic
     ca.ack_timeout_s = 1;  // a station that doesn't answer is unacked within seconds
     ca.ack_retries = 0;
     ca.rx_service = "mars";  // a loopback link: the network it belongs to
     Core a(ca, std::move(ma));
     a.set_services(test_services());
-    Core b(CoreConfig{"AAR9AA", (dir / "b.db").string(), 3, 1, true}, std::move(mb));
+    Core b(on_mars_link(CoreConfig{"AAR9AA", (dir / "b.db").string(), 3, 1, true}), std::move(mb));
     b.set_services(test_services());
-    Core c(CoreConfig{"AAR7ZZ", (dir / "c.db").string(), 3, 1, true}, std::move(mc));
+    Core c(on_mars_link(CoreConfig{"AAR7ZZ", (dir / "c.db").string(), 3, 1, true}), std::move(mc));
     c.set_services(test_services());
     a.start();
     b.start();

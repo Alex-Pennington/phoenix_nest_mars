@@ -418,9 +418,10 @@ int main() {
         std::mutex emu;
         std::vector<std::string> a_events;
         CoreConfig cfa{"STA-A", (dir / "a.db").string(), 3, 1, true};
+        cfa.rx_service = "mars";  // a channel-less test link: MARS traffic
         Core a(cfa, std::move(da));
         a.set_services(test_services());
-        Core b(CoreConfig{"STA-B", (dir / "b.db").string(), 3, 1, true}, std::move(db));
+        Core b(on_mars_link(CoreConfig{"STA-B", (dir / "b.db").string(), 3, 1, true}), std::move(db));
         b.set_services(test_services());
         a.on_log([&](const std::string& t) {
             std::lock_guard<std::mutex> g(emu);

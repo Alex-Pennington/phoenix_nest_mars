@@ -195,6 +195,7 @@ static Box out_of_can(const fs::path& dir, const std::string& typed, std::unique
     CHECK(first_start::saved_call(dir.string(), saved) && saved == got);
     std::string base = (dir / got).string();
     CoreConfig cfg{got, base + ".db", 3, 1, true};
+    cfg.rx_service = "mars";  // a channel-less test link: MARS traffic
     cfg.parts_hold_s = hold_s;
     cfg.parts_resend_per_hour = cap;
     b.core = std::make_unique<Core>(cfg, std::move(modem));

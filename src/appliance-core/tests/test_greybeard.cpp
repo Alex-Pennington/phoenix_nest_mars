@@ -263,6 +263,16 @@ int main() {
         Core b(CoreConfig{"B", (dir / "B.db").string(), 3, 1, true},
                std::make_unique<GreybeardModem>(cfg("B", "", capB)));
         b.set_services(test_services());
+        // Both hear on a MARS channel of their plan: the captures carry its dial.
+        for (Core* x : {&a, &b}) {
+            x->set_ops(std::make_shared<Ops>(x->station(), x->db_path()));
+            Channel ch;
+            ch.name = "P1";
+            ch.hz = 5000000;
+            ch.world = "mars";
+            std::string e;
+            CHECK(x->ops()->channels().put(ch, &e));
+        }
         a.start();
         b.start();
         std::atomic<bool> run{true};
@@ -270,7 +280,7 @@ int main() {
             while (run) {
                 run_program({"python3", "-I", kSrc + "/tools/stub_channel.py", "--once", "--key-results", "--from",
                              (dir / "A-outbox").string(), "--to", capB, "--from", (dir / "B-outbox").string(),
-                             "--to", capA},
+                             "--to", capA, "--dial-khz", "5000"},
                             10000);
                 std::this_thread::sleep_for(std::chrono::milliseconds(100));
             }

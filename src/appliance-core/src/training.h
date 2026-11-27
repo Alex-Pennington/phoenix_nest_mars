@@ -55,6 +55,7 @@ private:
 
     std::string dir_, call_;
     std::shared_ptr<const Services> services_;
+    std::string practice_service() const;
     std::unique_ptr<Core> me_, ncs_;
     LoopbackModem *my_radio_ = nullptr, *ncs_radio_ = nullptr;
     int played_ = 0;

@@ -193,7 +193,7 @@ int main() {
     fs::remove_all(dir);
     fs::create_directories(dir);
     std::string db = (dir / "NCS-A.db").string();
-    Core core(CoreConfig{"NCS-A", db, 3, 1, true}, std::make_unique<LoopbackModem>(0));
+    Core core(on_mars_link(CoreConfig{"NCS-A", db, 3, 1, true}), std::make_unique<LoopbackModem>(0));
     core.set_services(test_services());
     auto ops = std::make_shared<Ops>("NCS-A", db);
     core.set_ops(ops);

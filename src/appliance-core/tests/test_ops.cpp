@@ -104,9 +104,9 @@ int main() {
     auto mb = std::make_unique<LoopbackModem>(0);
     LoopbackModem::connect(*ma, *mb);
     std::string adb = (dir / "a.db").string(), bdb = (dir / "b.db").string();
-    Core a(CoreConfig{"NCS-A", adb, 3, 1, true}, std::move(ma));
+    Core a(on_mars_link(CoreConfig{"NCS-A", adb, 3, 1, true}), std::move(ma));
     a.set_services(test_services());
-    Core b(CoreConfig{"STA-B", bdb, 3, 1, true}, std::move(mb));
+    Core b(on_mars_link(CoreConfig{"STA-B", bdb, 3, 1, true}), std::move(mb));
     b.set_services(test_services());
     auto opsa = std::make_shared<Ops>("NCS-A", adb);
     opsa->set_clock(clock);

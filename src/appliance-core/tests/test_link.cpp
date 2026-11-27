@@ -177,11 +177,12 @@ int main() {
         auto mb = std::make_unique<LoopbackModem>(0);
         LoopbackModem::connect(*ma, *mb);
         CoreConfig ca{"A", (dir / "a.db").string(), 3, 1, true};
+        ca.rx_service = "mars";  // a channel-less test link: MARS traffic
         ca.link_gate = true;
         Core a(ca, std::move(ma));
         a.set_services(test_services());
         a.set_link_monitor(mon);
-        Core b(CoreConfig{"B", (dir / "b.db").string(), 3, 1, true}, std::move(mb));
+        Core b(on_mars_link(CoreConfig{"B", (dir / "b.db").string(), 3, 1, true}), std::move(mb));
         b.set_services(test_services());
         a.start();
         b.start();
@@ -247,10 +248,10 @@ int main() {
         auto ma = std::make_unique<LoopbackModem>(0);
         auto mb = std::make_unique<LoopbackModem>(0);
         LoopbackModem::connect(*ma, *mb);
-        Core a(CoreConfig{"A", (dir / "a2.db").string(), 3, 1, true}, std::move(ma));
+        Core a(on_mars_link(CoreConfig{"A", (dir / "a2.db").string(), 3, 1, true}), std::move(ma));
         a.set_services(test_services());
         a.set_link_monitor(mon);
-        Core b(CoreConfig{"B", (dir / "b2.db").string(), 3, 1, true}, std::move(mb));
+        Core b(on_mars_link(CoreConfig{"B", (dir / "b2.db").string(), 3, 1, true}), std::move(mb));
         b.set_services(test_services());
         a.start();
         b.start();

@@ -66,6 +66,7 @@ static void make_station(const fs::path& dir, Station& s) {
     s.far = s.far_owner.get();
     s.far->start({[&s](const std::string& b) { s.heard += b.size(); }, nullptr, nullptr, nullptr});
     CoreConfig cfg{"STA-T", base + ".db", 3, 1, true};
+    cfg.rx_service = "mars";  // a channel-less test link: MARS traffic
     s.core = std::make_unique<Core>(cfg, std::move(radio));
     s.core->set_services(test_services());
     auto kr = std::make_shared<keys::Keyring>(base + ".keys");

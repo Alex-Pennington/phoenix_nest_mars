@@ -489,6 +489,31 @@ int main() {
         }));
     }
 
+    // ---- the direct-modem ACK: only for MARS traffic until stage 5 ------------
+    // A channel-less link in the amateur service: an amateur message from a
+    // station not in the book is never ACKed on the air.
+    {
+        auto mx = std::make_unique<LoopbackModem>(0);
+        auto my = std::make_unique<LoopbackModem>(0);
+        LoopbackModem::connect(*mx, *my);
+        Core x(link_in(CoreConfig{"TEST-AMX", (dir / "x.db").string(), 3, 1, true}, "amateur"), std::move(mx));
+        x.set_services(test_services());
+        CoreConfig cy{"TEST-AMY", (dir / "y.db").string(), 3, 1, true};
+        cy.ack_timeout_s = 60;
+        Core y(cy, std::move(my));
+        y.set_services(test_services());
+        x.start();
+        y.start();
+        const std::string id = y.submit("TEST-AMX", 'R', "AMATEUR, NOT IN THE BOOK", &e, SendOpts::in("amateur"));
+        CHECK(!id.empty());
+        CHECK(wait_for([&] { auto m = x.get(id); return m && m->world == "amateur"; }));
+        std::this_thread::sleep_for(std::chrono::milliseconds(1500));
+        CHECK(y.get(id) && y.get(id)->state != "acked");
+        CHECK(logged(x, "not sent to TEST-AMY"));
+        x.stop();
+        y.stop();
+    }
+
     // ---- a broadcast names its service --------------------------------------
     CHECK(!a.submit("ALL", 'R', "TO ALL STATIONS", &e, SendOpts::in("mars")).empty());
     CHECK(out_count(a) > queued_plain);

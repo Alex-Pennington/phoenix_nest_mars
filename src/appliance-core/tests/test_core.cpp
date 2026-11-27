@@ -88,9 +88,9 @@ int main() {
         auto mb = std::make_unique<LoopbackModem>(0);
         LoopbackModem* pa = ma.get();
         LoopbackModem::connect(*ma, *mb);
-        Core a(CoreConfig{"A", (dir / "a.db").string(), 3, 1, true}, std::move(ma));
+        Core a(on_mars_link(CoreConfig{"A", (dir / "a.db").string(), 3, 1, true}), std::move(ma));
         a.set_services(test_services());
-        Core b(CoreConfig{"B", (dir / "b.db").string(), 3, 1, true}, std::move(mb));
+        Core b(on_mars_link(CoreConfig{"B", (dir / "b.db").string(), 3, 1, true}), std::move(mb));
         b.set_services(test_services());
         a.start();
         b.start();

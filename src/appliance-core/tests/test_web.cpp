@@ -257,7 +257,7 @@ int main() {
     auto ma = std::make_unique<LoopbackModem>(0);
     auto mb = std::make_unique<LoopbackModem>(0);
     LoopbackModem::connect(*ma, *mb);
-    Core core(CoreConfig{"STA-A", (dir / "a.db").string(), 3, 1, true}, std::move(ma));
+    Core core(on_mars_link(CoreConfig{"STA-A", (dir / "a.db").string(), 3, 1, true}), std::move(ma));
     core.set_services(test_services());
     core.start();
     ApiServer api(core, api_port);

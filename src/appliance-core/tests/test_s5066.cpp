@@ -368,9 +368,9 @@ int main() {
         auto ca = make(na.port());
         auto cb = make(nb.port());
         S5066Client* pa = ca.get();
-        Core a(CoreConfig{"STA-A", (dir / "a.db").string(), 3, 1, true}, std::move(ca));
+        Core a(on_mars_link(CoreConfig{"STA-A", (dir / "a.db").string(), 3, 1, true}), std::move(ca));
         a.set_services(test_services());
-        Core b(CoreConfig{"STA-B", (dir / "b.db").string(), 3, 1, true}, std::move(cb));
+        Core b(on_mars_link(CoreConfig{"STA-B", (dir / "b.db").string(), 3, 1, true}), std::move(cb));
         b.set_services(test_services());
         a.start();
         b.start();

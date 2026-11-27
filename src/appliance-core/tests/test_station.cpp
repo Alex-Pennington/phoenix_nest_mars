@@ -286,7 +286,7 @@ struct Box {
 static Box make_box(const fs::path& dir, const std::string& call, std::unique_ptr<ModemDriver> modem) {
     Box b;
     std::string base = (dir / call).string();
-    b.core = std::make_unique<Core>(CoreConfig{call, base + ".db", 3, 1, true}, std::move(modem));
+    b.core = std::make_unique<Core>(on_mars_link(CoreConfig{call, base + ".db", 3, 1, true}), std::move(modem));
     b.core->set_services(test_services());
     b.keys = std::make_shared<keys::Keyring>(base + ".keys");
     std::string err;
@@ -491,7 +491,7 @@ int main() {
     {
         // Round two's STA-C, rebuilt, can't open round one's sealed tape.
         auto ma = std::make_unique<LoopbackModem>(0);
-        Core c2(CoreConfig{"STA-C", (dir / "two" / "STA-C.db").string(), 3, 1, true}, std::move(ma));
+        Core c2(on_mars_link(CoreConfig{"STA-C", (dir / "two" / "STA-C.db").string(), 3, 1, true}), std::move(ma));
         c2.set_services(test_services());
         auto id = std::make_shared<station::Identity>();
         bool exists = false;

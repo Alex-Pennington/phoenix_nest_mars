@@ -597,8 +597,15 @@ void Core::tick() {
 
     if (!acks_.empty()) {
         Answer a = acks_.front();
-        // The airtime point: nothing goes to the amateur world (ask 37).
-        if (std::string why = world_refusal(a.f.dst); !why.empty()) {
+        // The airtime point: nothing goes to the amateur world (ask 37). An
+        // ACK is an automatic send: MARS only until stage 5, so one answering
+        // a message of another service, or of none, never goes.
+        std::string why = world_refusal(a.f.dst);
+        if (why.empty() && !a.orderwire && a.world != "mars")
+            why = "it answers " + (a.world.empty() ? std::string("a message with no service")
+                                                   : "a message of the " + a.world + " service") +
+                  ": until stage 5 the core ACKs MARS traffic only";
+        if (!why.empty()) {
             acks_.pop_front();
             log(a.orderwire ? "" : a.f.id, "not sent to " + a.f.dst + ": " + why);
             return;
@@ -1132,6 +1139,7 @@ void Core::handle_rx(const std::string& bytes) {
             Answer a;
             a.f.type = FrameType::Ack;
             a.f.id = f.id;
+            a.world = rx_service_;
             a.f.src = cfg_.station;
             a.f.dst = f.src;
             a.f.prec = f.prec;
@@ -1466,6 +1474,7 @@ void Core::plain_chat(const std::string& text) {
         Answer a;
         a.f.type = FrameType::Ack;
         a.f.id = id;
+        a.world = rx_service_;
         a.f.src = cfg_.station;
         a.f.dst = c.from;
         a.f.prec = 'P';
@@ -1522,6 +1531,7 @@ void Core::plain_unit(const std::string& raw, bool complete) {
             Answer n;
             n.f.type = FrameType::Ack;
             n.f.id = "CHAT-" + cp_id;
+            n.world = rx_service_;
             n.f.src = cfg_.station;
             n.f.dst = src;
             n.f.prec = 'P';

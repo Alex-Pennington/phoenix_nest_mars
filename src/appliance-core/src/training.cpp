@@ -103,8 +103,18 @@ Training::Training(std::string dir, std::string call, std::shared_ptr<const Serv
 
 Training::~Training() { stop(); }
 
+// The practice net's traffic is ACP 127: it goes in the first service whose
+// table offers that format (docs/api.md, Services), never a name in code.
+std::string Training::practice_service() const {
+    if (services_)
+        for (const Service* x : services_->all())
+            if (x->offers("ACP127_PLAINDRESS")) return x->name;
+    return "";
+}
+
 bool Training::make(const std::string& call, std::unique_ptr<Core>& core, LoopbackModem*& modem, std::string* error) {
     CoreConfig cfg;
+    cfg.rx_service = practice_service();  // the practice link carries the practice net's service
     cfg.station = call;
     cfg.db_path = (fs::path(dir_) / (call + ".db")).string();
     cfg.send_acks = true;
@@ -176,15 +186,7 @@ bool Training::fill(std::string* error) {
 
     // A practice key tape, sealed to this station and sent over the practice
     // channel, so enciphered traffic opens.
-    // The practice net's traffic is ACP 127: it goes in the first service whose
-    // table offers that format (docs/api.md, Services), never a name in code.
-    std::string svc;
-    if (services_)
-        for (const Service* x : services_->all())
-            if (x->offers("ACP127_PLAINDRESS")) {
-                svc = x->name;
-                break;
-            }
+    const std::string svc = practice_service();
     if (svc.empty()) return fail(error, "no service table offers ACP 127 plaindress: the practice net can't send");
     const std::string made = call_api(*ncs_, {{"cmd", "net_tape"}, {"net", "TRAINING NET"}, {"members", call_}, {"days", "31"}, {"send", "Y"}, {"service", svc}});
     if (!reply_ok(made)) return fail(error, "practice key tape not made");

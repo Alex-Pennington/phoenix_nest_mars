@@ -231,7 +231,7 @@ int main() {
     fs::remove_all(dir);
     fs::path gale = dir / "local";
     fs::create_directories(gale);
-    auto core = std::make_unique<Core>(CoreConfig{"STA-A", (dir / "STA-A.db").string(), 3, 1, true},
+    auto core = std::make_unique<Core>(on_mars_link(CoreConfig{"STA-A", (dir / "STA-A.db").string(), 3, 1, true}),
                                        std::make_unique<LoopbackModem>(0));
     core->set_services(test_services());
     auto ops = std::make_shared<Ops>("STA-A", (dir / "STA-A.db").string());

@@ -508,7 +508,7 @@ static void test_api() {
     fs::remove_all(dir);
     fs::create_directories(dir);
     {
-        Core core(CoreConfig{"AAR4XX", (dir / "a.db").string(), 3, 1, true}, std::make_unique<LoopbackModem>(0));
+        Core core(on_mars_link(CoreConfig{"AAR4XX", (dir / "a.db").string(), 3, 1, true}), std::make_unique<LoopbackModem>(0));
         core.set_services(test_services());
         JsonValue v;
 

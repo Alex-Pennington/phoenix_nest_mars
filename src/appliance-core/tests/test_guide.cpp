@@ -148,6 +148,7 @@ static void guide(const fs::path& dir) {
     auto far = std::make_unique<LoopbackModem>(0);
     LoopbackModem::connect(*radio, *far);
     CoreConfig cfg{got, base + ".db", 3, 1, true};
+    cfg.rx_service = "mars";  // a channel-less test link: MARS traffic
     Core core(cfg, std::move(radio));
     core.set_services(test_services());
     auto kr = std::make_shared<keys::Keyring>(base + ".keys");
@@ -263,6 +264,7 @@ static void training(const fs::path& dir) {
     LoopbackModem* far_radio = far.get();
     far_radio->start({[&](const std::string& b) { heard += b.size(); }, nullptr, nullptr, nullptr});
     CoreConfig cfg{"STA-T", base + ".db", 3, 1, true};
+    cfg.rx_service = "mars";  // a channel-less test link: MARS traffic
     Core core(cfg, std::move(radio));
     core.set_services(test_services());
     auto kr = std::make_shared<keys::Keyring>(base + ".keys");

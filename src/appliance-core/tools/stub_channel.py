@@ -2,7 +2,7 @@
 """Stand-in for the air between two stations' audio files.
 
   stub_channel.py --from OUTBOX_A --to CAPTURES_B [--from OUTBOX_B --to CAPTURES_A]
-                  [--verdict MODEM_VERDICT_PY] [--key-results] [--once]
+                  [--verdict MODEM_VERDICT_PY] [--key-results] [--dial-khz N] [--once]
 
 Moves each burst a station's core writes to its outbox into the other station's
 captures directory as CAPTURE.wav with a CAPTURE.json sidecar, as greybeard-ale's
@@ -23,7 +23,11 @@ each burst it puts on the air it leaves BURST.key.json in the outbox, written
 whole (a temp file renamed), saying it keyed it:
   {"version": 1, "burst": "BURST.wav", "result": "keyed", "why": "", "at": UNIX,
    "by": "stub_channel"}
-The core marks the message sent only then. Standard library only.
+The core marks the message sent only then.
+
+With --dial-khz N each capture's name carries the dial it was heard on,
+"_<N>kHz", as greybeard-ale's engine tags it: the core gives what it hears the
+service of its channel plan's channel on that dial. Standard library only.
 """
 import subprocess
 import argparse
@@ -54,7 +58,7 @@ def key_result(outbox, name, result="keyed", why=""):
     os.rename(tmp, os.path.join(outbox, base + ".key.json"))
 
 
-def move(outbox, captures, verdict=None, key_results=False):
+def move(outbox, captures, verdict=None, key_results=False, dial_khz=None):
     done = 0
     sent = os.path.join(outbox, "sent")
     os.makedirs(sent, exist_ok=True)
@@ -63,7 +67,7 @@ def move(outbox, captures, verdict=None, key_results=False):
         if not n.endswith(".wav") or n.startswith("."):
             continue
         src = os.path.join(outbox, n)
-        cap = "cap-" + n[:-4]
+        cap = "cap-" + n[:-4] + (f"_{dial_khz}kHz" if dial_khz else "")
         wav = os.path.join(captures, cap + ".wav")
         shutil.copy(src, wav)
         with open(os.path.join(captures, cap + ".json"), "w") as f:
@@ -101,6 +105,7 @@ def main():
     ap.add_argument("--to", dest="dst", action="append", required=True)
     ap.add_argument("--verdict", help="greybeard-ale's tools/modem_verdict.py: decode with the real modem")
     ap.add_argument("--key-results", action="store_true", help="write gale-key's BURST.key.json for each burst")
+    ap.add_argument("--dial-khz", help="tag each capture with this dial, _<N>kHz, as the engine does")
     ap.add_argument("--once", action="store_true")
     a = ap.parse_args()
     if len(a.src) != len(a.dst):
@@ -108,7 +113,7 @@ def main():
         return 2
     while True:
         for s, d in zip(a.src, a.dst):
-            move(s, d, a.verdict, a.key_results)
+            move(s, d, a.verdict, a.key_results, a.dial_khz)
         if a.once:
             return 0
         time.sleep(0.3)

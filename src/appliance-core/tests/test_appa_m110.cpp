@@ -142,9 +142,9 @@ static int two_cores(const char* exe, const fs::path& dir) {
         return std::make_unique<AppaModem>(c);
     };
     {
-        Core a(CoreConfig{"STA-A", (dir / "a.db").string(), 3, 1, true}, make(sa.port));
+        Core a(on_mars_link(CoreConfig{"STA-A", (dir / "a.db").string(), 3, 1, true}), make(sa.port));
         a.set_services(test_services());
-        Core b(CoreConfig{"STA-B", (dir / "b.db").string(), 3, 1, true}, make(sb.port));
+        Core b(on_mars_link(CoreConfig{"STA-B", (dir / "b.db").string(), 3, 1, true}), make(sb.port));
         b.set_services(test_services());
         a.start();
         b.start();

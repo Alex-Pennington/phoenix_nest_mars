@@ -1025,10 +1025,11 @@ int main() {
             hear("un_9999kHz", un);
             CHECK(wait_for([&] { return s.core->get("TEST-HAM5-1").has_value(); }, 10000));
             CHECK(s.core->get("TEST-HAM5-1")->world.empty());
-            CHECK(wait_for([&] { return has(s.events_text(), "ack to TEST-HAM5 written to the outbox"); }, 10000));
+            // Refused before it is even written: an ACK is MARS only until stage 5.
+            CHECK(wait_for([&] { return has(s.events_text(), "not sent to TEST-HAM5: it answers a message with no service"); },
+                           10000));
             std::this_thread::sleep_for(std::chrono::milliseconds(600));
-            CHECK(f.count("key") == 2);
-            CHECK(has(s.events_text(), "ack to TEST-HAM5") && has(s.events_text(), "has no service"));
+            CHECK(f.count("key") == 2 && !has(s.events_text(), "ack to TEST-HAM5 written"));
             (void)before_n;
         }
         // An ACK of a MARS message written while the controller reported an

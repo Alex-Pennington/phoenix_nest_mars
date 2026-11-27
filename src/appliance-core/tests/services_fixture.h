@@ -4,6 +4,7 @@
 // root's, so the loader's root check is lifted here only.
 #pragma once
 
+#include "../src/core.h"
 #include "../src/services.h"
 
 #include <memory>
@@ -24,4 +25,11 @@ inline std::shared_ptr<const pna::Services> test_services() {
         return std::shared_ptr<const pna::Services>(pna::Services::load(test_services_dir(), o, &refused));
     }();
     return s;
+}
+
+// A channel-less test link (loopback, STANAG 5066, Appendix A) carries the
+// fixture's MARS traffic: what it hears is of that service (--rx-service).
+inline pna::CoreConfig on_mars_link(pna::CoreConfig c) {
+    c.rx_service = "mars";
+    return c;
 }
