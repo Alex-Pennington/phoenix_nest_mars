@@ -680,6 +680,35 @@ int main() {
         y.stop();
     }
 
+    // ---- an upgrade with no service tables yet: queued traffic waits ---------
+    // (never failed for it), and goes once its table is there.
+    {
+        auto mq = std::make_unique<LoopbackModem>(0);
+        auto mr = std::make_unique<LoopbackModem>(0);
+        LoopbackModem::connect(*mq, *mr);
+        Core q(on_mars_link(CoreConfig{"STA-Q", (dir / "q.db").string(), 3, 1, true}), std::move(mq));
+        q.set_services(test_services());
+        Core r(on_mars_link(CoreConfig{"STA-R", (dir / "r.db").string(), 3, 1, true}), std::move(mr));
+        r.set_services(test_services());
+        q.start();
+        r.start();
+        q.set_emcon(true);
+        const std::string id = q.submit("STA-R", 'R', "QUEUED BEFORE THE TABLES WENT", &e, SendOpts::in("mars"));
+        CHECK(!id.empty());
+        q.set_services(Services::from_texts({}, nullptr));
+        q.set_emcon(false);
+        std::this_thread::sleep_for(std::chrono::milliseconds(1200));
+        {
+            auto m = q.get(id);
+            CHECK(m && m->state == "queued" && has(m->last_error, "no table for service `mars`"));
+            CHECK(logged(q, "waits: no table for service `mars`"));
+        }
+        q.set_services(test_services());
+        CHECK(wait_for([&] { auto m = q.get(id); return m && m->state == "acked"; }, 40000));
+        q.stop();
+        r.stop();
+    }
+
     // ---- a broadcast names its service --------------------------------------
     CHECK(!a.submit("ALL", 'R', "TO ALL STATIONS", &e, SendOpts::in("mars")).empty());
     CHECK(out_count(a) > queued_plain);

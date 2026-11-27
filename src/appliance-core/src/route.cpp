@@ -60,7 +60,11 @@ Route route(const Services* services, Ops* ops, const RouteAsk& ask) {
         if (all) return refused("refused: a broadcast (ALL) needs its service named");
         return refused("no service: an address not in the book needs the service picked at compose");
     }
-    if (!services || !services->valid(svc)) return refused("refused: " + no_table(svc));
+    if (!services || !services->valid(svc)) {
+        Route r = refused("refused: " + no_table(svc));
+        r.no_table = valid_service_name(svc);  // a name with no table yet; "(none)" is no name
+        return r;
+    }
 
     if (!dest.empty() && dest != svc)
         return refused("refused: crossing: " + an(svc) + " message to " + an(dest) + " station (" +

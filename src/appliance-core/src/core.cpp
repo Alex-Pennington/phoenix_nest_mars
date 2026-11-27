@@ -151,7 +151,8 @@ std::string Core::submit(const std::string& to, char prec, const std::string& bo
     Route rt = route_for(o.service, to, o.channel, o.route_service);
     if (!rt.ok) return fail(rt.refusal);
     // The service's table: the formats it sends, and whether it carries cipher.
-    if (const Service* sv = services_ ? services_->find(rt.service) : nullptr) {
+    std::shared_ptr<const Services> tables = std::atomic_load(&services_);
+    if (const Service* sv = tables ? tables->find(rt.service) : nullptr) {
         if (o.enciphered && !sv->encryption)
             return fail("refused: the " + rt.service + " service carries no enciphered traffic");
         if (!o.format.empty() && !sv->offers(o.format))
@@ -185,7 +186,8 @@ Route Core::route_for(const std::string& service, const std::string& to, const s
     a.to = to;
     a.channel = channel;
     a.route_service = route_service;
-    return route(services_.get(), ops_.get(), a);
+    std::shared_ptr<const Services> s = std::atomic_load(&services_);
+    return route(s.get(), ops_.get(), a);
 }
 
 RadioReport Core::radio_channel() {
@@ -666,6 +668,15 @@ void Core::tick() {
     if (Route rt = route_for(next->world.empty() ? std::string("(none)") : next->world, next->dst, next->channel);
         !rt.ok) {
         const std::string why = rt.refusal;
+        if (rt.no_table) {
+            // Its service has no table (an upgrade before the tables are
+            // installed): it waits queued, with the reason, and is never failed for it.
+            const std::string wait = "waits: " + no_table(next->world);
+            store_.schedule_retry(next->id, now_utc() + 5, wait);
+            if (told_no_table_.insert(next->id).second) log(next->id, wait + "; it goes once the table is there");
+            return;
+        }
+        told_no_table_.erase(next->id);
         store_.set_state(next->id, "failed", why);
         log(next->id, "refused at the air: " + why);
         waiting_since_.erase(next->id);

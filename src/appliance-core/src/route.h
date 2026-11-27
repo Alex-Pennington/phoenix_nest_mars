@@ -35,6 +35,7 @@ struct Route {
     bool ok = false;
     std::string service;  // the message's service, once resolved
     std::string refusal;  // why not, naming both services for a crossing
+    bool no_table = false;  // refused because the service has no table (yet): traffic waits, never fails
 };
 
 // services: the tables (nullptr: none, so every service is refused).

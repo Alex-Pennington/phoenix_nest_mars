@@ -143,9 +143,9 @@ public:
 
     // The service tables (services.h). Set before start(); none: every
     // service is refused.
-    void set_services(std::shared_ptr<const Services> s) { services_ = std::move(s); }
-    const Services* services() const { return services_.get(); }
-    std::shared_ptr<const Services> services_ptr() const { return services_; }
+    void set_services(std::shared_ptr<const Services> s) { std::atomic_store(&services_, std::move(s)); }
+    const Services* services() const { return std::atomic_load(&services_).get(); }
+    std::shared_ptr<const Services> services_ptr() const { return std::atomic_load(&services_); }
 
     // The radio's channel as the station controller reports it (gale_key.h);
     // unknown when no controller is set or it has not answered.
@@ -412,6 +412,7 @@ private:
     std::shared_ptr<station::Identity> id_;
     std::string id_path_;
     std::set<std::string> told_waiting_;  // messages already logged as waiting for a link
+    std::set<std::string> told_no_table_;  // messages already logged as waiting for their service's table
     std::map<std::string, std::chrono::steady_clock::time_point> waiting_since_;
     std::set<std::string> overdue_;       // messages logged as past their handling time
     std::set<std::string> no_expire_;     // expired, then requeued by the operator: not expired again
