@@ -248,6 +248,12 @@ frequency. It talks to rigctld on localhost and sends exactly three commands:
 - It holds `draws-txwav`'s transmit lock for the whole change: it refuses
   while a transmission is on (exit 6), and no transmission can start in the
   middle of it.
+- It reads the PTT line itself, with a read-only `pinctrl get` of the pin
+  `station.env` gives for `DRAWS_PORT`, and refuses unless the line reads
+  `lo`, whatever keyed it (exit 7). A line it cannot read counts as high.
+  `pinctrl get` prints the level after the `|`, as in
+  `12: op dl pd | lo // GPIO12 = output` [9, `pinctrl/pinctrl.c:164`,
+  `:176-181`].
 - Hamlib keeps a set frequency in a 500 ms cache and would answer `f` from it
   without asking the radio [6, `src/rig.c:623`, `:1760`]. The rigctld unit
   turns the cache off (`-C cache_timeout=0`), and the helper also waits 0.6 s
@@ -458,3 +464,6 @@ GPL-2.0. https://github.com/raspberrypi/linux
 
 [8] Yaesu Musen Co., Ltd., *FT-857D Operating Manual*, cited by printed page.
 On saga as `~/msc-handoff/manuals/yaesu_ft-857d_operating-manual.pdf`.
+
+[9] Raspberry Pi Ltd, *utils* repository, `pinctrl/pinctrl.c`, commit
+cf42db188fda. BSD-3-Clause. https://github.com/raspberrypi/utils

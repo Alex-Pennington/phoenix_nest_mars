@@ -193,8 +193,8 @@ pass "draws-pull: next run takes the rest; a file being written and a stray name
 
 # 11. draws-setfreq. Never keys, never sets the mode, refuses a bad read-back.
 out="$("$HERE/bin/draws-setfreq" 1234560)"
-[[ "$out" == $'DRY: rigctld 127.0.0.1:4532 <- F 1234560\nDRY: rigctld 127.0.0.1:4532 <- f\nDRY: rigctld 127.0.0.1:4532 <- m' ]] || fail "setfreq dry run: $out"
-pass "draws-setfreq dry run: F, f, m and nothing else"
+[[ "$out" == $'DRY: pinctrl get 23 (must read lo)\nDRY: rigctld 127.0.0.1:4532 <- F 1234560\nDRY: rigctld 127.0.0.1:4532 <- f\nDRY: rigctld 127.0.0.1:4532 <- m' ]] || fail "setfreq dry run: $out"
+pass "draws-setfreq dry run: reads the port's PTT pin (BCM23, right), then F, f, m and nothing else"
 for bad in 1234565 12.3456 -10 0 "1234560 USB"; do
     # shellcheck disable=SC2086  # the last case is two words on purpose
     if "$HERE/bin/draws-setfreq" $bad 2>/dev/null >/dev/null; then fail "setfreq took '$bad'"; fi
@@ -212,6 +212,19 @@ FAKES=()
 trap 'kill "${FAKES[@]}" 2>/dev/null; rm -rf "$T"' EXIT
 fake_rig good; fake_rig usb FAKE_MODE=USB; fake_rig off FAKE_OFFSET=10
 export DRAWS_READBACK_WAIT=0
+# A fake pinctrl: prints a line in pinctrl get's format with PTT_LEVEL.
+cat > "$T/fake-pinctrl" <<'FAKE'
+#!/bin/bash
+[[ "$1" == get ]] || { echo "fake-pinctrl: only get" >&2; exit 9; }
+echo "$1 $2" >> "$PINCTRL_LOG"
+case "${PTT_LEVEL:-lo}" in
+    garbage) echo "nonsense" ;;
+    fail) exit 1 ;;
+    *) printf '%2d: op dl pd | %s // GPIO%d = output\n' "$2" "${PTT_LEVEL:-lo}" "$2" ;;
+esac
+FAKE
+chmod +x "$T/fake-pinctrl"
+export DRAWS_PINCTRL="$T/fake-pinctrl" PINCTRL_LOG="$T/pinctrl.log"
 # shellcheck disable=SC2154  # port_* are set by fake_rig
 {
 out="$(DRAWS_DRY_RUN=0 DRAWS_RIGCTLD_PORT=$port_good "$HERE/bin/draws-setfreq" 1234560)"
@@ -225,20 +238,34 @@ sleep 0.3
 rc=0; DRAWS_DRY_RUN=0 DRAWS_RIGCTLD_PORT=$port_good "$HERE/bin/draws-setfreq" 1234560 >/dev/null 2>&1 || rc=$?
 wait $!
 [[ $rc == 6 ]] || fail "setfreq ran during a transmission (rc=$rc)"
+before="$(wc -l < "$T/rig.log")"
+for lvl in hi garbage fail; do
+    rc=0; out="$(PTT_LEVEL=$lvl DRAWS_DRY_RUN=0 DRAWS_RIGCTLD_PORT=$port_good "$HERE/bin/draws-setfreq" 1234560 2>&1)" || rc=$?
+    [[ $rc == 7 ]] || fail "setfreq with the PTT line '$lvl': rc=$rc $out"
+done
+[[ "$(wc -l < "$T/rig.log")" == "$before" ]] || fail "setfreq talked to rigctld with the PTT line not low"
+[[ "$(sort -u "$PINCTRL_LOG")" == "get 23" ]] || fail "setfreq ran pinctrl other than 'get 23': $(sort -u "$PINCTRL_LOG")"
 }
 LC_ALL=C sort -u "$T/rig.log" | tr '\n' ' ' | grep -qx 'F 1234560 f m ' || fail "rigctld got something else: $(LC_ALL=C sort -u "$T/rig.log" | tr '\n' ' ')"
 pass "draws-setfreq: read-back checked (wrong mode exit 5, wrong frequency exit 4), refused during a transmission (exit 6); rigctld only ever got F, f and m"
+pass "draws-setfreq: refused with the PTT line high or unreadable (exit 7), before rigctld; pinctrl only ever ran 'get 23'"
 
 # 12. No new helper keys without the enable file, and none keys by itself.
 [[ ! -e "$T/tx-enabled" ]] || fail "enable file left over"
-if grep -n -E 'draws-ptt|pinctrl|aplay' "$HERE/bin/draws-send" "$HERE/bin/draws-pull" "$HERE/bin/draws-setfreq"; then
-    fail "a new helper touches PTT or audio itself"
+if grep -n -E 'draws-ptt|pinctrl|aplay' "$HERE/bin/draws-send" "$HERE/bin/draws-pull"; then
+    fail "an upstream helper touches PTT or audio itself"
 fi
+# draws-setfreq reads the PTT line and nothing more: one pinctrl call, "get".
+if grep -n -E 'draws-ptt|aplay|pinctrl set|"set"' "$HERE/bin/draws-setfreq"; then
+    fail "draws-setfreq can drive PTT or audio"
+fi
+[[ "$(grep -c 'subprocess.run(\[PINCTRL, "get", pin\]' "$HERE/bin/draws-setfreq")" == 1 && "$(grep -c 'subprocess' "$HERE/bin/draws-setfreq")" == 3 ]] || fail "draws-setfreq runs something other than pinctrl get"
+
 all="$(DRAWS_DRY_RUN=0 DRAWS_SSH="$T/fake-ssh" "$HERE/bin/draws-send" "$T/burst.wav" 2>&1 || true)
 $(DRAWS_DRY_RUN=0 DRAWS_SSH="$T/fake-ssh" "$HERE/bin/draws-pull" 2>&1 || true)
 $(DRAWS_DRY_RUN=0 DRAWS_RIGCTLD_PORT=$port_good "$HERE/bin/draws-setfreq" 1234560 2>&1 || true)"
 [[ "$all" != *"op dh"* ]] || fail "something keyed without the enable file: $all"
-pass "no new helper names PTT or audio, and none keys without the enable file"
+pass "no new helper drives PTT or audio (draws-setfreq only reads the line), and none keys without the enable file"
 
 # 13. CAT finder (pseudo-terminals as fake ports).
 if ! python3 -I "$HERE/tests/findcat-test.py" | sed 's/^/     /'; then fail "findcat tests"; fi
