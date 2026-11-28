@@ -102,6 +102,7 @@ struct FakeController {
         bool answered = false;
     };
     fs::path dir;
+    uint16_t bind_mtu = 2048;
     std::map<std::string, std::string> send_channel{{"mars", "P1"}, {"amateur", "AMX"}};
     // confirm, reject, hold, drop (the connection closes on the request), drop-keyed (it
     // closes after the key: status.last says keyed, and no answer was sent)
@@ -110,6 +111,7 @@ struct FakeController {
     std::string reject_why = "refused: channel P1: passband outside the data segments of service mars";
     std::mutex mu;
     std::vector<Bind> binds;
+    std::vector<uint8_t> sis_types;  // every primitive type received on a SIS socket
     int unbound_sends = 0;
     std::vector<Req> reqs;
     std::vector<JsonValue> json;  // every local request
@@ -323,6 +325,7 @@ struct FakeController {
                 s5066::Prim p;
                 if (!s5066::parse(raw, p)) continue;
                 std::lock_guard<std::mutex> g(mu);
+                sis_types.push_back(p.type);
                 if (p.type == s5066::kBindRequest) {
                     binds.push_back(Bind{service, p.sap, p.service.tx_mode, p.service.confirm});
                     std::string out;
@@ -330,7 +333,7 @@ struct FakeController {
                     else if (p.sap != 13 && p.sap != 14) out = s5066::bind_rejected(2);  // A.2.1.4: invalid SAP
                     else {
                         bound = p.sap;
-                        out = s5066::bind_accepted(p.sap, 2048);
+                        out = s5066::bind_accepted(p.sap, bind_mtu);
                     }
                     (void)::send(c, out.data(), out.size(), MSG_NOSIGNAL);
                 } else if (p.type == s5066::kUnidataRequest) {
@@ -486,7 +489,7 @@ int main() {
         s5066::Prim p;
         CHECK(s5066::parse(s5066::unidata_rejected(4, 13, s5066::kBroadcastAddress, "AB").substr(5), p));
         CHECK(p.type == s5066::kUnidataRequestRejected && p.reason == 4 && p.sap == 13 && p.data == "AB");
-        CHECK(kSisMtu == 2048);
+        CHECK(SisLinkConfig().mtu == 2048);  // Annex A A.2.1.3 (7), general-purpose node default
     }
 
     // ---- bind SAP 13 on every service that transmits, SAP 14 on MARS only
@@ -861,6 +864,87 @@ int main() {
         CHECK(f.answer_one(true));
         CHECK(wait_for([&] { return s.state(a) == "sent"; }, 3000));
         CHECK(s.core->get(a)->sends == 1 && s.link->outstanding() == 0);
+        f.stop();
+    }
+
+    // ---- the bound MTU governs: a controller binding 1024 refuses 1500 bytes before the y
+    {
+        FakeController f;
+        f.dir = base;
+        f.bind_mtu = 1024;
+        f.start({"mars", "amateur"});
+        Station s(base / "M1", base);
+        CHECK(wait_for([&] { return s.link->bound("mars", false); }, 5000));
+        CHECK(s.link->bound_mtu("mars", false) == 1024);
+        const size_t before = f.count_reqs();
+        std::string err;
+        const std::string big = s.core->submit("FARSTN", 'R', std::string(1500, 'X'), &err, SendOpts::in("mars"));
+        CHECK(!big.empty());
+        CHECK(wait_for([&] { return s.state(big) == "failed"; }, 5000));
+        auto m = s.core->get(big);
+        CHECK(m && has(m->last_error, "too long for one burst:") && has(m->last_error, "the station controller takes 1024"));
+        CHECK(!ok(call(*s.core, {{"cmd", "key_prepare"}, {"msg_id", big}})));
+        CHECK(f.count_reqs() == before);
+        f.stop();
+    }
+
+    // ---- a controller binding 4096 accepts a 3000-byte frame (no 2048 cap)
+    {
+        FakeController f;
+        f.dir = base;
+        f.bind_mtu = 4096;
+        f.start({"mars", "amateur"});
+        Station s(base / "M4", base);
+        CHECK(wait_for([&] { return s.link->bound("mars", false); }, 5000));
+        CHECK(s.link->bound_mtu("mars", false) == 4096);
+        const std::string id = s.written("FARSTN", std::string(3000, 'Y'));
+        JsonValue v = s.y(id);
+        CHECK(flag(v, "ok") && flag(v, "asked"));
+        CHECK(wait_for([&] { return s.state(id) == "sent"; }, 5000));
+        CHECK(f.count_reqs() == 1 && f.req(0).p.data.size() > 2048);
+        f.stop();
+    }
+
+    // ---- a controller binding 2048 behaves as before: 3000 bytes refused, 1500 accepted
+    {
+        FakeController f;
+        f.dir = base;
+        f.bind_mtu = 2048;
+        f.start({"mars", "amateur"});
+        Station s(base / "M2", base);
+        CHECK(wait_for([&] { return s.link->bound("mars", false); }, 5000));
+        CHECK(s.link->bound_mtu("mars", false) == 2048);
+        const size_t before = f.count_reqs();
+        std::string err;
+        const std::string big = s.core->submit("FARSTN", 'R', std::string(3000, 'X'), &err, SendOpts::in("mars"));
+        CHECK(!big.empty());
+        CHECK(wait_for([&] { return s.state(big) == "failed"; }, 5000));
+        auto m = s.core->get(big);
+        CHECK(m && has(m->last_error, "too long for one burst:") && has(m->last_error, "the station controller takes 2048"));
+        CHECK(f.count_reqs() == before);
+        const std::string ok_id = s.written("FARSTN", std::string(1500, 'Z'));
+        JsonValue v = s.y(ok_id);
+        CHECK(flag(v, "ok") && flag(v, "asked"));
+        CHECK(wait_for([&] { return s.state(ok_id) == "sent"; }, 5000));
+        f.stop();
+    }
+
+    // ---- the client sends no address-setting primitive: only bind, unbind, unidata, keep-alive
+    {
+        FakeController f;
+        f.dir = base;
+        f.start({"mars", "amateur"});
+        Station s(base / "NA", base);
+        CHECK(wait_for([&] { return s.link->bound("mars", false); }, 5000));
+        const std::string id = s.written("FARSTN", "SAFE PRIMITIVES");
+        CHECK(flag(s.y(id), "asked"));
+        CHECK(wait_for([&] { return s.state(id) == "sent"; }, 5000));
+        {
+            std::lock_guard<std::mutex> g(f.mu);
+            for (uint8_t t : f.sis_types)
+                CHECK(t == s5066::kBindRequest || t == s5066::kUnbindRequest ||
+                      t == s5066::kUnidataRequest || t == s5066::kKeepAlive);
+        }
         f.stop();
     }
 

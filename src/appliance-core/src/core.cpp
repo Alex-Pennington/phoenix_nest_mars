@@ -709,13 +709,15 @@ void Core::tick() {
     f.body = next->body;
     const bool plain = next->link == "plain" || (!is_broadcast(f.dst) && store_.link_format(f.dst) == "plain");
     const std::string bytes = plain ? f.body : encode(f);
-    if (sis_link() && bytes.size() > kSisMtu) {
-        // One frame is one U_PDU and one burst: never cut, so refused before the y.
-        const std::string why = "too long for one burst: " + std::to_string(bytes.size()) +
-                                " bytes, the station controller takes " + std::to_string(kSisMtu);
-        store_.set_state(f.id, "failed", why);
-        log(f.id, "refused: " + why);
-        return;
+    if (sis_link()) {
+        const uint16_t mtu = gk_->sis()->bound_mtu(next->world, false);
+        if (mtu > 0 && bytes.size() > mtu) {
+            const std::string why = "too long for one burst: " + std::to_string(bytes.size()) +
+                                    " bytes, the station controller takes " + std::to_string(mtu);
+            store_.set_state(f.id, "failed", why);
+            log(f.id, "refused: " + why);
+            return;
+        }
     }
     store_.mark_sending(f.id);
     if (modem_->send(bytes)) {
