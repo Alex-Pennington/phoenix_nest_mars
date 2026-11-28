@@ -435,6 +435,7 @@ private:
     // channel: the one it goes on when not the row's (the controller's
     // send_channel, link = controller; "" none known yet).
     bool key_checks(const Store::KeyRow& r, std::string* error, const std::string* channel = nullptr);
+    bool handed_down(const Message& m, std::string* error);  // mu_ held; written, and the controller has it
     std::shared_ptr<GaleKey> gk_;
     std::set<std::string> key_queued_;    // automatic keys handed to gale-key's thread, not yet claimed
     std::map<std::string, std::chrono::steady_clock::time_point> key_retry_;  // gale-key wasn't reached: not before

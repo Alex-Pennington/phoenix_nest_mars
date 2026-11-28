@@ -15,6 +15,16 @@ claims the radio, and keys the burst. Its result comes back:
   refused    The controller would not key it. The message is marked
              failed and shows the controller's reason.
 
+Once you have answered y, the message is the controller's until its
+result is in. You cannot retry (requeue) it in that time: the screen
+says it has been handed to the station controller and to wait for its
+result. A retry then could key the same message twice. When the result
+comes back, a refused message can be retried as usual.
+
+You can still cancel it, if no result ever comes. A cancel cannot stop a
+key already under way. Check the log before you retry a cancelled
+message: it may have gone on the air.
+
 The service decides which connection carries the message, and the
 controller picks the channel. You see the channel on the y question,
 read from the controller's status.

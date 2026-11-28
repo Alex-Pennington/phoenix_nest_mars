@@ -1393,7 +1393,11 @@ A tape or bundle over 6000 bytes goes as numbered, signed parts
   keymasters on every handout. Returns `net`, `tape`, `sealed` (each with
   `station`, `checked` and `text`, plus `id`, `parts` and `ids` when `send`
   is `Y`: a tape over 6000 bytes goes in numbered parts) and `no_card`
-  (members whose card isn't held). With `handouts=Y` it also returns
+  (members whose card isn't held). `send=Y` only queues the copies: each one
+  (each part of a long tape) is written to the outbox and stays `written`
+  until the operator's y (`key_prepare`, `key_confirm`) hands that one down.
+  No copy carries a standing mode, so no standing grant (`machine`, `routing`,
+  `auto_qsl`) keys it. With `handouts=Y` it also returns
   `handouts`, each with `station`, `has_tape`, `alternate` and `text`
   (docs/crypto.md). `out` is a folder (a stick): each handout is written
   there as `HANDOUT-<STATION>.TXT`, given as `file`, and implies
@@ -1458,10 +1462,19 @@ It holds across a restart.
 
 - `hold`: a queued message waits until released.
 - `release`: a held message goes back in the queue.
-- `cancel`: a queued, held, sent, unacked or failed message never goes again.
-  Not while it is on the air.
+- `cancel`: a queued, held, written, sent, unacked or failed message never
+  goes again. Not while it is on the air.
 - `requeue`: an unacked, failed, cancelled or held message goes again with
   fresh counts.
+- `requeue` of a written message the station controller has already been
+  handed (the operator's y was answered and its result is not in) is refused:
+  `"<id> has been handed to the station controller; wait for its result"`. A
+  requeue then would key the same message twice. When the result comes back
+  (keyed, refused, or unknown) the message moves on and `requeue` works.
+- `cancel` of such a message is allowed, and is the way out when no result
+  comes. It cannot stop a key already under way. The log says the message had
+  been handed to the station controller: check it before requeueing a
+  cancelled one.
 - After a `release` or a `requeue` the message is the operator's own, even
   when it was an automatic send (machine, routing, auto-QSL): no standing
   grant keys its new burst, only `key_prepare` and the operator's y.
