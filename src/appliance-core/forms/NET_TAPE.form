@@ -15,6 +15,10 @@ FIELD handouts Make handouts(Y,N) default=N
 FIELD out Write handouts to(X) check=path
 NEXT KEY_OPEN
 BEGIN_HELP
+Send the sealed tapes now:
+Y writes each copy, and each part of a long one, to the out box. None goes on the air until you answer y for it, one copy or part at a time, in the out box. No standing mode keys a tape.
+END
+
 Days:
 How many daily keys. A tape longer than one message (about two weeks) goes over the air in numbered parts, each signed; the member opens it when every part is in.
 END

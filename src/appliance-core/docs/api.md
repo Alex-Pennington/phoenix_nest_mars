@@ -1393,7 +1393,11 @@ A tape or bundle over 6000 bytes goes as numbered, signed parts
   keymasters on every handout. Returns `net`, `tape`, `sealed` (each with
   `station`, `checked` and `text`, plus `id`, `parts` and `ids` when `send`
   is `Y`: a tape over 6000 bytes goes in numbered parts) and `no_card`
-  (members whose card isn't held). With `handouts=Y` it also returns
+  (members whose card isn't held). `send=Y` only queues the copies: each one
+  (each part of a long tape) is written to the outbox and stays `written`
+  until the operator's y (`key_prepare`, `key_confirm`) hands that one down.
+  No copy carries a standing mode, so no standing grant (`machine`, `routing`,
+  `auto_qsl`) keys it. With `handouts=Y` it also returns
   `handouts`, each with `station`, `has_tape`, `alternate` and `text`
   (docs/crypto.md). `out` is a folder (a stick): each handout is written
   there as `HANDOUT-<STATION>.TXT`, given as `file`, and implies

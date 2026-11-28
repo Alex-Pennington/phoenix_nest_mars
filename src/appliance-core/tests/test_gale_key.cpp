@@ -12,8 +12,10 @@
 #include "../src/gale_key.h"
 #include "../src/greybeard_modem.h"
 #include "../src/json.h"
+#include "../src/keys.h"
 #include "../src/ops.h"
 #include "../src/sha256.h"
+#include "../src/station.h"
 #include "../src/tuner.h"
 #include "check.h"
 #include "services_fixture.h"
@@ -1254,6 +1256,68 @@ int main() {
         // Rewritten, it waits for a new y: nothing is handed down on its own.
         std::this_thread::sleep_for(std::chrono::milliseconds(300));
         CHECK(f.count("key") == keys_before + 1);
+    }
+
+    // ---- a net tape sent from the form (net_tape, send=Y) is the operator's own send:
+    // every copy, and every part of a long one, waits written for the y; a standing
+    // grant keys none of them, and the y hands down that one copy only
+    {
+        FakeController f;
+        f.sock = sock;
+        Station s(base / "T", "TTT", sock);
+        f.outbox = s.gc.outbox_dir;
+        f.start();
+        s.set_channel(f, "P1");
+        // The keymaster's own keyring and identity, and a made-up member's card.
+        auto kr = std::make_shared<keys::Keyring>((base / "T" / "TTT.keys").string());
+        std::string err;
+        kr->load(&err);
+        s.core->set_keyring(kr);
+        auto me = std::make_shared<station::Identity>();
+        CHECK(station::make_identity("TTT", static_cast<int64_t>(std::time(nullptr)), *me, &err));
+        s.core->set_identity(me, (base / "T" / "TTT.id").string());
+        station::Identity member;
+        CHECK(station::make_identity("FARSTN", static_cast<int64_t>(std::time(nullptr)), member, &err));
+        CHECK(ok(call(*s.core, {{"cmd", "card_import"}, {"text", station::format_card(member)}})));
+        CHECK(ok(call(*s.core, {{"cmd", "card_check"}, {"station", "FARSTN"},
+                                {"fingerprint", station::fingerprint(station::card_of(member))}})));
+        // Standing machine on: it keys automatic sends, and must not key these.
+        auto grant = [&](const std::string& mode) {
+            const std::string pid = str(parsed(call(*s.core, {{"cmd", "standing_prepare"}, {"mode", mode}, {"service", "mars"}})), "prepare_id");
+            s.now = s.now + 2;
+            return !pid.empty() && ok(call(*s.core, {{"cmd", "key_confirm"}, {"prepare_id", pid}, {"confirm", "Y"}}));
+        };
+        CHECK(grant("machine") && s.gk->standing_on("machine"));
+
+        JsonValue r = parsed(call(*s.core, {{"cmd", "net_tape"}, {"service", "mars"}, {"net", "Practice Net"},
+                                            {"days", "31"}, {"members", "FARSTN"}, {"send", "Y"}}));
+        CHECK(flag(r, "ok"));
+        const JsonValue* sealed = r.get("sealed");
+        const JsonValue* first = sealed && sealed->is_array() && !sealed->arr.empty() ? &sealed->arr[0] : nullptr;
+        std::vector<std::string> ids;
+        if (first && first->get("ids"))
+            for (auto& x : first->get("ids")->arr) ids.push_back(x.s);
+        CHECK(ids.size() >= 2);  // a month of keys goes in parts
+        for (auto& id : ids) CHECK(wait_for([&] { return s.state(id) == "written"; }, 15000));
+        // Standing machine is on and the burst is written: still nothing handed down.
+        std::this_thread::sleep_for(std::chrono::milliseconds(1500));
+        CHECK(f.count("key") == 0 && f.count("prepare") == 1);  // the one prepare is the grant's
+        for (auto& id : ids) CHECK(s.state(id) == "written");
+        // The kiosk's y on the first copy hands down that copy only.
+        if (ids.size() >= 2) {
+            const std::string pid = str(parsed(call(*s.core, {{"cmd", "key_prepare"}, {"msg_id", ids[0]}})), "prepare_id");
+            CHECK(!pid.empty());
+            s.now = s.now + 2;
+            CHECK(f.count("key") == 0);
+            CHECK(ok(call(*s.core, {{"cmd", "key_confirm"}, {"prepare_id", pid}, {"confirm", "Y"}})));
+            CHECK(f.count("key") == 1);
+            auto k = f.last("key");
+            CHECK(k && ctl(*k, "token") != "" && !sub(*k, "control").get("standing"));
+            CHECK(wait_for([&] { return s.state(ids[0]) == "sent"; }, 5000));
+            std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+            CHECK(f.count("key") == 1);
+            for (size_t i = 1; i < ids.size(); ++i) CHECK(s.state(ids[i]) == "written");
+        }
     }
 
     // ---- a station with no controller at all: the calls say so, status says why
