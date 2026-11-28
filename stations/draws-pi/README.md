@@ -81,7 +81,7 @@ Receive, in order:
 | 1 | radio | DATA OUT 1200 (pin 5) into the DRAWS port's input |
 | 2 | Pi | arecord at 48 kHz stereo |
 | 3 | Pi | sox keeps that port's channel and writes 8 kHz mono files to the spool |
-| 4 | Pi to upstream host | files are copied, then deleted from the Pi |
+| 4 | Pi to upstream host | `draws-pull` on the upstream host copies each finished file, checks its SHA-256, then deletes from the Pi only what verified |
 
 The DRAWS left connector is the left ALSA channel and BCM12 PTT. The right
 connector is the right channel and BCM23 PTT. `DRAWS_PORT` in `station.env`
@@ -238,8 +238,14 @@ move to the upstream host.
 ## Storage
 
 Audio does not stay on the Pi. The Pi keeps recordings in
-`/var/spool/draws-station/rx` until the upstream host has copied them, then
-deletes them. It keeps TX WAVs in `/var/spool/draws-station/tx` only while
+`/var/spool/draws-station/rx` until the upstream host has copied them.
+`draws-pull`, run on the upstream host, lists the finished files with their
+SHA-256, copies each into `LOCAL_RX_DIR` (in `upstream.env`), checks the copy,
+and deletes from the Pi only the files whose copy verified. A file that does
+not verify stays on the Pi for the next run. `draws-rxrec` gives a file its
+`rx-...wav` name only when it is whole, so a file still being written is never
+taken. Nothing processes the audio on either side; where it goes after the
+upstream host is not set here. It keeps TX WAVs in `/var/spool/draws-station/tx` only while
 sending.
 
 ## Known problems
@@ -287,6 +293,7 @@ not a channel designation, from its caller.
 | `bin/draws-txwav` | send one WAV: key, play, unkey, with a hard time limit |
 | `bin/draws-send` | on the upstream host: copy one WAV to the Pi, verify it, and have the Pi send exactly that file |
 | `bin/draws-rxrec` | record the port to 8 kHz mono files |
+| `bin/draws-pull` | on the upstream host: copy the finished recordings off the Pi, verify each, delete from the Pi only what verified |
 | `bin/draws-findport` | find which DRAWS port the radio is on (receive only) |
 | `bin/draws-findcat` | find which USB serial port answers CAT (one read-only query) |
 | `systemd/draws-ptt-safe.service` | PTT low at boot and at shutdown |
