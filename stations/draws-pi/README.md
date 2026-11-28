@@ -474,10 +474,12 @@ not a channel designation, from its caller.
 
 - What each radio's passband measures (checklist step 16). Not measured: the
   RSP2 was not available.
-- A USB CAT cable for the radio on the DRAWS: does Alex have a second one.
-  Inference, not confirmed: checklist steps 11 and 12 passed, which needs a
-  CAT cable on the FT-857D that answers the read-only query and rigctld. Left
-  open until Alex confirms it.
+- ~~A USB CAT cable for the radio on the DRAWS: does Alex have a second one.~~
+  Closed 2026-11-28: CAT works on the FT-857D (Alex: "one of the steps was
+  proving the CAT works so that is done"). Steps 11, 12, 18 and 19 passed; on
+  2026-11-28 the coordinator read the frequency and set it back over CAT
+  (`draws-setfreq`, mode PKTUSB, ok). The cable is a Prolific USB-serial
+  (`/dev/serial/by-id/usb-Prolific_Technology_Inc._USB-Serial_Controller_D-if00-port0`).
 - Hamlib model numbers checked in Hamlib 4.6.2, the Pi's version
   (`include/hamlib/riglist.h:116-139` [6]): 1020 FT-817, 1041 FT-818,
   1022 FT-857, 1023 FT-897, 1043 FT-897D. Confirm with `rigctl -l` on the Pi.
