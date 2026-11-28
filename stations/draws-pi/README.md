@@ -391,6 +391,9 @@ not a channel designation, from its caller.
 - What each radio's passband measures (checklist step 16). Not measured: the
   RSP2 was not available.
 - A USB CAT cable for the radio on the DRAWS: does Alex have a second one.
+  Inference, not confirmed: checklist steps 11 and 12 passed, which needs a
+  CAT cable on the FT-857D that answers the read-only query and rigctld. Left
+  open until Alex confirms it.
 - Hamlib model numbers checked in Hamlib 4.5.5: 1020 FT-817, 1041 FT-818,
   1022 FT-857, 1023 FT-897, 1043 FT-897D. Confirm with `rigctl -l` on the Pi.
 
