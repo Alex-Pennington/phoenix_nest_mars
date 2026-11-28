@@ -220,9 +220,13 @@ the Pi, in `draws-txwav`: the tx-enabled file, the hard time limit and its
 watchdog, PTT low on every exit, one transmission at a time. Nothing on the Pi
 watches the spool: a file there is sent only when an order names it.
 
-The Pi's ssh name comes from `upstream.env` on the upstream host, not from the
-code, so moving from munin to Har is a copy of that file and an ssh key. The
-upstream host's ssh key must log in to the Pi with no prompt (BatchMode).
+How the upstream host reaches the Pi comes from `upstream.env` on the upstream
+host, not from the code: `DRAWS_PI_HOST` (`user@host`) and
+`DRAWS_PI_SSH_OPTS` (extra ssh options). The defaults are how munin logged in
+on 2026-11-28: `rayven@192.168.5.216`, key file `~/.ssh/root`, and
+`HostKeyAlias=draws1`, because munin's known_hosts holds the Pi's host key
+under that name. Moving from munin to Har is a copy of that file and an ssh
+key. The key must log in to the Pi with no prompt (BatchMode).
 
 If ssh fails during the send order, `draws-send` exits 11, not 10. Exit 11
 means the burst may have gone out: the connection can drop after the Pi has

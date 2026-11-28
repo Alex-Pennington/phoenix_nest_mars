@@ -13,8 +13,8 @@
 # processed on either side: the file is moved as it is.
 #
 # Settings come from DRAWS_UPSTREAM_ENV (default
-# ~/.config/draws-station/upstream.env): DRAWS_PI_HOST, PI_RX_SPOOL,
-# LOCAL_RX_DIR.
+# ~/.config/draws-station/upstream.env): DRAWS_PI_HOST, DRAWS_PI_SSH_OPTS,
+# PI_RX_SPOOL, LOCAL_RX_DIR.
 # Exit codes: 0 every listed file moved (or there were none), 1 a file did not
 # verify or could not be copied (it stays on the Pi), 2 usage or config,
 # 255 ssh failed.
@@ -35,6 +35,9 @@ done
 
 SSH="${DRAWS_SSH:-ssh}"
 SSH_OPTS=(-T -o BatchMode=yes -o ConnectTimeout=10)
+# Extra ssh options from the settings file (identity, HostKeyAlias, ...).
+read -r -a EXTRA_SSH_OPTS <<<"${DRAWS_PI_SSH_OPTS:-}"
+SSH_OPTS+=("${EXTRA_SSH_OPTS[@]}")
 q() { printf '%q' "$1"; }
 SPOOL="$(q "$PI_RX_SPOOL")"
 # draws-rxrec's names: rx-YYYYmmddTHHMMSSZ-left.wav or -right.wav.

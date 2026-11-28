@@ -17,7 +17,8 @@
 # spool watcher: a file in the spool is never sent unless this order names it.
 #
 # Settings come from DRAWS_UPSTREAM_ENV (default
-# ~/.config/draws-station/upstream.env): DRAWS_PI_HOST, PI_TX_SPOOL, PI_TXWAV.
+# ~/.config/draws-station/upstream.env): DRAWS_PI_HOST, DRAWS_PI_SSH_OPTS,
+# PI_TX_SPOOL, PI_TXWAV.
 # Exit codes: draws-txwav's own (0 sent, 1 error, 2 usage, 3 keying is off),
 # 2 usage or config here, 10 the copy failed or did not verify (nothing was
 # keyed), 11 ssh failed while the send order was running.
@@ -47,6 +48,9 @@ IN="$1"
 
 SSH="${DRAWS_SSH:-ssh}"
 SSH_OPTS=(-T -o BatchMode=yes -o ConnectTimeout=10)
+# Extra ssh options from the settings file (identity, HostKeyAlias, ...).
+read -r -a EXTRA_SSH_OPTS <<<"${DRAWS_PI_SSH_OPTS:-}"
+SSH_OPTS+=("${EXTRA_SSH_OPTS[@]}")
 
 # The name on the Pi: unique, and only characters that need no quoting.
 base="$(basename -- "$IN")"

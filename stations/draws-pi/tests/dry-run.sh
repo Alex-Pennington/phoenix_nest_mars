@@ -108,7 +108,7 @@ mkdir -p "$T/tx" "$T/rx" "$T/up"
 cat > "$T/fake-ssh" <<'FAKE'
 #!/bin/bash
 # Drops ssh's options, logs the host and command, runs the command here.
-while [[ "${1:-}" == -* ]]; do case "$1" in -o) shift 2 ;; *) shift ;; esac; done
+while [[ "${1:-}" == -* ]]; do case "$1" in -o|-i) shift 2 ;; *) shift ;; esac; done
 echo "$1 :: ${*:2}" >> "$SSH_LOG"; shift
 export DRAWS_DRY_RUN=1
 if [[ -n "${CORRUPT_COPY:-}" && "$*" == *"cat > "* ]]; then
@@ -125,6 +125,7 @@ FAKE
 chmod +x "$T/fake-ssh"
 cat > "$T/upstream.env" <<UP
 DRAWS_PI_HOST=fake-pi
+DRAWS_PI_SSH_OPTS="-i $T/fake-key -o HostKeyAlias=fake-alias"
 PI_TX_SPOOL=$T/tx
 PI_RX_SPOOL=$T/rx
 PI_TXWAV=$HERE/bin/draws-txwav
@@ -139,6 +140,7 @@ out="$("$HERE/bin/draws-send" "$T/burst.wav")"
 [[ "$(grep -c '^DRY: ' <<<"$out")" == 3 ]] || fail "send dry run: $out"
 [[ ! -s "$SSH_LOG" && -z "$(ls -A "$T/tx")" ]] || fail "send dry run reached the Pi"
 grep -q "draws-txwav send-[0-9TZ]*-[0-9]*-burst.wav" <<<"$out" || fail "send dry run does not name the file: $out"
+[[ "$(grep -c -- "-i $T/fake-key -o HostKeyAlias=fake-alias fake-pi" <<<"$out")" == 3 ]] || fail "send dry run does not use the settings file's ssh options: $out"
 pass "draws-send dry run prints its three ssh steps and touches nothing"
 
 rc=0; out="$(DRAWS_DRY_RUN=0 DRAWS_SSH="$T/fake-ssh" "$HERE/bin/draws-send" "$T/burst.wav" 2>&1)" || rc=$?
