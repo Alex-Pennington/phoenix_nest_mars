@@ -20,7 +20,13 @@
 # ~/.config/draws-station/upstream.env): DRAWS_PI_HOST, PI_TX_SPOOL, PI_TXWAV.
 # Exit codes: draws-txwav's own (0 sent, 1 error, 2 usage, 3 keying is off),
 # 2 usage or config here, 10 the copy failed or did not verify (nothing was
-# keyed), 255 ssh failed.
+# keyed), 11 ssh failed while the send order was running.
+#
+# Exit 11 means the burst MAY HAVE GONE OUT: the connection can drop after
+# the Pi has keyed. Never retry it automatically; a person checks the radio
+# and the Pi's log first. Ctrl-C here does not stop a burst in progress
+# either: the Pi carries on, and draws-txwav ends it at the end of the file,
+# or at TX_MAX_SECONDS through its time limit and watchdog.
 # DRAWS_DRY_RUN=1 prints the ssh commands instead of running them.
 # DRAWS_SSH replaces ssh, for tests.
 set -euo pipefail
@@ -75,8 +81,13 @@ if [[ "$got" != "$SUM" ]]; then
     die "the copy on $DRAWS_PI_HOST does not match (local $SUM, Pi ${got:-none}); nothing was keyed" 10
 fi
 
+# From here the Pi may key. Ctrl-C does not stop it; say so.
+trap 'echo "draws-send: interrupted; the Pi may still be sending. draws-txwav ends it at the end of the file or at TX_MAX_SECONDS." >&2; exit 130' INT
 set +e
 "$SSH" "${SSH_OPTS[@]}" "$DRAWS_PI_HOST" "$REMOTE_SEND" </dev/null
 rc=$?
 set -e
+if (( rc == 255 )); then
+    die "ssh to $DRAWS_PI_HOST failed during the send order: the burst MAY HAVE GONE OUT. Do not retry automatically; check the radio and the Pi first" 11
+fi
 exit "$rc"

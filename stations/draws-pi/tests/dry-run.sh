@@ -114,6 +114,9 @@ export DRAWS_DRY_RUN=1
 if [[ -n "${CORRUPT_COPY:-}" && "$*" == *"cat > "* ]]; then
     head -c 100 | bash -c "$*"; exit
 fi
+if [[ -n "${FAIL_SEND:-}" && "$*" == *"draws-txwav"* ]]; then
+    exit 255
+fi
 if [[ -n "${CORRUPT_CAT:-}" && "$*" == "cat -- "*"$CORRUPT_CAT" ]]; then
     bash -c "$*" | head -c 100; exit 0
 fi
@@ -148,6 +151,11 @@ rc=0; out="$(CORRUPT_COPY=1 DRAWS_DRY_RUN=0 DRAWS_SSH="$T/fake-ssh" "$HERE/bin/d
 [[ $rc == 10 && "$out" == *"does not match"* && "$out" != *"op dh"* ]] || fail "send with a bad copy: rc=$rc $out"
 [[ -z "$(ls -A "$T/tx")" ]] || fail "bad copy left in the spool: $(ls -A "$T/tx")"
 pass "draws-send with a copy that does not verify: exit 10, never keyed, copy deleted"
+
+rc=0; out="$(FAIL_SEND=1 DRAWS_DRY_RUN=0 DRAWS_SSH="$T/fake-ssh" "$HERE/bin/draws-send" "$T/burst.wav" 2>&1)" || rc=$?
+[[ $rc == 11 && "$out" == *"MAY HAVE GONE OUT"* ]] || fail "send-stage ssh failure: rc=$rc $out"
+rm -f "$T/tx/".send-*.part
+pass "draws-send: ssh failing during the send order is exit 11 (may have keyed), not the copy stage's 10"
 
 out="$(DRAWS_DRY_RUN=0 DRAWS_SSH="$T/fake-ssh" "$HERE/bin/draws-send" "$T/burst.wav")"
 while IFS= read -r l; do echo "     $l"; done <<<"$out"

@@ -220,9 +220,16 @@ The Pi's ssh name comes from `upstream.env` on the upstream host, not from the
 code, so moving from munin to Har is a copy of that file and an ssh key. The
 upstream host's ssh key must log in to the Pi with no prompt (BatchMode).
 
-If the ssh connection drops while the Pi is keyed, the Pi's guards still end
-the transmission: at the end of the file, or at `TX_MAX_SECONDS` by the
-watchdog.
+If ssh fails during the send order, `draws-send` exits 11, not 10. Exit 11
+means the burst may have gone out: the connection can drop after the Pi has
+keyed. It is never retried automatically; a person checks the radio and the
+Pi first. Exit 10 is the copy stage, before any order to send, so nothing was
+keyed.
+
+Ctrl-C on the upstream host does not stop a burst in progress, and neither
+does a dropped connection. The Pi carries on, and `draws-txwav` ends the
+transmission at the end of the file, or at `TX_MAX_SECONDS` through its time
+limit and its watchdog.
 
 ## Setting the channel
 
