@@ -56,8 +56,8 @@ PINCTRL = os.environ.get("DRAWS_PINCTRL", "pinctrl")
 # is after the "|" (raspberrypi/utils pinctrl/pinctrl.c:164, :176-181).
 LEVEL_RE = re.compile(r"\|\s*(hi|lo|--)\s*//")
 # Hamlib's frontend keeps a set frequency in its cache for 500 ms and would
-# answer "f" from it without asking the radio (Hamlib 4.5.5 src/rig.c:623,
-# :1760). rigctld-draws.service turns the cache off (cache_timeout=0); the
+# answer "f" from it without asking the radio (Hamlib 4.6.2 src/rig.c:733,
+# :2071, :2377, :2548-2550). rigctld-draws.service turns the cache off (cache_timeout=0); the
 # wait is there as well, so the read-back is the radio's on either unit file.
 READBACK_WAIT = float(os.environ.get("DRAWS_READBACK_WAIT", "0.6"))
 TIMEOUT = 5.0
@@ -65,7 +65,7 @@ TIMEOUT = 5.0
 # The only commands this program can send to rigctld.
 ALLOWED = ("F", "f", "m")
 # The data mode as Hamlib names it: DIG with DIG MODE = USER-U is PKTUSB
-# (Hamlib 4.5.5 rigs/yaesu/ft857.c:711-724).
+# (Hamlib 4.6.2 rigs/yaesu/ft857.c:724-737).
 DATA_MODE = "PKTUSB"
 # 8 BCD digits of 10 Hz each in the CAT frame (FT-857D manual p.117).
 MAX_HZ = 999_999_990

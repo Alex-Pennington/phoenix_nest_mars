@@ -156,18 +156,22 @@ in config; the raise at open cannot be.
 
 - **The kernel raises both at every open.** `tty_port_block_til_ready()`
   calls `tty_port_raise_dtr_rts()` whenever the baud rate is not B0, also for
-  a non-blocking open [7, `drivers/tty/tty_port.c:541-544`]. That happens
+  a non-blocking open [7, `drivers/tty/tty_port.c:521-524`]. That happens
   inside `open(2)`, before any program can act. No setting in rigctld or in
   the probe removes it. Each open leaves a pulse of a few milliseconds.
 - **`draws-findcat` lowers both at once** (`TIOCMBIC`, straight after
   `open(2)`, and again after it sets the port up), so its pulse is the
   kernel's alone, and they are low when it closes the port.
 - **rigctld lowers both at open** with `-C rts_state=OFF,dtr_state=OFF` in
-  `rigctld-draws.service` [6, `src/iofunc.c:258-283`; the names are the same
-  in Hamlib 4.0]. Hamlib does not lower them by itself
-  (`src/serial.c:292-296` is commented out), so without these two settings
-  they stay high for as long as rigctld runs. Hamlib also clears HUPCL
-  (`src/serial.c:410`), so whatever state they are in at exit stays.
+  `rigctld-draws.service`. In Hamlib 4.6.2 the two names are serial
+  settings (`src/serial_cfg_params.h:28-36`), found for a serial rig such as
+  the FT-857 (`src/conf.c:1411-1420`, `rigs/yaesu/ft857.c:269`), and set at
+  `src/conf.c:454-500`. Hamlib lowers both straight after it opens the port
+  and then waits 100 ms (`src/iofunc.c:266-285`, `:298-300`). It does not
+  lower them by itself (`src/serial.c:402-403` is commented out), so without
+  these two settings they stay high for as long as rigctld runs. Hamlib also
+  clears HUPCL (`src/serial.c:594`), so whatever state they are in at exit
+  stays. All of this is the same in 4.5.5, at other line numbers.
 
 The FT-857D's CAT/LINEAR jack lists no RTS or DTR pin [8, p.34]. Whether the
 USB CAT cable on the Pi connects either line to anything is NOT DETERMINABLE
@@ -241,7 +245,7 @@ frequency. It talks to rigctld on localhost and sends exactly three commands:
 
 - It never sets the mode. The DIG sideband is the operator's panel setting
   [1] (checklist step 9: mode DIG, DIG MODE = USER-U). Hamlib reads DIG with
-  USER-U as `PKTUSB` [6, `rigs/yaesu/ft857.c:711-724`].
+  USER-U as `PKTUSB` [6, `rigs/yaesu/ft857.c:724-737`].
 - It refuses, and says why, if the frequency read back is not the one asked
   for (exit 4) or the mode read back is not `PKTUSB` (exit 5). It does not put
   anything back.
@@ -255,70 +259,106 @@ frequency. It talks to rigctld on localhost and sends exactly three commands:
   `12: op dl pd | lo // GPIO12 = output` [9, `pinctrl/pinctrl.c:164`,
   `:176-181`].
 - Hamlib keeps a set frequency in a 500 ms cache and would answer `f` from it
-  without asking the radio [6, `src/rig.c:623`, `:1760`]. The rigctld unit
-  turns the cache off (`-C cache_timeout=0`), and the helper also waits 0.6 s
-  before it reads back, so the read-back is the radio's.
+  without asking the radio. In 4.6.2 the default is 500 ms
+  (`src/rig.c:733`). `rig_set_freq` reads the frequency back only when it is
+  not a whole 100 Hz or is above 100 MHz (`:2330-2331`); otherwise it caches
+  the value it asked for (`:2071`, `:2377`), and `rig_get_freq` answers from
+  the cache while it is younger than the timeout (`:2548-2550`). The rigctld
+  unit turns the cache off (`-C cache_timeout=0`; `src/conf.c:139`, `:712-713`,
+  `src/misc.c:1988-1995`), and the helper also waits 0.6 s before it reads
+  back, so the read-back is the radio's.
 
 `PKTUSB` is also what Hamlib reads for DIG MODE = PSK31-U [6,
-`rigs/yaesu/ft857.c:720`]. CAT cannot tell the two apart.
+`rigs/yaesu/ft857.c:733`]. CAT cannot tell the two apart.
 
 ### What Hamlib sends for it (FT-857, model 1022)
 
-From the Hamlib 4.5.5 source [6]; not measured on the radio.
+The Pi runs Hamlib 4.6.2 (`rigctld Hamlib 4.6.2 2025-02-09 SHA=870364`, read
+on the Pi on 2026-11-28). Everything below is from the 4.6.2 source [6],
+checked against the release tag (tag 4.6.2 is commit 8703647c, the SHA the
+Pi reports). It is not measured on the radio. Where 4.5.5 differs, it says so.
 
 | Command | Frames on the CAT line |
 |---|---|
-| `F` (set frequency) | Read TX status `00 00 00 00 F7` (`ft857.c:827-846`), repeated up to 10 times 100 ms apart while it reads PTT on (`:958-966`); then `P1 P2 P3 P4 01`, the frequency in BCD (`:969`, `:974`), and a 1-byte ack (`ft817.c:1324-1350`) |
-| `f` (read frequency), `m` (read mode) | Read frequency and mode `00 00 00 00 03`, then the EEPROM read `00 78 00 00 BB` for the DIG submode (`ft857.c:500-563`, `:471-498`). Two reads within 50 ms share one reply (`ft857.h:70`) |
+| `F` (set frequency) | Read TX status `00 00 00 00 F7` (`ft857.c:840-859`), repeated up to 10 times 100 ms apart while it reads PTT on (`:988-996`); then `P1 P2 P3 P4 01`, the frequency in BCD (`:999`, `:1004`), and a 1-byte ack (`ft817.c:1520-1551`). In 4.6.2 the ack is read but its value is not checked (`:1540-1547` is `#if 0`); 4.5.5 refused a non-zero ack. The read-back is what catches a frequency that did not take |
+| `f` (read frequency), `m` (read mode) | Read frequency and mode `00 00 00 00 03`, then the EEPROM read `00 78 00 00 BB` for the DIG submode (`ft857.c:517-580`, `:569`, `:487-515`). Two reads within 50 ms share one reply (`ft857.h:70`) |
+
+`rig_set_freq` in 4.6.2 also checks for a band change. Its hook,
+`rig_band_changed`, does nothing (`src/band_changed.c`), and on a band
+change it asks for PTT off only if its cache says PTT is on
+(`src/rig.c:2088-2101`); with PTT type None that sends nothing (below).
 
 **No 0xBE.** Every frame `ft857.c` writes goes through one of its four
-`write_block` calls (`:483`, `:537`, `:579`, `:601`), and each takes its last
+`write_block` calls (`:500`, `:555`, `:596`, `:618`), and each takes its last
 byte, the opcode, from the command table `ncmd` (`:176-218`). That table has no
-0xBE. The other four bytes are BCD digits (at most 0x99), the EEPROM addresses
-0x00, 0x68, 0x78 and 0x8C, or zero. So 0xBE cannot be in any byte of a frame
-for set frequency, read frequency or read mode. The same holds in Hamlib 4.0
-and 4.5.4 (same table, same writes). Which Hamlib the Pi runs is not known
-here: `rigctld --version` on the Pi says.
+0xBE, and it is byte for byte the 4.5.5 table. The other four bytes are BCD
+digits (at most 0x99), the EEPROM addresses 0x00, 0x68, 0x78 and 0x8C
+(`:497-498`), or zero. So 0xBE cannot be in any byte of a frame for set
+frequency, read frequency or read mode. 4.0, 4.5.4 and 4.5.5 are the same.
 
-**At rigctld's start** (`src/rig.c:1310-1386`) Hamlib also reads the VFO
-(EEPROM `00 68 00 00 BB`, `ft857.c:607-631`), the split state (`F7`, and
-`00 8C 00 00 BB` while receiving, `ft857.c:793-825`), and VFO B's frequency.
-The FT-857 backend has a `set_vfo` (`ft857.c:365`) and no targetable VFO
-(`:284`), so to read VFO B the frontend toggles VFO A/B with `00 00 00 00 81`
-(`ft857.c:633-653`), reads, and toggles back (`src/rig.c:2174`, `:2191`).
-Inference from the source: each rigctld start toggles the VFO twice and leaves
-it where it was. None of these keys, and none is 0xBE.
+**At rigctld's start** (`src/rig.c:1486-1592`) Hamlib also reads the VFO
+(EEPROM `00 68 00 00 BB`, `ft857.c:624-649`), the split state (`F7`, and
+`00 8C 00 00 BB` while receiving, `ft857.c:807-838`), and VFO B's frequency
+(`src/rig.c:1564`). The FT-857 backend has a `set_vfo` (`ft857.c:380`) and no
+targetable VFO (`:298`), so to read VFO B the frontend toggles VFO A/B with
+`00 00 00 00 81` (`ft857.c:651-665`), reads, and toggles back
+(`src/rig.c:2637`, `:2655`). Inference from the source: each rigctld start
+toggles the VFO twice and leaves it where it was. None of these keys, and none
+is 0xBE. The FT-857 has no `get_powerstat`, so no power-on bytes are sent at
+start (`src/rig.c:1432`; `ft857.c:399` has only `set_powerstat`).
 
 **CAT cannot key, because of `ptt_type=None`, not `-P NONE`.** An earlier
-version of this plan said `-P NONE` turned CAT PTT off. It does not:
+version of this plan said `-P NONE` turned CAT PTT off. It does not, in 4.6.2
+as in 4.5.5:
 
-- `-P NONE` sets rigctld's `ptt_type` to `RIG_PTT_NONE` (`tests/rigctld.c:409`),
-  which is already its default (`:256`). rigctld applies it to the rig only
-  `if (ptt_type != RIG_PTT_NONE)` (`:711`), so `-P NONE` changes nothing.
-- The PTT type then stays the one `rig_init` took from the backend
-  (`src/rig.c:615`), and the FT-857 backend's is `RIG_PTT_RIG`
-  (`rigs/yaesu/ft857.c:253`). With that, a `T 1` sent to rigctld would reach
-  `ft857_set_ptt` and send PTT on, `00 00 00 00 08` (`ft857.c:1105-1125`).
-- `rigctld-draws.service` now passes `-C ptt_type=None` (`src/conf.c:94-96`).
-  It sets the PTT type to `RIG_PTT_NONE`, and the copy `rig_open` restores
-  from as well (`src/conf.c:497`, `:530-541`; `src/rig.c:842-845`). With that
-  type, `rig_set_ptt` returns an error before the backend is called
-  (`src/rig.c:3026`, `:3277-3279`), and `rig_get_ptt` returns "not available"
-  (`src/rig.c:3585-3587`). `-P NONE` is kept; it is harmless.
+- `-P NONE` sets rigctld's `ptt_type` to `RIG_PTT_NONE`
+  (`tests/rigctld.c:411-414`), which is already its default (`:256`). rigctld
+  applies it to the PTT port only `if (ptt_type != RIG_PTT_NONE)` (`:711`).
+- New in 4.6.2: rigctld also writes that value into the backend's caps
+  (`tests/rigctld.c:665`). That does not change the PTT port, which `rig_init`
+  already copied from the caps (`src/rig.c:710`, at `:653` of rigctld), and
+  nothing in the library reads the caps value back for keying (only
+  `rig_get_caps_int`, `src/misc.c:2682-2686`).
+- So the PTT type stays the FT-857 backend's, `RIG_PTT_RIG`
+  (`rigs/yaesu/ft857.c:267`). With that, a `T 1` sent to rigctld would reach
+  `ft857_set_ptt` and send PTT on, `00 00 00 00 08` (`ft857.c:1135-1168`,
+  `:1144`).
+- `rigctld-draws.service` passes `-C ptt_type=None` (`src/conf.c:109-111`).
+  rigctld applies each `-C` setting after `rig_init` (`tests/rigctld.c:666-694`).
+  It sets the PTT port, the caps and the copy `rig_open` restores from, all
+  to `RIG_PTT_NONE` (`src/conf.c:559`, `:599-602`, `:609`;
+  `src/rig.c:972-975`). `-P NONE` is kept; it is harmless.
+- With PTT type None, 4.6.2's `rig_set_ptt` calls no backend and sends
+  nothing: the case is "allowed for use with VOX" and returns OK
+  (`src/rig.c:3820-3822`). That is a change from 4.5.5, which returned an
+  error. It still records the request in its PTT cache (`:3831-3842`).
+  `rig_get_ptt` returns "not available" (`:4165-4168`).
 
-Checklist step 18 checks it with a read-only query, `t` (read PTT). With PTT
-type None, rigctld answers it with an error and sends nothing to the radio
-(`src/rig.c:3585-3587`), and `rigctl` prints
-`get_ptt: error = Feature not available` (a command on `rigctl`'s command line
-runs non-interactive, `tests/rigctl.c:460-463`, which takes the printing branch
-at `tests/rigctl_parse.c:1795-1812`; the text is `src/rig.c:203`). rigctld
-itself answers `RPRT -11`. With the CAT PTT still on, it would print `0`. The unit's
-`cache_timeout=0` matters here too: with Hamlib's cache on, a second `t`
-inside 500 ms would answer `0` from the cache (`src/rig.c:3345-3353`).
+**Watch out: 4.6.2 skips a misspelled `-C` setting.** An unknown name is logged
+and ignored, not refused (`tests/rigctld.c:675-680`); a bad value for a known
+name stops rigctld (`:684-689`). So the checklist checks the PTT type on the
+running rigctld instead of trusting the unit file.
+
+Checklist step 18 checks it with one read-only query, `t` (read PTT), sent
+straight to rigctld on 127.0.0.1:4532:
+
+- With PTT type None, `rig_get_ptt` returns "not available" before any
+  backend call, so nothing is sent to the radio (`src/rig.c:4165-4168`), and
+  rigctld answers `RPRT -11` (`tests/rigctl_parse.c:1881-1886`;
+  `RIG_ENAVAIL` is 11, `include/hamlib/rig.h:202`).
+- With CAT PTT still on, `t` reads TX status (`F7`, a read) and rigctld
+  answers `0` (`ft857.c:840-859`; `tests/rigctl_parse.c:2693-2706`).
+- The unit's `cache_timeout=0` matters here too: with the cache on, a `t`
+  within 500 ms of a `T` would answer from the cache (`src/rig.c:3904-3912`).
+
+The check talks to rigctld directly, not through `rigctl -m 2`. In 4.6.2
+`rigctl` prints errors as `error = ` followed by its saved error messages
+(`tests/rigctl_parse.c:1890-1895`, `src/rig.c:480-482`), so its exact text is
+not fixed, and its own start sends reads through rigctld.
 
 **Not closed by config: rigctld's raw command.** rigctld's `w` command sends
 whatever bytes the client gives straight to the radio
-(`tests/rigctl_parse.c:339`, `:4765`). Any program on the Pi that can reach
+(`tests/rigctl_parse.c:352`, `:5110`). Any program on the Pi that can reach
 127.0.0.1:4532 could send any CAT byte that way, 0xBE or PTT on included.
 `draws-setfreq` sends only `F`, `f` and `m`, and nothing on the Pi sends `w`.
 
@@ -454,12 +494,16 @@ notes, `setalsa-ft817.sh`, GPS install. https://github.com/nwdigitalradio/n7nix
 [5] NW Digital Radio, DRAWS product page.
 https://nwdigitalradio.com/products/draws%E2%84%A2
 
-[6] Hamlib project, *Hamlib*, tag 4.5.5: `rigs/yaesu/ft857.c`,
+[6] Hamlib project, *Hamlib*, release 4.6.2 (tag 4.6.2, commit
+8703647c8cb277cad66f5a4eaff103126b7a1b5a): `rigs/yaesu/ft857.c`,
 `rigs/yaesu/ft857.h`, `rigs/yaesu/ft817.c`, `src/rig.c`, `src/conf.c`,
-`src/iofunc.c`, `tests/rigctld.c`, `tests/rigctl_parse.c`. Cited by file and
-line. LGPL-2.1-or-later. https://github.com/Hamlib/Hamlib/tree/4.5.5
+`src/serial_cfg_params.h`, `src/iofunc.c`, `src/serial.c`, `src/misc.c`,
+`src/band_changed.c`, `tests/rigctld.c`, `tests/rigctl_parse.c`,
+`include/hamlib/rig.h`. Cited by file and line. LGPL-2.1-or-later.
+https://github.com/Hamlib/Hamlib/releases/tag/4.6.2
 
-[7] Raspberry Pi Ltd, Linux kernel, rpi-6.12.y: `drivers/tty/tty_port.c`.
+[7] Raspberry Pi Ltd, Linux kernel, rpi-6.18.y (the Pi runs 6.18):
+`drivers/tty/tty_port.c`.
 GPL-2.0. https://github.com/raspberrypi/linux
 
 [8] Yaesu Musen Co., Ltd., *FT-857D Operating Manual*, cited by printed page.

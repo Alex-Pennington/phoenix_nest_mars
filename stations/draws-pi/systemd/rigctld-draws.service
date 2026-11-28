@@ -9,19 +9,22 @@ User=draws
 Group=dialout
 # Frequency and mode only. Keying is the DRAWS hardware PTT line only, never
 # CAT, never VOX.
+# Line numbers are Hamlib 4.6.2, the version on the Pi (README [6]).
 # ptt_type=None is what turns CAT PTT off. -P NONE does nothing alone: it sets
-# rigctld's ptt_type to its own default, RIG_PTT_NONE (Hamlib 4.5.5
-# tests/rigctld.c:256, :409), which rigctld then applies only when it is not
-# NONE (:711), so the backend's RIG_PTT_RIG stays (src/rig.c:615,
-# rigs/yaesu/ft857.c:253) and a "T 1" would key over CAT. ptt_type=None
-# (src/conf.c:94-96, :497-541) sets it. -P NONE is kept as well; it is harmless.
+# rigctld's ptt_type to its own default, RIG_PTT_NONE (tests/rigctld.c:256,
+# :411-414), which rigctld applies to the PTT port only when it is not NONE
+# (:711). So the backend's RIG_PTT_RIG stays (src/rig.c:710,
+# rigs/yaesu/ft857.c:267) and a "T 1" would key over CAT. ptt_type=None
+# (src/conf.c:109-111, :599-609) sets it. -P NONE is kept; it is harmless.
+# 4.6.2 skips a misspelled -C name without an error (tests/rigctld.c:675-680),
+# so checklist step 18 checks the PTT type on the running rigctld.
 # cache_timeout=0: every read asks the radio, so draws-setfreq's read-back is
-# the radio's and not Hamlib's cache (Hamlib 4.5.5 src/rig.c:623).
+# the radio's and not Hamlib's 500 ms cache (src/rig.c:733, :2548-2550).
 # rts_state=OFF, dtr_state=OFF: Hamlib lowers both lines straight after it
-# opens the port (src/iofunc.c:258-283). Left unset, they stay where the
-# kernel raised them at open for as long as rigctld runs (src/serial.c:292-296
+# opens the port (src/iofunc.c:266-285). Left unset, they stay where the
+# kernel raised them at open for as long as rigctld runs (src/serial.c:402-403
 # is commented out), and after it exits too, since Hamlib clears HUPCL
-# (src/serial.c:410). The kernel's raise at open itself cannot be avoided.
+# (src/serial.c:594). The kernel's raise at open itself cannot be avoided.
 ExecStart=/usr/bin/rigctld -m ${RIG_MODEL} -r ${RIG_DEVICE} -s ${RIG_BAUD} -P NONE -C ptt_type=None,cache_timeout=0,rts_state=OFF,dtr_state=OFF -T 127.0.0.1 -t 4532
 Restart=on-failure
 RestartSec=5
