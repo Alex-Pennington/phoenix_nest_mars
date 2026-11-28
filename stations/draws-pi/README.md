@@ -384,7 +384,7 @@ Without a GPS antenna the Pi falls back to network time.
 
 | Item | Memory |
 |---|---|
-| Raspberry Pi OS Lite 64-bit, idle, no desktop | about 150 to 200 MB |
+| Debian 13 (trixie) 64-bit, idle, no desktop | not measured on this Pi; about 150 to 200 MB was the estimate for Raspberry Pi OS Lite |
 | gpsd, chrony, rigctld | under 20 MB |
 | sox, aplay, arecord while running | under 30 MB |
 
@@ -411,11 +411,13 @@ sending.
 ## Known problems
 
 - **Kernel breakage.** DRAWS drivers have broken on some Pi kernels before
-  (5.10.11, 5.15.61). The vendor's last image (NWDR23, April 2023) is Bullseye
-  with kernel 6.1. The `draws` overlay is still in the Raspberry Pi kernel tree
-  for 6.12 and 6.18. Plan: current Raspberry Pi OS Lite 64-bit, check
-  `aplay -l` shows `udrc` after every kernel update, and hold the kernel if it
-  ever breaks.
+  (5.10.11, 5.15.61). The Pi on the bench runs Debian 13 (trixie) with kernel
+  6.18.50+rpt-rpi-v8 and Hamlib 4.6.2, as read on the Pi on 2026-11-28. It is
+  not the vendor's NWDR23 image (Bullseye, kernel 6.1). The `draws` overlay is
+  in the Raspberry Pi kernel tree for 6.18 [4]. Check that `aplay -l` shows
+  `udrc` after every kernel update, and hold the kernel if it ever breaks.
+  `config.txt` is in `/boot/firmware` on trixie, where the install block
+  puts the DRAWS lines.
 - **GPIO numbering.** Newer kernels move sysfs GPIO numbers (the old
   `/sys/class/gpio/gpio12` scripts from the vendor fail). The helpers use
   `pinctrl`, which takes plain BCM numbers.
@@ -472,7 +474,8 @@ not a channel designation, from its caller.
   Inference, not confirmed: checklist steps 11 and 12 passed, which needs a
   CAT cable on the FT-857D that answers the read-only query and rigctld. Left
   open until Alex confirms it.
-- Hamlib model numbers checked in Hamlib 4.5.5: 1020 FT-817, 1041 FT-818,
+- Hamlib model numbers checked in Hamlib 4.6.2, the Pi's version
+  (`include/hamlib/riglist.h:116-139` [6]): 1020 FT-817, 1041 FT-818,
   1022 FT-857, 1023 FT-897, 1043 FT-897D. Confirm with `rigctl -l` on the Pi.
 
 ## Sources
@@ -488,8 +491,8 @@ kept on saga as `~/msc-handoff/second-station-rf-terminal-2026-11-27.md`.
 [3] NW Digital Radio, n7nix repository: DRAWS config, ALSA, HF and radio
 notes, `setalsa-ft817.sh`, GPS install. https://github.com/nwdigitalradio/n7nix
 
-[4] Raspberry Pi Ltd, Linux kernel, rpi-6.12.y: overlay README and
-`draws-overlay.dts`. GPL-2.0. https://github.com/raspberrypi/linux
+[4] Raspberry Pi Ltd, Linux kernel, rpi-6.18.y: overlay README and
+`arch/arm/boot/dts/overlays/draws-overlay.dts`. GPL-2.0. https://github.com/raspberrypi/linux
 
 [5] NW Digital Radio, DRAWS product page.
 https://nwdigitalradio.com/products/draws%E2%84%A2
@@ -498,6 +501,7 @@ https://nwdigitalradio.com/products/draws%E2%84%A2
 8703647c8cb277cad66f5a4eaff103126b7a1b5a): `rigs/yaesu/ft857.c`,
 `rigs/yaesu/ft857.h`, `rigs/yaesu/ft817.c`, `src/rig.c`, `src/conf.c`,
 `src/serial_cfg_params.h`, `src/iofunc.c`, `src/serial.c`, `src/misc.c`,
+`include/hamlib/riglist.h`,
 `src/band_changed.c`, `tests/rigctld.c`, `tests/rigctl_parse.c`,
 `include/hamlib/rig.h`. Cited by file and line. LGPL-2.1-or-later.
 https://github.com/Hamlib/Hamlib/releases/tag/4.6.2

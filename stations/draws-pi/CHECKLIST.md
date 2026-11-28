@@ -23,7 +23,7 @@ never VOX, and CAT cannot key (rigctld runs with PTT type None; README, "CAT can
 | # | Step | Look for |
 |---|---|---|
 | 1 | Check the filters on **both** radios, the FT-857D and the FT-897D. On each, open the optional filter entry in the menu (OP FILTER on this family; the number is in each radio's manual) and write down exactly what it shows. Fill in the filter table below. | One line per radio. Settled by Alex on 2026-11-28; the filter table below has his answer. |
-| 2 | Make the SD card. Raspberry Pi Imager, Raspberry Pi 4, Raspberry Pi OS Lite (64-bit). In the settings: hostname `draws1`, your user, SSH on with your key. | Card written with no errors. |
+| 2 | Make the SD card. Raspberry Pi Imager, Raspberry Pi 4, a 64-bit image with no desktop. The Pi on the bench runs Debian 13 (trixie), kernel 6.18.50+rpt-rpi-v8, Hamlib 4.6.2 (read on the Pi on 2026-11-28); a new card should match it. In the settings: hostname `draws1`, your user, SSH on with your key. | Card written with no errors. |
 | 3 | Build it. Power off. DRAWS on the Pi 4. Card in. Power from the 13.8 V supply into the DRAWS barrel jack (no USB-C). Ethernet to the station LAN. | Pi boots and you can `ssh draws1`. |
 | 4 | Install. Run the install block below on the Pi. It ends with a reboot. | No errors. After the reboot, `aplay -l` lists `card N: udrc`. If udrc is missing, stop here and tell me. |
 | 5 | Check PTT is safe. `pinctrl get 12` and `pinctrl get 23`. | Both say `op dl` (output, low). |

@@ -1,5 +1,6 @@
 # Lines to add at the END of /boot/firmware/config.txt on the DRAWS Pi.
-# (Raspberry Pi OS Bookworm and later keep config.txt in /boot/firmware.)
+# (Debian 12 bookworm and later Raspberry Pi systems, the bench Pi's Debian 13
+# trixie among them, keep config.txt in /boot/firmware.)
 
 # The DRAWS hat: codec, GNSS serial (ttySC0/ttySC1), PPS on BCM7, ADC.
 # alsaname=udrc gives the card the name the vendor tools and our helpers use.
