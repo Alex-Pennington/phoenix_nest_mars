@@ -296,8 +296,10 @@ version of this plan said `-P NONE` turned CAT PTT off. It does not:
 Checklist step 18 checks it with a read-only query, `t` (read PTT). With PTT
 type None, rigctld answers it with an error and sends nothing to the radio
 (`src/rig.c:3585-3587`), and `rigctl` prints
-`get_ptt: error = Feature not available` (`tests/rigctl_parse.c:1808-1812`,
-`src/rig.c:203`). With the CAT PTT still on, it would print `0`. The unit's
+`get_ptt: error = Feature not available` (a command on `rigctl`'s command line
+runs non-interactive, `tests/rigctl.c:460-463`, which takes the printing branch
+at `tests/rigctl_parse.c:1795-1812`; the text is `src/rig.c:203`). rigctld
+itself answers `RPRT -11`. With the CAT PTT still on, it would print `0`. The unit's
 `cache_timeout=0` matters here too: with Hamlib's cache on, a second `t`
 inside 500 ms would answer `0` from the cache (`src/rig.c:3345-3353`).
 
