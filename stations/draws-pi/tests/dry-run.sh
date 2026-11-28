@@ -250,6 +250,27 @@ LC_ALL=C sort -u "$T/rig.log" | tr '\n' ' ' | grep -qx 'F 1234560 f m ' || fail 
 pass "draws-setfreq: read-back checked (wrong mode exit 5, wrong frequency exit 4), refused during a transmission (exit 6); rigctld only ever got F, f and m"
 pass "draws-setfreq: refused with the PTT line high or unreadable (exit 7), before rigctld; pinctrl only ever ran 'get 23'"
 
+# The ALLOWED guard: loaded as a module, its rigctld client refuses any command
+# outside F, f and m before anything is sent.
+before="$(wc -l < "$T/rig.log")"
+DRAWS_RIGCTLD_PORT=$port_good python3 -I - "$HERE/bin/draws-setfreq" <<'PY' || fail "ALLOWED guard"
+import importlib.machinery, importlib.util, sys
+loader = importlib.machinery.SourceFileLoader("setfreq", sys.argv[1])
+spec = importlib.util.spec_from_loader("setfreq", loader)
+m = importlib.util.module_from_spec(spec)
+loader.exec_module(m)
+rig = m.Rigctld()
+for cmd, arg in (("T", 1), ("M", "USB 0"), ("w", r"\0xBE"), ("\\set_conf", None)):
+    try:
+        rig.ask(cmd, arg)
+    except RuntimeError:
+        continue
+    sys.exit(f"ask({cmd!r}) was not refused")
+rig.close()
+PY
+[[ "$(wc -l < "$T/rig.log")" == "$before" ]] || fail "a refused command reached rigctld"
+pass "draws-setfreq's ALLOWED guard refuses T, M, w and set_conf before anything reaches rigctld"
+
 # 12. No new helper keys without the enable file, and none keys by itself.
 [[ ! -e "$T/tx-enabled" ]] || fail "enable file left over"
 if grep -n -E 'draws-ptt|pinctrl|aplay' "$HERE/bin/draws-send" "$HERE/bin/draws-pull"; then
