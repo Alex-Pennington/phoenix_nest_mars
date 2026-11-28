@@ -3,32 +3,48 @@
 A Raspberry Pi 4 with the NW Digital Radio DRAWS hat, driving a Yaesu radio
 from the FT-817/818/857/897 family. The FT-857D is the worked example; the
 plan does not depend on which of these radios is on the DRAWS.
-It is the second transmitter for test 3 (two real stations on the air, or on
-dummy loads), and a model for a low-cost member station later.
+It is the RF end of the second test station (two real stations on the air, or
+on dummy loads).
 
-This folder holds the plan, the Pi config files, five small helpers and the
-hands-on checklist. It holds no modem, waveform or ALE code. The modem is
+This folder holds the plan, the Pi config files, the helpers and the hands-on
+checklist. It holds no modem, waveform or ALE code. The modem is
 greybeard-ale's. If this station becomes part of the appliance image, the
 image side of it moves to greybeard-ale.
 
 Hands-on steps are in [CHECKLIST.md](CHECKLIST.md).
 
-## Recommendation
+## The role: the Pi is the RF end
 
-1. **Phase 1, test 3: the Pi is a radio head.** munin makes the burst WAVs
-   with `gale-tx`, as it does today. The Pi takes a WAV, keys the radio on the
-   DRAWS PTT line, plays it, and unkeys. The Pi also records what the radio
-   hears and hands the recordings to the data store. No modem runs on the Pi.
-2. **Phase 2: the modem runs on the Pi.** When greybeard-ale has an aarch64
-   build of `gale-tx`/`gale-rx`, they run on the Pi itself. A Pi 4 with 1 GB
-   has the CPU and memory for a 110A/110D 3 kHz modem.
-3. **Not recommended: streaming audio over the LAN to munin.** It adds jitter
-   and a network dependency to PTT timing and to 5066 ARQ turnaround, and
-   gains nothing over running the modem on the Pi.
+The Pi is the second station's RF end, under the station controller on the
+upstream host. The upstream host is munin today and Har later. Har is an HP
+EliteDesk 800 G5 Mini, the second terminal. It will run the appliance,
+installed by the installers only and booting to the kiosk [1].
+
+The Pi does four things, and nothing else:
+
+- **It plays the WAV it is handed.** The upstream host makes the burst
+  (`gale-tx` on munin today) and copies the file whole to the Pi. The Pi plays
+  it from its own disk, so PTT timing does not depend on the LAN [1], [2].
+- **It records what the radio hears and passes it up.** `draws-rxrec` writes
+  8 kHz mono files, and the upstream host pulls them off the Pi.
+- **It keys PTT.** The Pi keys the radio itself, on the DRAWS hardware PTT
+  line, not through gale-key. Every keying guard is on the Pi.
+- **It sets the channel.** It writes the frequency its caller gives it through
+  CAT and reads it back.
+
+**The Pi is never a compute target.** No modem, no ALE, no core and no
+decoding run on it [1]. Everything above the RF end runs on the upstream host.
+The only processing on the Pi is the resample between the file rate (8 kHz
+mono) and the card rate (48 kHz).
 
 Keying stays a deliberate act. The TX helper refuses to key unless the file
-`/etc/draws-station/tx-enabled` exists on the Pi. Nothing here changes the
-core: the core stays pinned to gale-tx/WAV.
+`/etc/draws-station/tx-enabled` exists on the Pi. Each file is keyed by one
+explicit order from the upstream host: there is no spool watcher, no
+automatic keying and no daemon that keys. Nothing here changes the core: the
+core stays pinned to gale-tx/WAV.
+
+**Not done: streaming audio over the LAN.** It would put the network inside
+the PTT timing and the 5066 ARQ turnaround. The file is moved whole instead.
 
 ## Hardware
 
@@ -51,8 +67,8 @@ Transmit, in order:
 
 | Step | Where | What happens |
 |---|---|---|
-| 1 | munin | `gale-tx` writes BURST.wav (8 kHz, 16-bit, mono) |
-| 2 | munin to Pi | rsync over ssh into `/var/spool/draws-station/tx` |
+| 1 | upstream host | `gale-tx` writes BURST.wav (8 kHz, 16-bit, mono) |
+| 2 | upstream host to Pi | the file is copied whole over ssh into `/var/spool/draws-station/tx` |
 | 3 | Pi | sox converts to 48 kHz stereo, audio on the left channel only |
 | 4 | Pi | PTT on: BCM12 high (left port) or BCM23 (right port), which grounds pin 3 of that DRAWS port |
 | 5 | Pi | aplay through the DRAWS DAC to pin 1 of that port, the radio's DATA IN, DIG mode |
@@ -65,7 +81,7 @@ Receive, in order:
 | 1 | radio | DATA OUT 1200 (pin 5) into the DRAWS port's input |
 | 2 | Pi | arecord at 48 kHz stereo |
 | 3 | Pi | sox keeps that port's channel and writes 8 kHz mono files to the spool |
-| 4 | Pi to data store | files are copied, then deleted from the Pi |
+| 4 | Pi to upstream host | files are copied, then deleted from the Pi |
 
 The DRAWS left connector is the left ALSA channel and BCM12 PTT. The right
 connector is the right channel and BCM23 PTT. `DRAWS_PORT` in `station.env`
@@ -140,14 +156,12 @@ cable plugged into the Pi while the probe runs.
 ## Passband: the two radios differ
 
 110A and the 3 kHz 110D waveforms occupy about 3 kHz around an 1800 Hz
-carrier. Both radios cut that short, and Alex says they do not have the same
-optional filter:
+carrier. Both radios cut that short, and they do not have the same options.
+Alex, 2026-11-28 [1]:
 
-- Alex has seen a "2.3K" entry on one radio's filter menu and thinks it may
-  be how a 2.8 kHz filter shows up. Which radio, and what it really is, are
-  not confirmed.
-- Neither radio is assumed to have the extra filter. The checklist reads the
-  filter menu on both.
+- The FT-897D has the Collins 2.8 kHz filter and a TCXO.
+- The FT-857D has no optional filter and no TCXO. It is the radio on the
+  DRAWS.
 
 What this means for test 3:
 
@@ -157,11 +171,12 @@ What this means for test 3:
 - The two stations will not be mirror images. A failure in one direction only
   may be the filter, not the modem.
 
-So the checklist has Alex read the filter menu on both radios, and measure each
-radio's real TX passband: a swept tone into the dummy load, received on the
-RSP2, which is wide and flat, with the optional filter off and then on on any
-radio that has one. Each radio runs data with the setting that measures
-widest. The filter table in the checklist holds the results.
+The checklist measures each radio's real TX passband (step 16): a swept tone
+into the dummy load, received on the RSP2, which is wide and flat, on the
+FT-897D with the Collins filter off and then on, and on the FT-857D as it is.
+Each radio runs data with the setting that measures widest. The filter table
+in the checklist holds the results. Step 16 is not done yet: the RSP2 was not
+available.
 
 ## Levels and sample rate
 
@@ -188,19 +203,18 @@ Without a GPS antenna the Pi falls back to network time.
 | Raspberry Pi OS Lite 64-bit, idle, no desktop | about 150 to 200 MB |
 | gpsd, chrony, rigctld | under 20 MB |
 | sox, aplay, arecord while running | under 30 MB |
-| Phase 2: gale modem, 3 kHz, 8 kHz sample rate | well under 100 MB (estimate) |
 
-That leaves over half of the 1 GB free. Do not install the desktop. One Pi 4
-core is plenty for one 3 kHz modem channel.
+That leaves over half of the 1 GB free. Do not install the desktop. Nothing
+that computes (modem, ALE, decoding) runs on the Pi, so there is no row for it.
 
 Recording at 48 kHz stereo would write about 690 MB an hour to the SD card.
 The RX helper writes 8 kHz mono instead, about 58 MB an hour, and the files
-move to the data store.
+move to the upstream host.
 
 ## Storage
 
-Audio lives permanently only on the data store. The Pi keeps recordings in
-`/var/spool/draws-station/rx` until they are copied to the data store, then
+Audio does not stay on the Pi. The Pi keeps recordings in
+`/var/spool/draws-station/rx` until the upstream host has copied them, then
 deletes them. It keeps TX WAVs in `/var/spool/draws-station/tx` only while
 sending.
 
@@ -224,8 +238,15 @@ sending.
 
 ## Where this sits in the station topology
 
-For test 3 the DRAWS Pi is a second station's terminal: it is the only thing
-that keys the radio on the DRAWS. It is not a big brain and holds no permanent data.
+The DRAWS Pi is the RF end of the second station: the edge of the Physical
+layer, below the modem and below ALE [2]. It is the only thing that keys the
+radio on the DRAWS. Above it is the upstream host (munin today, Har later),
+which runs everything that computes. The Pi holds no permanent data.
+
+Open points about the RF end (keying by CAT or GPIO, who writes CAT, where the
+channel table lives, the names) are asked when stage 2 of the roadmap is done
+[1]. Until then the Pi keys on the hardware line only and takes a frequency,
+not a channel designation, from its caller.
 
 ## Files
 
@@ -250,20 +271,27 @@ that keys the radio on the DRAWS. It is not a big brain and holds no permanent d
 
 ## Open items
 
-- Which radio, if either, has the optional filter, and what each measures
-  (checklist steps 1 and 16).
+- What each radio's passband measures (checklist step 16). Not measured: the
+  RSP2 was not available.
 - A USB CAT cable for the radio on the DRAWS: does Alex have a second one.
 - Hamlib model numbers checked in Hamlib 4.5.5: 1020 FT-817, 1041 FT-818,
   1022 FT-857, 1023 FT-897, 1043 FT-897D. Confirm with `rigctl -l` on the Pi.
-- gale-rx's input format for Phase 2. This plan assumes 8 kHz mono, the same
-  as gale-tx's output.
-- The aarch64 build of gale-tx and gale-rx is greybeard-ale's to make.
 
 ## Sources
 
-- NW Digital Radio n7nix repository: DRAWS config, ALSA, HF and radio notes,
-  `setalsa-ft817.sh`, GPS install
-  (https://github.com/nwdigitalradio/n7nix)
-- Raspberry Pi kernel overlay README and `draws-overlay.dts`, rpi-6.12.y
-  (https://github.com/raspberrypi/linux)
-- DRAWS product page (https://nwdigitalradio.com/products/draws%E2%84%A2)
+[1] Roadmap issue 18, greybeard-ale (Alex-Pennington/greybeard-ale#18): the
+test stations table (Alex, 2026-11-28, on the filters and TCXOs), D17, and
+section 7, "Beside the stages: the second station" and "The second station as
+one terminal".
+
+[2] Alex's summary of the second station as one terminal, given 2026-11-27,
+kept on saga as `~/msc-handoff/second-station-rf-terminal-2026-11-27.md`.
+
+[3] NW Digital Radio, n7nix repository: DRAWS config, ALSA, HF and radio
+notes, `setalsa-ft817.sh`, GPS install. https://github.com/nwdigitalradio/n7nix
+
+[4] Raspberry Pi Ltd, Linux kernel, rpi-6.12.y: overlay README and
+`draws-overlay.dts`. GPL-2.0. https://github.com/raspberrypi/linux
+
+[5] NW Digital Radio, DRAWS product page.
+https://nwdigitalradio.com/products/draws%E2%84%A2

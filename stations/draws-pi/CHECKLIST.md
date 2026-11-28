@@ -4,10 +4,17 @@ These are the steps that need hands on the Pi or the radios. Do them in
 order. Each step says what to look for. The plan and the reasons are in
 [README.md](README.md).
 
-Nothing here assumes which radio has the optional filter, which DRAWS port the
-radio is cabled to, or which USB port the CAT cable is in. Steps 1, 10 and 11
-find those out at the bench. The FT-857D is only the worked example; an
+Nothing here assumes which DRAWS port the radio is cabled to or which USB
+port the CAT cable is in. Steps 10 and 11 find those out at the bench. The
+filters are settled (Alex, 2026-11-28, roadmap issue 18 of greybeard-ale): the
+FT-897D has the Collins 2.8 kHz filter and a TCXO, and the FT-857D has no
+optional filter and no TCXO. The FT-857D is the radio on the DRAWS; an
 FT-897D (or 817/818) on the DRAWS works the same way.
+
+The Pi is the RF end. It plays the WAV it is handed, records what the radio
+hears, keys PTT and sets the frequency it is given. Nothing that computes
+(modem, ALE, decoding) runs on it. The upstream host (munin today, Har later)
+makes the bursts and takes the recordings (README, "The role").
 
 All transmit steps are into a dummy load, at low power. Never connect one
 radio's antenna jack to the other radio. Keying is only the DRAWS PTT line:
@@ -15,7 +22,7 @@ never VOX, and CAT cannot key (rigctld runs with no PTT).
 
 | # | Step | Look for |
 |---|---|---|
-| 1 | Check the filters on **both** radios, the FT-857D and the FT-897D. On each, open the optional filter entry in the menu (OP FILTER on this family; the number is in each radio's manual) and write down exactly what it shows. Fill in the filter table below. | One line per radio. This settles which radio, if either, has the extra filter. Neither radio is assumed to have it. |
+| 1 | Check the filters on **both** radios, the FT-857D and the FT-897D. On each, open the optional filter entry in the menu (OP FILTER on this family; the number is in each radio's manual) and write down exactly what it shows. Fill in the filter table below. | One line per radio. Settled by Alex on 2026-11-28; the filter table below has his answer. |
 | 2 | Make the SD card. Raspberry Pi Imager, Raspberry Pi 4, Raspberry Pi OS Lite (64-bit). In the settings: hostname `draws1`, your user, SSH on with your key. | Card written with no errors. |
 | 3 | Build it. Power off. DRAWS on the Pi 4. Card in. Power from the 13.8 V supply into the DRAWS barrel jack (no USB-C). Ethernet to the station LAN. | Pi boots and you can `ssh draws1`. |
 | 4 | Install. Run the install block below on the Pi. It ends with a reboot. | No errors. After the reboot, `aplay -l` lists `card N: udrc`. If udrc is missing, stop here and tell me. |
@@ -30,15 +37,15 @@ never VOX, and CAT cannot key (rigctld runs with no PTT).
 | 13 | Receive check. Tune to a band with signals. `arecord -D draws_rx -f S16_LE -r 48000 -c 2 -d 20 /tmp/rx.wav` then `sox /tmp/rx.wav -n remix 1 stats` (`remix 2` if step 10 said right). | `Pk lev dB` around -12 on signals. If near 0, lower ADC Level; if below -30, raise it (`alsamixer -c udrc`, 1 dB steps). Send me the stats output; I'll check it for hum. |
 | 14 | PTT check, dummy load on. `sudo touch /etc/draws-station/tx-enabled` then `draws-ptt on`, look at the radio, `draws-ptt off`. PTT uses the port step 10 found. | TX lights on `on`, goes out on `off`. |
 | 15 | TX level. `sox -n -r 8000 -c 1 -b 16 /tmp/tone.wav synth 10 sine 1800 vol 0.5` then `draws-txwav /tmp/tone.wav`. Watch the ALC meter. Repeat, moving DIG MIC on the radio. | ALC just moving, never pinned. Write down the DIG MIC value. |
-| 16 | Passband, both radios, each filter setting. `sox -n -r 8000 -c 1 -b 16 /tmp/sweep.wav synth 20 sine 100-3800 vol 0.5` then `draws-txwav /tmp/sweep.wav`, received on the RSP2 at the same time. Do it with the optional filter menu off, then on if the radio has one (step 1). Do the same on the other radio, keyed the way test 3a keyed it. | One RSP2 recording per radio per filter setting, named for the radio and setting. I read the -6 dB edges and tell you which setting to keep on each radio. |
+| 16 | Passband, both radios, each filter setting. `sox -n -r 8000 -c 1 -b 16 /tmp/sweep.wav synth 20 sine 100-3800 vol 0.5` then `draws-txwav /tmp/sweep.wav`, received on the RSP2 at the same time. On the FT-897D, do it with the Collins filter off, then on. The FT-857D has no optional filter: once, as it is. The FT-897D is keyed the way test 3a keyed it. | One RSP2 recording per radio per filter setting, named for the radio and setting. I read the -6 dB edges and tell you which setting to keep on each radio. |
 | 17 | Turn keying off when done: `sudo rm /etc/draws-station/tx-enabled` | `draws-ptt on` now says keying is off. |
 
 ## Filter table (steps 1 and 16)
 
 | Radio | Optional filter menu shows (step 1) | -6 dB edges, filter off (step 16) | -6 dB edges, filter on (step 16) |
 |---|---|---|---|
-| FT-857D | | | |
-| FT-897D | | | |
+| FT-857D | No optional filter (Alex, 2026-11-28) | not measured: RSP2 not available | no filter to turn on |
+| FT-897D | Collins 2.8 kHz filter (Alex, 2026-11-28) | not measured: RSP2 not available | not measured: RSP2 not available |
 
 ## Install block for step 4
 
