@@ -385,6 +385,7 @@ not a channel designation, from its caller.
 | `systemd/draws-rxrec.service` | receive recorder, off until enabled |
 | `tests/dry-run.sh` | runs the helpers with no hardware; used in development |
 | `tests/findcat-test.py` | the CAT finder against fake ports (pseudo-terminals) |
+| `tests/fake-rigctld.py` | a stand-in for rigctld's TCP protocol, for the `draws-setfreq` tests |
 
 ## Open items
 
