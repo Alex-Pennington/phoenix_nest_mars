@@ -9,7 +9,9 @@ User=draws
 Group=dialout
 # Frequency and mode only. -P NONE: rigctld has no PTT, so CAT cannot key.
 # Keying is the DRAWS hardware PTT line only, never CAT, never VOX.
-ExecStart=/usr/bin/rigctld -m ${RIG_MODEL} -r ${RIG_DEVICE} -s ${RIG_BAUD} -P NONE -T 127.0.0.1 -t 4532
+# cache_timeout=0: every read asks the radio, so draws-setfreq's read-back is
+# the radio's and not Hamlib's cache (Hamlib 4.5.5 src/rig.c:623).
+ExecStart=/usr/bin/rigctld -m ${RIG_MODEL} -r ${RIG_DEVICE} -s ${RIG_BAUD} -P NONE -C cache_timeout=0 -T 127.0.0.1 -t 4532
 Restart=on-failure
 RestartSec=5
 

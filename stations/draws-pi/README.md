@@ -202,6 +202,68 @@ If the ssh connection drops while the Pi is keyed, the Pi's guards still end
 the transmission: at the end of the file, or at `TX_MAX_SECONDS` by the
 watchdog.
 
+## Setting the channel
+
+`draws-setfreq HZ` runs on the Pi. It takes a frequency from its caller, and
+only a frequency. There is no channel table on the Pi: where the table of
+record lives is an open point in the roadmap [1], so the caller says which
+frequency. It talks to rigctld on localhost and sends exactly three commands:
+`F HZ`, then `f` and `m` to read the frequency and the mode back.
+
+- It never sets the mode. The DIG sideband is the operator's panel setting
+  [1] (checklist step 9: mode DIG, DIG MODE = USER-U). Hamlib reads DIG with
+  USER-U as `PKTUSB` [6, `rigs/yaesu/ft857.c:711-724`].
+- It refuses, and says why, if the frequency read back is not the one asked
+  for (exit 4) or the mode read back is not `PKTUSB` (exit 5). It does not put
+  anything back.
+- It holds `draws-txwav`'s transmit lock for the whole change: it refuses
+  while a transmission is on (exit 6), and no transmission can start in the
+  middle of it.
+- Hamlib keeps a set frequency in a 500 ms cache and would answer `f` from it
+  without asking the radio [6, `src/rig.c:623`, `:1760`]. The rigctld unit
+  turns the cache off (`-C cache_timeout=0`), and the helper also waits 0.6 s
+  before it reads back, so the read-back is the radio's.
+
+`PKTUSB` is also what Hamlib reads for DIG MODE = PSK31-U [6,
+`rigs/yaesu/ft857.c:720`]. CAT cannot tell the two apart.
+
+### What Hamlib sends for it (FT-857, model 1022)
+
+From the Hamlib 4.5.5 source [6]; not measured on the radio.
+
+| Command | Frames on the CAT line |
+|---|---|
+| `F` (set frequency) | Read TX status `00 00 00 00 F7` (`ft857.c:827-846`), repeated up to 10 times 100 ms apart while it reads PTT on (`:958-966`); then `P1 P2 P3 P4 01`, the frequency in BCD (`:969`, `:974`), and a 1-byte ack (`ft817.c:1324-1350`) |
+| `f` (read frequency), `m` (read mode) | Read frequency and mode `00 00 00 00 03`, then the EEPROM read `00 78 00 00 BB` for the DIG submode (`ft857.c:500-563`, `:471-498`). Two reads within 50 ms share one reply (`ft857.h:70`) |
+
+**No 0xBE.** Every frame `ft857.c` writes goes through one of its four
+`write_block` calls (`:483`, `:537`, `:579`, `:601`), and each takes its last
+byte, the opcode, from the command table `ncmd` (`:176-218`). That table has no
+0xBE. The other four bytes are BCD digits (at most 0x99), the EEPROM addresses
+0x00, 0x68, 0x78 and 0x8C, or zero. So 0xBE cannot be in any byte of a frame
+for set frequency, read frequency or read mode. The same holds in Hamlib 4.0
+and 4.5.4 (same table, same writes). Which Hamlib the Pi runs is not known
+here: `rigctld --version` on the Pi says.
+
+**At rigctld's start** (`src/rig.c:1310-1386`) Hamlib also reads the VFO
+(EEPROM `00 68 00 00 BB`, `ft857.c:607-631`), the split state (`F7`, and
+`00 8C 00 00 BB` while receiving, `ft857.c:793-825`), and VFO B's frequency.
+The FT-857 backend has a `set_vfo` (`ft857.c:365`) and no targetable VFO
+(`:284`), so to read VFO B the frontend toggles VFO A/B with `00 00 00 00 81`
+(`ft857.c:633-653`), reads, and toggles back (`src/rig.c:2174`, `:2191`).
+Inference from the source: each rigctld start toggles the VFO twice and leaves
+it where it was. None of these keys, and none is 0xBE.
+
+**CAT cannot key.** rigctld runs with `-P NONE`, and with that PTT type
+`rig_set_ptt` returns an error before the backend is called (`src/rig.c:3026`,
+`:3277-3279`).
+
+**Not closed by config: rigctld's raw command.** rigctld's `w` command sends
+whatever bytes the client gives straight to the radio
+(`tests/rigctl_parse.c:339`, `:4765`). Any program on the Pi that can reach
+127.0.0.1:4532 could send any CAT byte that way, 0xBE or PTT on included.
+`draws-setfreq` sends only `F`, `f` and `m`, and nothing on the Pi sends `w`.
+
 ## Levels and sample rate
 
 - `gale-tx` writes 8 kHz, 16-bit mono (see `src/appliance-core/src/greybeard_modem.h`).
@@ -292,12 +354,13 @@ not a channel designation, from its caller.
 | `bin/draws-ptt` | key, unkey or show the PTT line |
 | `bin/draws-txwav` | send one WAV: key, play, unkey, with a hard time limit |
 | `bin/draws-send` | on the upstream host: copy one WAV to the Pi, verify it, and have the Pi send exactly that file |
+| `bin/draws-setfreq` | set the frequency through rigctld and read frequency and mode back; never sets the mode |
 | `bin/draws-rxrec` | record the port to 8 kHz mono files |
 | `bin/draws-pull` | on the upstream host: copy the finished recordings off the Pi, verify each, delete from the Pi only what verified |
 | `bin/draws-findport` | find which DRAWS port the radio is on (receive only) |
 | `bin/draws-findcat` | find which USB serial port answers CAT (one read-only query) |
 | `systemd/draws-ptt-safe.service` | PTT low at boot and at shutdown |
-| `systemd/rigctld-draws.service` | Hamlib CAT daemon, localhost only, no PTT |
+| `systemd/rigctld-draws.service` | Hamlib CAT daemon, localhost only, no PTT, no frontend cache |
 | `systemd/draws-rxrec.service` | receive recorder, off until enabled |
 | `tests/dry-run.sh` | runs the helpers with no hardware; used in development |
 | `tests/findcat-test.py` | the CAT finder against fake ports (pseudo-terminals) |
@@ -328,3 +391,8 @@ notes, `setalsa-ft817.sh`, GPS install. https://github.com/nwdigitalradio/n7nix
 
 [5] NW Digital Radio, DRAWS product page.
 https://nwdigitalradio.com/products/draws%E2%84%A2
+
+[6] Hamlib project, *Hamlib*, tag 4.5.5: `rigs/yaesu/ft857.c`,
+`rigs/yaesu/ft857.h`, `rigs/yaesu/ft817.c`, `src/rig.c`, `src/conf.c`,
+`src/iofunc.c`, `tests/rigctld.c`, `tests/rigctl_parse.c`. Cited by file and
+line. LGPL-2.1-or-later. https://github.com/Hamlib/Hamlib/tree/4.5.5

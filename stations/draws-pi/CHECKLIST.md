@@ -60,7 +60,7 @@ sudo useradd -r -G audio,gpio,dialout -s /usr/sbin/nologin draws
 sudo install -d -m 0755 /etc/draws-station
 sudo install -m 0644 config/station.env /etc/draws-station/station.env
 sudo install -d -g audio -m 2775 /var/spool/draws-station /var/spool/draws-station/tx /var/spool/draws-station/rx
-sudo install -m 0755 bin/draws-ptt bin/draws-txwav bin/draws-rxrec bin/draws-findcat bin/draws-findport /usr/local/bin/
+sudo install -m 0755 bin/draws-ptt bin/draws-txwav bin/draws-rxrec bin/draws-findcat bin/draws-findport bin/draws-setfreq /usr/local/bin/
 sudo install -m 0644 alsa/asound.conf /etc/asound.conf
 sudo install -m 0644 config/gpsd /etc/default/gpsd
 sudo install -m 0644 config/chrony-draws.conf /etc/chrony/conf.d/draws.conf
