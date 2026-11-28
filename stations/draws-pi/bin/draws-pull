@@ -1,0 +1,101 @@
+#!/bin/bash
+# draws-pull: run on the upstream host. Move the Pi's finished recordings up.
+#
+#   draws-pull
+#
+#   1. lists the finished recordings in the Pi's RX spool with their SHA-256.
+#      draws-rxrec gives a file its rx-<UTC start>-<port>.wav name only when
+#      it is whole, so a file still being written is never listed;
+#   2. copies each one into LOCAL_RX_DIR under a .part name, checks its
+#      SHA-256 against the Pi's, and only then gives it its name;
+#   3. deletes from the Pi only the files whose copy verified.
+# A file that did not verify stays on the Pi for the next run. Nothing is
+# processed on either side: the file is moved as it is.
+#
+# Settings come from DRAWS_UPSTREAM_ENV (default
+# ~/.config/draws-station/upstream.env): DRAWS_PI_HOST, DRAWS_PI_SSH_OPTS,
+# PI_RX_SPOOL, LOCAL_RX_DIR.
+# Exit codes: 0 every listed file moved (or there were none), 1 a file did not
+# verify or could not be copied (it stays on the Pi), 2 usage or config,
+# 255 ssh failed.
+# DRAWS_DRY_RUN=1 prints the ssh commands instead of running them.
+# DRAWS_SSH replaces ssh, for tests.
+set -euo pipefail
+
+die() { echo "draws-pull: $1" >&2; exit "${2:-1}"; }
+
+CONF="${DRAWS_UPSTREAM_ENV:-$HOME/.config/draws-station/upstream.env}"
+[[ -r "$CONF" ]] || die "no settings file: $CONF" 2
+# shellcheck source=/dev/null
+source "$CONF"
+for v in DRAWS_PI_HOST PI_RX_SPOOL LOCAL_RX_DIR; do
+    [[ -n "${!v:-}" ]] || die "$v is not set in $CONF" 2
+done
+[[ $# -eq 0 ]] || die "usage: draws-pull" 2
+
+SSH="${DRAWS_SSH:-ssh}"
+SSH_OPTS=(-T -o BatchMode=yes -o ConnectTimeout=10)
+# Extra ssh options from the settings file (identity, HostKeyAlias, ...).
+read -r -a EXTRA_SSH_OPTS <<<"${DRAWS_PI_SSH_OPTS:-}"
+SSH_OPTS+=("${EXTRA_SSH_OPTS[@]}")
+q() { printf '%q' "$1"; }
+SPOOL="$(q "$PI_RX_SPOOL")"
+# draws-rxrec's names: rx-YYYYmmddTHHMMSSZ-left.wav or -right.wav.
+NAME_RE='^rx-[0-9]{8}T[0-9]{6}Z-(left|right)\.wav$'
+REMOTE_LIST="cd $SPOOL && for f in rx-*.wav; do [ -f \"\$f\" ] && sha256sum -- \"\$f\"; done; true"
+
+if [[ "${DRAWS_DRY_RUN:-0}" == 1 ]]; then
+    echo "DRY: $SSH ${SSH_OPTS[*]} $DRAWS_PI_HOST '$REMOTE_LIST'"
+    echo "DRY: for each listed file: $SSH ${SSH_OPTS[*]} $DRAWS_PI_HOST 'cat -- $SPOOL/NAME' > $(q "$LOCAL_RX_DIR")/.NAME.part, then compare SHA-256"
+    echo "DRY: $SSH ${SSH_OPTS[*]} $DRAWS_PI_HOST 'cd $SPOOL && rm -f -- NAME...' (only the names whose copy verified)"
+    exit 0
+fi
+
+mkdir -p "$LOCAL_RX_DIR"
+listing="$("$SSH" "${SSH_OPTS[@]}" "$DRAWS_PI_HOST" "$REMOTE_LIST" </dev/null)"
+
+verified=()
+bad=0
+while read -r sum name; do
+    [[ -n "${name:-}" ]] || continue
+    if ! [[ "$name" =~ $NAME_RE && "$sum" =~ ^[0-9a-f]{64}$ ]]; then
+        echo "skip   $name: not a draws-rxrec name" >&2
+        continue
+    fi
+    dest="$LOCAL_RX_DIR/$name"
+    part="$LOCAL_RX_DIR/.$name.part"
+    if [[ -e "$dest" ]]; then
+        if [[ "$(sha256sum < "$dest" | cut -d' ' -f1)" == "$sum" ]]; then
+            echo "have   $name"
+            verified+=("$name")
+        else
+            echo "FAIL   $name: a different file of that name is already in $LOCAL_RX_DIR; left on the Pi" >&2
+            bad=1
+        fi
+        continue
+    fi
+    if ! "$SSH" "${SSH_OPTS[@]}" "$DRAWS_PI_HOST" "cat -- $SPOOL/$name" </dev/null > "$part"; then
+        rm -f "$part"
+        echo "FAIL   $name: copy failed; left on the Pi" >&2
+        bad=1
+        continue
+    fi
+    got="$(sha256sum < "$part" | cut -d' ' -f1)"
+    if [[ "$got" != "$sum" ]]; then
+        rm -f "$part"
+        echo "FAIL   $name: copy does not match the Pi's SHA-256; left on the Pi" >&2
+        bad=1
+        continue
+    fi
+    mv -- "$part" "$dest"
+    echo "copied $name"
+    verified+=("$name")
+done <<<"$listing"
+
+if (( ${#verified[@]} )); then
+    "$SSH" "${SSH_OPTS[@]}" "$DRAWS_PI_HOST" "cd $SPOOL && rm -f -- ${verified[*]}" </dev/null
+    echo "deleted ${#verified[@]} file(s) from $DRAWS_PI_HOST:$PI_RX_SPOOL"
+else
+    echo "nothing to delete on $DRAWS_PI_HOST"
+fi
+exit "$bad"

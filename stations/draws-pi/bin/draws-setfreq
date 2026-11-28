@@ -1,0 +1,215 @@
+#!/usr/bin/python3 -I
+"""draws-setfreq: set the radio's frequency through rigctld and read it back.
+
+    draws-setfreq HZ
+
+Takes a frequency in Hz from its caller, and nothing else. There is no channel
+table on the Pi: the caller (the upstream host) says which frequency. It talks
+to rigctld on localhost and sends exactly three commands:
+
+    F HZ    set the frequency
+    f       read the frequency back
+    m       read the mode back
+
+It never sets the mode. The DIG sideband is the operator's panel setting
+(checklist step 9: mode DIG, DIG MODE = USER-U), and Hamlib reads that as
+PKTUSB. It refuses, and says why, if the frequency read back is not the one
+asked for, or the mode read back is not PKTUSB. A refusal changes nothing
+back: the radio stays wherever the read-back says it is.
+
+It reads the PTT line first (pinctrl get, read-only, the pin station.env
+gives for DRAWS_PORT) and refuses unless the line reads low, whatever keyed
+it. A line it cannot read counts as high.
+
+It holds the transmit lock (the one draws-txwav takes) for the whole change,
+so it never runs while a transmission is on, and a transmission cannot start
+in the middle of it. It never keys: it never sends T, and rigctld runs with
+ptt_type=None (README, "CAT cannot key").
+
+Prints one JSON line. Exit codes: 0 set and read back, 1 rigctld error or not
+reachable, 2 usage, 4 the frequency read back differs, 5 the mode read back is
+not the data mode, 6 a transmission is running, 7 the PTT line is high or
+could not be read.
+
+Environment: DRAWS_DRY_RUN=1 prints the commands and connects to nothing.
+DRAWS_ENV (station file, default /etc/draws-station/station.env). DRAWS_LOCK
+(transmit lock path), DRAWS_PINCTRL, DRAWS_RIGCTLD_PORT and
+DRAWS_READBACK_WAIT are for tests.
+"""
+
+import fcntl
+import json
+import os
+import re
+import socket
+import subprocess
+import sys
+import time
+
+HOST = "127.0.0.1"  # rigctld-draws.service listens here only
+PORT = int(os.environ.get("DRAWS_RIGCTLD_PORT", "4532"))
+LOCK = os.environ.get("DRAWS_LOCK", "/run/lock/draws-tx.lock")
+DRY = os.environ.get("DRAWS_DRY_RUN", "0") == "1"
+ENV_FILE = os.environ.get("DRAWS_ENV", "/etc/draws-station/station.env")
+PINCTRL = os.environ.get("DRAWS_PINCTRL", "pinctrl")
+# pinctrl get prints e.g. "12: op dl pd | lo // GPIO12 = output": the level
+# is after the "|" (raspberrypi/utils pinctrl/pinctrl.c:164, :176-181).
+LEVEL_RE = re.compile(r"\|\s*(hi|lo|--)\s*//")
+# Hamlib's frontend keeps a set frequency in its cache for 500 ms and would
+# answer "f" from it without asking the radio (Hamlib 4.6.2 src/rig.c:733,
+# :2071, :2377, :2548-2550). rigctld-draws.service turns the cache off (cache_timeout=0); the
+# wait is there as well, so the read-back is the radio's on either unit file.
+READBACK_WAIT = float(os.environ.get("DRAWS_READBACK_WAIT", "0.6"))
+TIMEOUT = 5.0
+
+# The only commands this program can send to rigctld.
+ALLOWED = ("F", "f", "m")
+# The data mode as Hamlib names it: DIG with DIG MODE = USER-U is PKTUSB
+# (Hamlib 4.6.2 rigs/yaesu/ft857.c:724-737).
+DATA_MODE = "PKTUSB"
+# 8 BCD digits of 10 Hz each in the CAT frame (FT-857D manual p.117).
+MAX_HZ = 999_999_990
+
+
+def read_env(path):
+    vals = {}
+    try:
+        with open(path) as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith("#") and "=" in line:
+                    k, v = line.split("=", 1)
+                    vals[k.strip()] = v.strip().strip('"').strip("'")
+    except OSError:
+        pass
+    return vals
+
+
+def ptt_pin():
+    env = read_env(ENV_FILE)
+    port = env.get("DRAWS_PORT", "left")
+    key = {"left": "PTT_GPIO_LEFT", "right": "PTT_GPIO_RIGHT"}.get(port)
+    pin = env.get(key, "") if key else ""
+    return pin if pin.isdigit() else None
+
+
+def ptt_level(pin):
+    """'lo', 'hi', or None when the line cannot be read. Read-only."""
+    try:
+        p = subprocess.run([PINCTRL, "get", pin], capture_output=True,
+                           text=True, timeout=5)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    m = LEVEL_RE.search(p.stdout) if p.returncode == 0 else None
+    return m.group(1) if m and m.group(1) in ("hi", "lo") else None
+
+
+def out(rec, code):
+    print(json.dumps(rec, separators=(",", ":")))
+    return code
+
+
+def fail(msg, code):
+    print(f"draws-setfreq: {msg}", file=sys.stderr)
+    return code
+
+
+class Rigctld:
+    def __init__(self):
+        self.sock = socket.create_connection((HOST, PORT), timeout=TIMEOUT)
+        self.r = self.sock.makefile("r", encoding="ascii", newline="\n")
+
+    def ask(self, cmd, arg=None, lines=1):
+        if cmd not in ALLOWED:
+            raise RuntimeError(f"refusing to send {cmd!r} to rigctld")
+        line = cmd if arg is None else f"{cmd} {arg}"
+        self.sock.sendall((line + "\n").encode("ascii"))
+        got = []
+        for _ in range(lines):
+            s = self.r.readline()
+            if not s:
+                raise OSError("rigctld closed the connection")
+            s = s.strip()
+            if s.startswith("RPRT "):
+                return [s]
+            got.append(s)
+        return got
+
+    def close(self):
+        try:
+            self.sock.close()
+        except OSError:
+            pass
+
+
+def main(argv):
+    if len(argv) != 2 or not argv[1].isdigit() or not argv[1].isascii():
+        return fail("usage: draws-setfreq HZ (a whole number of hertz)", 2)
+    hz = int(argv[1])
+    if hz <= 0 or hz > MAX_HZ or hz % 10:
+        return fail(f"{argv[1]} Hz: the radio takes whole 10 Hz steps up to {MAX_HZ}", 2)
+
+    try:
+        lockf = open(LOCK, "a")
+    except OSError as e:
+        return fail(f"cannot open the transmit lock {LOCK}: {e.strerror}", 1)
+    try:
+        fcntl.flock(lockf, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        return fail("a transmission is running; the frequency was not changed", 6)
+
+    pin = ptt_pin()
+    if pin is None:
+        return fail(f"no PTT pin for DRAWS_PORT in {ENV_FILE}; the frequency "
+                    "was not changed", 7)
+    if DRY:
+        print(f"DRY: {PINCTRL} get {pin} (must read lo)")
+        for c in (f"F {hz}", "f", "m"):
+            print(f"DRY: rigctld {HOST}:{PORT} <- {c}")
+        return 0
+    level = ptt_level(pin)
+    if level != "lo":
+        what = "is high" if level == "hi" else "could not be read"
+        return fail(f"the PTT line (BCM{pin}) {what}; the frequency was not "
+                    "changed", 7)
+
+    try:
+        rig = Rigctld()
+    except OSError as e:
+        return fail(f"rigctld is not answering on {HOST}:{PORT} ({e}); "
+                    "is rigctld-draws running?", 1)
+    try:
+        r = rig.ask("F", hz)
+        if r != ["RPRT 0"]:
+            return fail(f"rigctld refused the frequency: {' '.join(r)}", 1)
+        time.sleep(READBACK_WAIT)
+        f = rig.ask("f")
+        m = rig.ask("m", lines=2)
+    except OSError as e:
+        return fail(f"rigctld: {e}", 1)
+    finally:
+        rig.close()
+
+    if f[0].startswith("RPRT") or not f[0].isdigit():
+        return fail(f"could not read the frequency back: {f[0]}", 1)
+    if m[0].startswith("RPRT"):
+        return fail(f"could not read the mode back: {m[0]}", 1)
+    read_hz, mode = int(f[0]), m[0]
+    rec = {"event": "freq", "set_hz": hz, "read_hz": read_hz, "mode": mode}
+
+    if read_hz != hz:
+        rec["ok"] = False
+        out(rec, 4)
+        return fail(f"asked for {hz} Hz, the radio reads {read_hz} Hz", 4)
+    if mode != DATA_MODE:
+        rec["ok"] = False
+        out(rec, 5)
+        return fail(f"the radio reads mode {mode}, not {DATA_MODE} (DIG, "
+                    "DIG MODE = USER-U). Set DIG on the radio's panel; this "
+                    "helper never sets the mode", 5)
+    rec["ok"] = True
+    return out(rec, 0)
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))
