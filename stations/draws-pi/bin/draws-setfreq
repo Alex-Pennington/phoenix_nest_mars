@@ -19,7 +19,8 @@ back: the radio stays wherever the read-back says it is.
 
 It holds the transmit lock (the one draws-txwav takes) for the whole change,
 so it never runs while a transmission is on, and a transmission cannot start
-in the middle of it. It never keys: rigctld runs with -P NONE.
+in the middle of it. It never keys: it never sends T, and rigctld runs with
+ptt_type=None (README, "CAT cannot key").
 
 Prints one JSON line. Exit codes: 0 set and read back, 1 rigctld error or not
 reachable, 2 usage, 4 the frequency read back differs, 5 the mode read back is

@@ -109,8 +109,9 @@ manual):
 
 - Mode **DIG**, with DIG MODE = **USER-U** and DIG SHIFT = 0.
 - **DIG VOX = 0.** VOX keying is forbidden on this project. Keying is only the
-  DRAWS PTT line on pin 3. rigctld runs with `-P NONE`, so CAT cannot key
-  either.
+  DRAWS PTT line on pin 3. rigctld runs with `-C ptt_type=None`, so CAT
+  cannot key either (see "CAT cannot key" below for why `-P NONE` alone does
+  not do it).
 - PKT RATE = 1200, so DATA IN is the sensitive input that matches the DRAWS
   preset.
 - DIG MIC sets the data input gain. Set it with the ALC check in the
@@ -275,9 +276,30 @@ The FT-857 backend has a `set_vfo` (`ft857.c:365`) and no targetable VFO
 Inference from the source: each rigctld start toggles the VFO twice and leaves
 it where it was. None of these keys, and none is 0xBE.
 
-**CAT cannot key.** rigctld runs with `-P NONE`, and with that PTT type
-`rig_set_ptt` returns an error before the backend is called (`src/rig.c:3026`,
-`:3277-3279`).
+**CAT cannot key, because of `ptt_type=None`, not `-P NONE`.** An earlier
+version of this plan said `-P NONE` turned CAT PTT off. It does not:
+
+- `-P NONE` sets rigctld's `ptt_type` to `RIG_PTT_NONE` (`tests/rigctld.c:409`),
+  which is already its default (`:256`). rigctld applies it to the rig only
+  `if (ptt_type != RIG_PTT_NONE)` (`:711`), so `-P NONE` changes nothing.
+- The PTT type then stays the one `rig_init` took from the backend
+  (`src/rig.c:615`), and the FT-857 backend's is `RIG_PTT_RIG`
+  (`rigs/yaesu/ft857.c:253`). With that, a `T 1` sent to rigctld would reach
+  `ft857_set_ptt` and send PTT on, `00 00 00 00 08` (`ft857.c:1105-1125`).
+- `rigctld-draws.service` now passes `-C ptt_type=None` (`src/conf.c:94-96`).
+  It sets the PTT type to `RIG_PTT_NONE`, and the copy `rig_open` restores
+  from as well (`src/conf.c:497`, `:530-541`; `src/rig.c:842-845`). With that
+  type, `rig_set_ptt` returns an error before the backend is called
+  (`src/rig.c:3026`, `:3277-3279`), and `rig_get_ptt` returns "not available"
+  (`src/rig.c:3585-3587`). `-P NONE` is kept; it is harmless.
+
+Checklist step 18 checks it with a read-only query, `t` (read PTT). With PTT
+type None, rigctld answers it with an error and sends nothing to the radio
+(`src/rig.c:3585-3587`), and `rigctl` prints
+`get_ptt: error = Feature not available` (`tests/rigctl_parse.c:1808-1812`,
+`src/rig.c:203`). With the CAT PTT still on, it would print `0`. The unit's
+`cache_timeout=0` matters here too: with Hamlib's cache on, a second `t`
+inside 500 ms would answer `0` from the cache (`src/rig.c:3345-3353`).
 
 **Not closed by config: rigctld's raw command.** rigctld's `w` command sends
 whatever bytes the client gives straight to the radio
@@ -381,7 +403,7 @@ not a channel designation, from its caller.
 | `bin/draws-findport` | find which DRAWS port the radio is on (receive only) |
 | `bin/draws-findcat` | find which USB serial port answers CAT (one read-only query) |
 | `systemd/draws-ptt-safe.service` | PTT low at boot and at shutdown |
-| `systemd/rigctld-draws.service` | Hamlib CAT daemon, localhost only, no PTT, no frontend cache |
+| `systemd/rigctld-draws.service` | Hamlib CAT daemon, localhost only, PTT type None, no frontend cache |
 | `systemd/draws-rxrec.service` | receive recorder, off until enabled |
 | `tests/dry-run.sh` | runs the helpers with no hardware; used in development |
 | `tests/findcat-test.py` | the CAT finder against fake ports (pseudo-terminals) |

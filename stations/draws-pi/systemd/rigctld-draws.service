@@ -7,8 +7,14 @@ Wants=draws-ptt-safe.service
 EnvironmentFile=/etc/draws-station/station.env
 User=draws
 Group=dialout
-# Frequency and mode only. -P NONE: rigctld has no PTT, so CAT cannot key.
-# Keying is the DRAWS hardware PTT line only, never CAT, never VOX.
+# Frequency and mode only. Keying is the DRAWS hardware PTT line only, never
+# CAT, never VOX.
+# ptt_type=None is what turns CAT PTT off. -P NONE does nothing alone: it sets
+# rigctld's ptt_type to its own default, RIG_PTT_NONE (Hamlib 4.5.5
+# tests/rigctld.c:256, :409), which rigctld then applies only when it is not
+# NONE (:711), so the backend's RIG_PTT_RIG stays (src/rig.c:615,
+# rigs/yaesu/ft857.c:253) and a "T 1" would key over CAT. ptt_type=None
+# (src/conf.c:94-96, :497-541) sets it. -P NONE is kept as well; it is harmless.
 # cache_timeout=0: every read asks the radio, so draws-setfreq's read-back is
 # the radio's and not Hamlib's cache (Hamlib 4.5.5 src/rig.c:623).
 # rts_state=OFF, dtr_state=OFF: Hamlib lowers both lines straight after it
@@ -16,7 +22,7 @@ Group=dialout
 # kernel raised them at open for as long as rigctld runs (src/serial.c:292-296
 # is commented out), and after it exits too, since Hamlib clears HUPCL
 # (src/serial.c:410). The kernel's raise at open itself cannot be avoided.
-ExecStart=/usr/bin/rigctld -m ${RIG_MODEL} -r ${RIG_DEVICE} -s ${RIG_BAUD} -P NONE -C cache_timeout=0,rts_state=OFF,dtr_state=OFF -T 127.0.0.1 -t 4532
+ExecStart=/usr/bin/rigctld -m ${RIG_MODEL} -r ${RIG_DEVICE} -s ${RIG_BAUD} -P NONE -C ptt_type=None,cache_timeout=0,rts_state=OFF,dtr_state=OFF -T 127.0.0.1 -t 4532
 Restart=on-failure
 RestartSec=5
 
