@@ -148,10 +148,31 @@ can arrive as 0x08, which is PTT on. If nothing answers, the fix is the
 radio's menu, not another rate. `--baud` exists only to match a CAT RATE
 read off the radio.
 
-Opening a serial port briefly raises DTR and RTS on many USB adapters. The
-probe drops both at once. Yaesu CAT cables don't use them, but an audio
-interface that keys on RTS would blip, so the checklist has only the CAT
-cable plugged into the Pi while the probe runs.
+### DTR and RTS on the CAT port
+
+Opening a USB serial port raises DTR and RTS. What can be avoided is avoided
+in config; the raise at open cannot be.
+
+- **The kernel raises both at every open.** `tty_port_block_til_ready()`
+  calls `tty_port_raise_dtr_rts()` whenever the baud rate is not B0, also for
+  a non-blocking open [7, `drivers/tty/tty_port.c:541-544`]. That happens
+  inside `open(2)`, before any program can act. No setting in rigctld or in
+  the probe removes it. Each open leaves a pulse of a few milliseconds.
+- **`draws-findcat` lowers both at once** (`TIOCMBIC`, straight after
+  `open(2)`, and again after it sets the port up), so its pulse is the
+  kernel's alone, and they are low when it closes the port.
+- **rigctld lowers both at open** with `-C rts_state=OFF,dtr_state=OFF` in
+  `rigctld-draws.service` [6, `src/iofunc.c:258-283`; the names are the same
+  in Hamlib 4.0]. Hamlib does not lower them by itself
+  (`src/serial.c:292-296` is commented out), so without these two settings
+  they stay high for as long as rigctld runs. Hamlib also clears HUPCL
+  (`src/serial.c:410`), so whatever state they are in at exit stays.
+
+The FT-857D's CAT/LINEAR jack lists no RTS or DTR pin [8, p.34]. Whether the
+USB CAT cable on the Pi connects either line to anything is NOT DETERMINABLE
+here: it depends on that cable, and its maker's schematic would answer it. So
+the checklist still has only the CAT cable plugged into the Pi while the probe
+runs: an audio interface that keys on RTS would blip at every open.
 
 ## Passband: the two radios differ
 
@@ -396,3 +417,9 @@ https://nwdigitalradio.com/products/draws%E2%84%A2
 `rigs/yaesu/ft857.h`, `rigs/yaesu/ft817.c`, `src/rig.c`, `src/conf.c`,
 `src/iofunc.c`, `tests/rigctld.c`, `tests/rigctl_parse.c`. Cited by file and
 line. LGPL-2.1-or-later. https://github.com/Hamlib/Hamlib/tree/4.5.5
+
+[7] Raspberry Pi Ltd, Linux kernel, rpi-6.12.y: `drivers/tty/tty_port.c`.
+GPL-2.0. https://github.com/raspberrypi/linux
+
+[8] Yaesu Musen Co., Ltd., *FT-857D Operating Manual*, cited by printed page.
+On saga as `~/msc-handoff/manuals/yaesu_ft-857d_operating-manual.pdf`.
