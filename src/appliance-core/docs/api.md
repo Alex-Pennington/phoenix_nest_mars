@@ -1893,12 +1893,13 @@ This is the core's 5066 client (docs/stanag-5066-client.md) with `link = control
   is no limit, and the answer is then waited for until it comes or the connection drops. Stage 1 makes no link, and the frame's
   header names the addressee, as on every path. Priority comes from the precedence, as in that
   document, and the time to live is `s5066-ttl` (600 s).
-- **At most 2048 bytes.** The SIS MTU is 2048 bytes: Annex A A.2.1.3 (7) fixes it for a
-  general-purpose node, and S_BIND_ACCEPTED gives it. The core never cuts a frame into
-  pieces on this link, because the controller would have to open the message to join them. A
-  message whose frame is over 2048 bytes is refused before the y: "too long for one burst: N
-  bytes, the station controller takes 2048". Tapes and bundles go as parts of up to 6000 bytes
-  (Parts of long tapes and bundles), so a part over 2048 bytes is refused the same way.
+- **At most the bound MTU.** The MTU comes from S_BIND_ACCEPTED on the message's service
+  socket: Annex A A.2.1.3 (7) says 2048 bytes for a general-purpose node, but the controller
+  may give a different value. The core never cuts a frame into pieces on this link, because
+  the controller would have to open the message to join them. A message whose frame is over
+  the bound MTU is refused before the y: "too long for one burst: N bytes, the station
+  controller takes M". Tapes and bundles go as parts of up to 6000 bytes (Parts of long tapes
+  and bundles), so a part over the bound MTU is refused the same way.
 - **One answer per request,** a broadcast included: a confirm or a reject. Annex A issues these
   only when confirmation was asked (A.2.1.7 (2)); the controller departs and answers every request.
   The answer carries the U_PDU's first bytes, which name the request it answers (A.2.1.7 (7)).

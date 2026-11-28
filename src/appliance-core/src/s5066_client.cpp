@@ -424,6 +424,12 @@ bool SisControllerLink::has(const std::string& service, bool automatic) const {
     return find(service, automatic) != nullptr;
 }
 
+uint16_t SisControllerLink::bound_mtu(const std::string& service, bool automatic) const {
+    std::lock_guard<std::mutex> g(mu_);
+    const Conn* c = find(service, automatic);
+    return (c && c->bound) ? c->mtu : 0;
+}
+
 bool SisControllerLink::bound(const std::string& service, bool automatic) const {
     std::lock_guard<std::mutex> g(mu_);
     const Conn* c = find(service, automatic);
@@ -476,10 +482,9 @@ bool SisControllerLink::submit(const SisSend& s, std::string* why) {
     if (!c->bound || c->fd < 0)
         return fail("the station controller isn't bound for " + s.service + " on SAP " + std::to_string(c->sap) +
                     " (" + path_for(s.service) + ")");
-    const size_t mtu = std::min<size_t>(c->mtu ? c->mtu : cfg_.mtu, std::min<size_t>(cfg_.mtu, kSisMtu));
-    if (s.frame.size() > mtu)
+    if (s.frame.size() > c->mtu)
         return fail("too long for one burst: " + std::to_string(s.frame.size()) +
-                    " bytes, the station controller takes " + std::to_string(mtu));
+                    " bytes, the station controller takes " + std::to_string(c->mtu));
     // A.2.1.6: priority, destination SAP (the same client application at the
     // far station), the all-stations address, delivery mode, TTL, the U_PDU.
     const std::string req = s5066::unidata_request(s.priority & 0x0F, c->sap, s5066::kBroadcastAddress,

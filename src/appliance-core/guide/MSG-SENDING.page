@@ -1,0 +1,30 @@
+PAGE MSG-SENDING
+TITLE How a message is sent
+KIND topic
+SEE MSG-OUTBOX EMCON
+BEGIN_TEXT
+A message you compose stays "written" in the out box until the station
+controller's result says it was keyed. Only "keyed" marks it sent.
+
+When you answer y, the core hands your message to the station
+controller over the station's link. The controller picks the channel,
+claims the radio, and keys the burst. Its result comes back:
+
+  keyed      The burst went on the air. The message moves to "sent"
+             and waits for its acknowledgement.
+  refused    The controller would not key it. The message is marked
+             failed and shows the controller's reason.
+
+The service decides which connection carries the message, and the
+controller picks the channel. You see the channel on the y question,
+read from the controller's status.
+
+A message too long for one burst is refused before the y question
+opens. The refusal names the size the controller takes on the
+service's connection. The controller tells the core that size when it
+accepts the connection; it is not always 2048 bytes. The core never
+splits a message on this link.
+
+EMCON keeps everything written: nothing goes on the air while EMCON
+is on. Turn it off to let the queue go.
+END

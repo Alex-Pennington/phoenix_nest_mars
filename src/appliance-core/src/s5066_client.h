@@ -124,8 +124,8 @@ private:
 //    order, no retransmission (Figure A-3).
 //  - One frame per S_UNIDATA_REQUEST (A.2.1.6, Figure A-20), to the all-stations
 //    address as a group address (A.2.2.28.1), with the same delivery mode
-//    given explicitly (Figure A-29). A U_PDU over the MTU of S_BIND_ACCEPTED
-//    (A.2.1.3: 2048 for a general-purpose node) is never submitted.
+//    given explicitly (Figure A-29). A U_PDU over the MTU the controller gave
+//    in S_BIND_ACCEPTED (A.2.1.3) is never submitted.
 //  - Every request waits for its one answer, S_UNIDATA_REQUEST_CONFIRM (A.2.1.7)
 //    or S_UNIDATA_REQUEST_REJECTED (A.2.1.8). Annex A issues these only when
 //    confirmation was asked; the controller departs and answers every request,
@@ -170,7 +170,6 @@ struct SisLinkConfig {
     int late_keep_s = 2 * kSisOrderTimeoutS;
 };
 
-constexpr size_t kSisMtu = 2048;
 constexpr size_t kSisLateMax = 16;  // requests kept on one connection's late list
 
 // One frame handed down.
@@ -210,6 +209,9 @@ public:
     // Writes one S_UNIDATA_REQUEST. False with *why when it was not written:
     // no such connection, not bound, or a U_PDU over the MTU.
     bool submit(const SisSend& s, std::string* why);
+    // The MTU the controller gave in S_BIND_ACCEPTED for this service's
+    // connection (operator SAP 13 or automatic SAP 14). 0 when not bound.
+    uint16_t bound_mtu(const std::string& service, bool automatic) const;
     bool bound(const std::string& service, bool automatic) const;
     bool has(const std::string& service, bool automatic) const;
     size_t outstanding() const;

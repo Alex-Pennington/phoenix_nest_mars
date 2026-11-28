@@ -166,8 +166,8 @@ static void guide(const fs::path& dir) {
     r = call(core, {{"cmd", "guide_list"}});
     std::set<std::string> ids;
     for (auto& p : arr(r, "pages")) ids.insert(str(p, "id"));
-    for (const char* want : {"START", "MAIN", "TRAINING", "MSG-INBOX", "MSG-COMPOSE", "EMCON", "KEYS", "RESENDS",
-                             "FORM-SETUP", "FORM-BOOK", "FORM-NET_TAPE", "FORM-PARTS_QUEUE", "TYPE-FREE_FORM"})
+    for (const char* want : {"START", "MAIN", "TRAINING", "MSG-INBOX", "MSG-COMPOSE", "MSG-SENDING", "EMCON", "KEYS",
+                             "RESENDS", "FORM-SETUP", "FORM-BOOK", "FORM-NET_TAPE", "FORM-PARTS_QUEUE", "TYPE-FREE_FORM"})
         CHECK(ids.count(want));
     for (auto& i : ids) {
         JsonValue p = call(core, {{"cmd", "guide_get"}, {"id", i}});

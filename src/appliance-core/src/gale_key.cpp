@@ -950,10 +950,10 @@ GaleKey::Prepared GaleKey::prepare_sis(const KeyItem& it) {
                   " is not in the outbox: nothing to prepare (a prepare is only for a frame already written)";
         return p;
     }
-    // Annex A A.2.1.3: no U_PDU over the MTU. Refused before the y.
-    if (bytes.size() > kSisMtu) {
+    const uint16_t mtu = sis_->bound_mtu(it.service, false);
+    if (mtu > 0 && bytes.size() > mtu) {
         p.error = "too long for one burst: " + std::to_string(bytes.size()) + " bytes, the station controller takes " +
-                  std::to_string(kSisMtu);
+                  std::to_string(mtu);
         return p;
     }
     std::string why;
