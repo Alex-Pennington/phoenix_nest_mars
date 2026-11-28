@@ -1,0 +1,82 @@
+#!/bin/bash
+# draws-send: run on the upstream host. Send one burst WAV out the DRAWS Pi.
+#
+#   draws-send BURST.wav
+#
+# One order, one file:
+#   1. copies the file whole over ssh into the Pi's TX spool, under a hidden
+#      .part name;
+#   2. reads the copy's SHA-256 on the Pi and compares it with the local file;
+#   3. only if they match: renames it, runs draws-txwav on exactly that file,
+#      and deletes it from the spool whatever draws-txwav did.
+# Prints draws-txwav's output and exits with draws-txwav's exit status.
+#
+# This helper never keys and decides nothing about keying. Every guard is on
+# the Pi, in draws-txwav: the tx-enabled file, the hard time limit, the
+# watchdog, PTT low on every exit, one transmission at a time. There is no
+# spool watcher: a file in the spool is never sent unless this order names it.
+#
+# Settings come from DRAWS_UPSTREAM_ENV (default
+# ~/.config/draws-station/upstream.env): DRAWS_PI_HOST, PI_TX_SPOOL, PI_TXWAV.
+# Exit codes: draws-txwav's own (0 sent, 1 error, 2 usage, 3 keying is off),
+# 2 usage or config here, 10 the copy failed or did not verify (nothing was
+# keyed), 255 ssh failed.
+# DRAWS_DRY_RUN=1 prints the ssh commands instead of running them.
+# DRAWS_SSH replaces ssh, for tests.
+set -euo pipefail
+
+die() { echo "draws-send: $1" >&2; exit "${2:-1}"; }
+
+CONF="${DRAWS_UPSTREAM_ENV:-$HOME/.config/draws-station/upstream.env}"
+[[ -r "$CONF" ]] || die "no settings file: $CONF" 2
+# shellcheck source=/dev/null
+source "$CONF"
+for v in DRAWS_PI_HOST PI_TX_SPOOL PI_TXWAV; do
+    [[ -n "${!v:-}" ]] || die "$v is not set in $CONF" 2
+done
+
+[[ $# -eq 1 ]] || die "usage: draws-send BURST.wav" 2
+IN="$1"
+[[ -f "$IN" && -r "$IN" ]] || die "no such file: $IN" 2
+
+SSH="${DRAWS_SSH:-ssh}"
+SSH_OPTS=(-T -o BatchMode=yes -o ConnectTimeout=10)
+
+# The name on the Pi: unique, and only characters that need no quoting.
+base="$(basename -- "$IN")"
+base="$(printf '%s' "${base%.*}" | tr -c 'A-Za-z0-9._-' '_' | cut -c1-60)"
+NAME="send-$(date -u +%Y%m%dT%H%M%SZ)-$$-$base.wav"
+PART=".$NAME.part"
+SUM="$(sha256sum < "$IN" | cut -d' ' -f1)"
+
+q() { printf '%q' "$1"; }
+SPOOL="$(q "$PI_TX_SPOOL")"
+REMOTE_COPY="cd $SPOOL && umask 002 && cat > $(q "$PART") && sha256sum < $(q "$PART")"
+REMOTE_DROP="cd $SPOOL && rm -f -- $(q "$PART")"
+# shellcheck disable=SC2016  # $? and $rc are for the Pi's shell
+REMOTE_SEND="cd $SPOOL && mv -- $(q "$PART") $(q "$NAME") && { $(q "$PI_TXWAV") $(q "$NAME"); rc=\$?; rm -f -- $(q "$NAME"); exit \$rc; }"
+
+if [[ "${DRAWS_DRY_RUN:-0}" == 1 ]]; then
+    echo "DRY: $SSH ${SSH_OPTS[*]} $DRAWS_PI_HOST '$REMOTE_COPY' < $(q "$IN")"
+    echo "DRY: compare the Pi's SHA-256 with $SUM; on a mismatch: $SSH ${SSH_OPTS[*]} $DRAWS_PI_HOST '$REMOTE_DROP'"
+    echo "DRY: $SSH ${SSH_OPTS[*]} $DRAWS_PI_HOST '$REMOTE_SEND'"
+    exit 0
+fi
+
+drop() { "$SSH" "${SSH_OPTS[@]}" "$DRAWS_PI_HOST" "$REMOTE_DROP" </dev/null >/dev/null 2>&1 || true; }
+
+if ! got="$("$SSH" "${SSH_OPTS[@]}" "$DRAWS_PI_HOST" "$REMOTE_COPY" < "$IN")"; then
+    drop
+    die "the copy to $DRAWS_PI_HOST failed; nothing was keyed" 10
+fi
+got="${got%% *}"
+if [[ "$got" != "$SUM" ]]; then
+    drop
+    die "the copy on $DRAWS_PI_HOST does not match (local $SUM, Pi ${got:-none}); nothing was keyed" 10
+fi
+
+set +e
+"$SSH" "${SSH_OPTS[@]}" "$DRAWS_PI_HOST" "$REMOTE_SEND" </dev/null
+rc=$?
+set -e
+exit "$rc"

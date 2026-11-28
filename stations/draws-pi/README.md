@@ -68,7 +68,7 @@ Transmit, in order:
 | Step | Where | What happens |
 |---|---|---|
 | 1 | upstream host | `gale-tx` writes BURST.wav (8 kHz, 16-bit, mono) |
-| 2 | upstream host to Pi | the file is copied whole over ssh into `/var/spool/draws-station/tx` |
+| 2 | upstream host to Pi | `draws-send` copies the file whole over ssh into `/var/spool/draws-station/tx`, checks its SHA-256 on the Pi, then runs `draws-txwav` on exactly that file |
 | 3 | Pi | sox converts to 48 kHz stereo, audio on the left channel only |
 | 4 | Pi | PTT on: BCM12 high (left port) or BCM23 (right port), which grounds pin 3 of that DRAWS port |
 | 5 | Pi | aplay through the DRAWS DAC to pin 1 of that port, the radio's DATA IN, DIG mode |
@@ -178,6 +178,30 @@ Each radio runs data with the setting that measures widest. The filter table
 in the checklist holds the results. Step 16 is not done yet: the RSP2 was not
 available.
 
+## The burst path in
+
+`draws-send BURST.wav` runs on the upstream host. It is one order for one file:
+
+1. It copies the file over ssh into the Pi's TX spool under a hidden `.part`
+   name.
+2. It reads the copy's SHA-256 on the Pi and compares it with the local file.
+   On a mismatch it deletes the copy and stops; nothing is keyed.
+3. It renames the copy, runs `draws-txwav` on exactly that file, deletes it,
+   and returns `draws-txwav`'s output and exit status.
+
+`draws-send` never keys and decides nothing about keying. Every guard stays on
+the Pi, in `draws-txwav`: the tx-enabled file, the hard time limit and its
+watchdog, PTT low on every exit, one transmission at a time. Nothing on the Pi
+watches the spool: a file there is sent only when an order names it.
+
+The Pi's ssh name comes from `upstream.env` on the upstream host, not from the
+code, so moving from munin to Har is a copy of that file and an ssh key. The
+upstream host's ssh key must log in to the Pi with no prompt (BatchMode).
+
+If the ssh connection drops while the Pi is keyed, the Pi's guards still end
+the transmission: at the end of the file, or at `TX_MAX_SECONDS` by the
+watchdog.
+
 ## Levels and sample rate
 
 - `gale-tx` writes 8 kHz, 16-bit mono (see `src/appliance-core/src/greybeard_modem.h`).
@@ -255,11 +279,13 @@ not a channel designation, from its caller.
 | `CHECKLIST.md` | Alex's hands-on steps, in order |
 | `config/boot-config.txt` | lines to add to `/boot/firmware/config.txt` |
 | `config/station.env` | DRAWS port, PTT pins, rig model, CAT port and rate, TX time limit |
+| `config/upstream.env` | on the upstream host: the Pi's ssh name and the Pi's spool paths, for `draws-send` and `draws-pull` |
 | `config/gpsd` and `config/chrony-draws.conf` | GPS and PPS time |
 | `alsa/asound.conf` | named devices for both ports, with dmix and dsnoop |
 | `alsa/yaesu-data.amixer` | starting codec levels for the 817/857/897 DATA jack, fed to `amixer -s` |
 | `bin/draws-ptt` | key, unkey or show the PTT line |
 | `bin/draws-txwav` | send one WAV: key, play, unkey, with a hard time limit |
+| `bin/draws-send` | on the upstream host: copy one WAV to the Pi, verify it, and have the Pi send exactly that file |
 | `bin/draws-rxrec` | record the port to 8 kHz mono files |
 | `bin/draws-findport` | find which DRAWS port the radio is on (receive only) |
 | `bin/draws-findcat` | find which USB serial port answers CAT (one read-only query) |
