@@ -6,7 +6,7 @@ HELP Enter open  c cancel  r retry  ? guide
 KEY Enter Opens the message.
 KEY c Cancels one that hasn't gone yet.
 KEY r Retries one that failed.
-SEE MSG-COMPOSE EMCON RESENDS
+SEE MSG-COMPOSE MSG-SENDING EMCON RESENDS
 BEGIN_TEXT
 Every message waiting to go, on the air now, waiting for its
 acknowledgement, or failed. A message goes when the radio is free, in

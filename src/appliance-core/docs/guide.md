@@ -74,7 +74,7 @@ an edited template changes its page at once.
 
 Built-in screen and topic pages: START, MAIN, MSG-INBOX, MSG-PENDING,
 MSG-VIEW, MSG-OUTBOX, MSG-COMPOSE, MSG-SEARCH, MSG-ACTIVITY, MSG-REPORTS,
-BBS-SETUP, BBS-GUARD, BBS-ROUTES, EMCON, KEYS, RESENDS, TRAINING. The screen
+MSG-SENDING, BBS-SETUP, BBS-GUARD, BBS-ROUTES, EMCON, KEYS, RESENDS, TRAINING. The screen
 ids follow docs/gale-term-mm-bbs-screens.md. Some of those screens (inbox
 marks, machine mode, routing) are still being built in the core; their
 pages describe the screens as specified.
