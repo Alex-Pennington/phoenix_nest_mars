@@ -15,7 +15,7 @@ ENV_FILE="${DRAWS_ENV:-/etc/draws-station/station.env}"
 # shellcheck source=/dev/null
 source "$ENV_FILE"
 
-die() { echo "draws-rxrec: $*" >&2; exit "${2:-1}"; }
+die() { echo "draws-rxrec: $1" >&2; exit "${2:-1}"; }
 command -v sox >/dev/null || die "sox is not installed"
 
 case "${DRAWS_PORT:-left}" in

@@ -16,7 +16,7 @@ ENV_FILE="${DRAWS_ENV:-/etc/draws-station/station.env}"
 # shellcheck source=/dev/null
 source "$ENV_FILE"
 
-die() { echo "draws-findport: $*" >&2; exit "${2:-1}"; }
+die() { echo "draws-findport: $1" >&2; exit "${2:-1}"; }
 command -v sox >/dev/null || die "sox is not installed"
 
 WRITE=""

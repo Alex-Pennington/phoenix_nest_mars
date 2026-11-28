@@ -18,7 +18,7 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PTT="${DRAWS_PTT:-$HERE/draws-ptt}"
 DRY="${DRAWS_DRY_RUN:-0}"
 
-die() { echo "draws-txwav: $*" >&2; exit "${2:-1}"; }
+die() { echo "draws-txwav: $1" >&2; exit "${2:-1}"; }
 
 [[ $# -eq 1 ]] || die "usage: draws-txwav BURST.wav" 2
 IN="$1"
