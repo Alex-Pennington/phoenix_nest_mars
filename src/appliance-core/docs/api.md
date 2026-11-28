@@ -1464,13 +1464,17 @@ It holds across a restart.
 - `release`: a held message goes back in the queue.
 - `cancel`: a queued, held, written, sent, unacked or failed message never
   goes again. Not while it is on the air.
-- `cancel` and `requeue` of a written message the station controller has
-  already been handed (the operator's y was answered and its result is not in)
-  are refused: `"<id> has been handed to the station controller; wait for its
-  result"`. A requeue then would key the same message twice. When the result
-  comes back (keyed, refused, or unknown) the message moves on and both work.
 - `requeue`: an unacked, failed, cancelled or held message goes again with
   fresh counts.
+- `requeue` of a written message the station controller has already been
+  handed (the operator's y was answered and its result is not in) is refused:
+  `"<id> has been handed to the station controller; wait for its result"`. A
+  requeue then would key the same message twice. When the result comes back
+  (keyed, refused, or unknown) the message moves on and `requeue` works.
+- `cancel` of such a message is allowed, and is the way out when no result
+  comes. It cannot stop a key already under way. The log says the message had
+  been handed to the station controller: check it before requeueing a
+  cancelled one.
 - After a `release` or a `requeue` the message is the operator's own, even
   when it was an automatic send (machine, routing, auto-QSL): no standing
   grant keys its new burst, only `key_prepare` and the operator's y.

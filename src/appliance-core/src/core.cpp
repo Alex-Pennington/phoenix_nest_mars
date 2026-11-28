@@ -1309,7 +1309,7 @@ bool refuse(std::string* error, const std::string& why) {
 
 // Caller holds mu_. A written message whose burst the station controller has
 // been handed (key_asked) is the controller's until its result is in: a
-// requeue or cancel now would rewrite or drop a send that may be keying.
+// requeue now would hand the same message down twice.
 // True, with *error set, when it is.
 bool Core::handed_down(const Message& m, std::string* error) {
     if (m.state != "written") return false;
@@ -1329,9 +1329,14 @@ bool Core::cancel(const std::string& id, std::string* error, const std::string& 
         m->state != "failed" && m->state != "written")
         return refuse(error, id + " is " + m->state +
                                  "; only queued, held, written, sent, unacked or failed traffic can be cancelled");
-    if (handed_down(*m, error)) return false;
+    // A handed-down message can be cancelled, but the cancel cannot stop a key already under way.
+    std::string handed;
+    const bool was_handed = handed_down(*m, &handed);
     store_.set_state(id, "cancelled", "cancelled by " + by);
-    log(id, "cancelled by " + by + " (was " + m->state + ")");
+    log(id, "cancelled by " + by + " (was " + m->state + ")" +
+                (was_handed ? "; it had been handed to the station controller, whose key may still be under way: "
+                              "check the log before requeueing it"
+                            : std::string()));
     return true;
 }
 

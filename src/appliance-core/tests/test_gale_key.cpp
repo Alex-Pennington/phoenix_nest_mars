@@ -1223,12 +1223,10 @@ int main() {
         s.now = s.now + 2;
         CHECK(ok(call(*s.core, {{"cmd", "key_confirm"}, {"prepare_id", pid}, {"confirm", "Y"}})));
         CHECK(f.count("key") == 1 && s.state(id) == "written");
-        // Handed down, no result yet: requeue and cancel are refused, with the reason.
+        // Handed down, no result yet: requeue is refused, with the reason.
         std::string rep = call(*s.core, {{"cmd", "requeue"}, {"id", id}});
         CHECK(!ok(rep) && has(str(parsed(rep), "error"), "handed to the station controller") &&
               has(str(parsed(rep), "error"), "wait for its result"));
-        rep = call(*s.core, {{"cmd", "cancel"}, {"id", id}});
-        CHECK(!ok(rep) && has(str(parsed(rep), "error"), "handed to the station controller"));
         CHECK(!ok(call(*s.core, {{"cmd", "hold"}, {"id", id}})) && !ok(call(*s.core, {{"cmd", "release"}, {"id", id}})));
         // Nothing moved: still written, the same burst, and not submitted again.
         std::this_thread::sleep_for(std::chrono::milliseconds(300));
@@ -1236,6 +1234,18 @@ int main() {
         // The result comes back sent: nothing to requeue.
         CHECK(wait_for([&] { return s.state(id) == "sent"; }, 5000));
         CHECK(f.count("key") == 1);
+
+        // Cancel is the operator's way out: allowed while handed down, and the log says
+        // the controller had it. It cannot stop the key; a requeue of it is deliberate.
+        f.key_ms = 800;
+        const std::string idc = s.written("FARSTN", "CANCELLED WHILE HANDED DOWN");
+        const std::string pc = str(parsed(call(*s.core, {{"cmd", "key_prepare"}, {"msg_id", idc}})), "prepare_id");
+        s.now = s.now + 2;
+        CHECK(ok(call(*s.core, {{"cmd", "key_confirm"}, {"prepare_id", pc}, {"confirm", "Y"}})));
+        CHECK(f.count("key") == 2);
+        CHECK(ok(call(*s.core, {{"cmd", "cancel"}, {"id", idc}})) && s.state(idc) == "cancelled");
+        CHECK(has(s.events_text(), "handed to the station controller"));
+        f.key_ms = 1500;
 
         // The controller refuses it (the token was spent): failed, and now requeue works.
         const std::string id2 = s.written("FARSTN", "REFUSED THEN REQUEUED");

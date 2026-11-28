@@ -4,7 +4,7 @@ KIND screen
 SCREENS MSG-OUTBOX
 HELP Enter open  c cancel  r retry  ? guide
 KEY Enter Opens the message.
-KEY c Cancels one that hasn't gone yet. Not one handed to the station controller: wait for its result.
+KEY c Cancels one that hasn't gone yet. One handed to the station controller may still key: check the log.
 KEY r Retries one that failed. Not one handed to the station controller: wait for its result.
 SEE MSG-COMPOSE MSG-SENDING EMCON RESENDS
 BEGIN_TEXT
