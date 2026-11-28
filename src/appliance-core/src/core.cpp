@@ -1307,6 +1307,18 @@ bool refuse(std::string* error, const std::string& why) {
 }
 }  // namespace
 
+// Caller holds mu_. A written message whose burst the station controller has
+// been handed (key_asked) is the controller's until its result is in: a
+// requeue or cancel now would rewrite or drop a send that may be keying.
+// True, with *error set, when it is.
+bool Core::handed_down(const Message& m, std::string* error) {
+    if (m.state != "written") return false;
+    auto r = store_.key_row(m.id);
+    if (!r || !r->asked) return false;
+    refuse(error, m.id + " has been handed to the station controller; wait for its result");
+    return true;
+}
+
 bool Core::cancel(const std::string& id, std::string* error, const std::string& by) {
     std::lock_guard<std::mutex> g(mu_);
     auto m = store_.get(id);
@@ -1317,6 +1329,7 @@ bool Core::cancel(const std::string& id, std::string* error, const std::string& 
         m->state != "failed" && m->state != "written")
         return refuse(error, id + " is " + m->state +
                                  "; only queued, held, written, sent, unacked or failed traffic can be cancelled");
+    if (handed_down(*m, error)) return false;
     store_.set_state(id, "cancelled", "cancelled by " + by);
     log(id, "cancelled by " + by + " (was " + m->state + ")");
     return true;
@@ -1389,6 +1402,7 @@ bool Core::requeue(const std::string& id, std::string* error) {
         m->state != "expired" && m->state != "written")
         return refuse(error, id + " is " + m->state +
                                  "; only failed, unacked, cancelled, expired, written or held traffic can be requeued");
+    if (handed_down(*m, error)) return false;
     // The route function, with the message's own service and channel.
     if (Route rt = route_for(m->world.empty() ? std::string("(none)") : m->world, m->dst, m->channel); !rt.ok)
         return refuse(error, rt.refusal);

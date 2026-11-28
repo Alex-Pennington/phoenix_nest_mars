@@ -1458,8 +1458,13 @@ It holds across a restart.
 
 - `hold`: a queued message waits until released.
 - `release`: a held message goes back in the queue.
-- `cancel`: a queued, held, sent, unacked or failed message never goes again.
-  Not while it is on the air.
+- `cancel`: a queued, held, written, sent, unacked or failed message never
+  goes again. Not while it is on the air.
+- `cancel` and `requeue` of a written message the station controller has
+  already been handed (the operator's y was answered and its result is not in)
+  are refused: `"<id> has been handed to the station controller; wait for its
+  result"`. A requeue then would key the same message twice. When the result
+  comes back (keyed, refused, or unknown) the message moves on and both work.
 - `requeue`: an unacked, failed, cancelled or held message goes again with
   fresh counts.
 - After a `release` or a `requeue` the message is the operator's own, even

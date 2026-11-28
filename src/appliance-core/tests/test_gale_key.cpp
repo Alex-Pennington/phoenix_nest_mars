@@ -1202,6 +1202,60 @@ int main() {
         }
     }
 
+    // ---- a message handed down is not requeued, and is not handed down twice:
+    // the controller has it until its result comes (docs/api.md, "hold, release, cancel, requeue")
+    {
+        FakeController f;
+        f.sock = sock;
+        Station s(base / "H", "HHH", sock);
+        f.outbox = s.gc.outbox_dir;
+        f.key_ms = 1500;  // accepted at once; the result file comes 1.5 s later
+        f.start();
+        s.set_channel(f, "P1");
+        {
+            std::lock_guard<std::mutex> g(f.mu);
+            f.live.clear();
+        }
+        const std::string id = s.written("FARSTN", "HANDED DOWN ONCE");
+        const std::string pid = str(parsed(call(*s.core, {{"cmd", "key_prepare"}, {"msg_id", id}})), "prepare_id");
+        s.now = s.now + 2;
+        CHECK(ok(call(*s.core, {{"cmd", "key_confirm"}, {"prepare_id", pid}, {"confirm", "Y"}})));
+        CHECK(f.count("key") == 1 && s.state(id) == "written");
+        // Handed down, no result yet: requeue and cancel are refused, with the reason.
+        std::string rep = call(*s.core, {{"cmd", "requeue"}, {"id", id}});
+        CHECK(!ok(rep) && has(str(parsed(rep), "error"), "handed to the station controller") &&
+              has(str(parsed(rep), "error"), "wait for its result"));
+        rep = call(*s.core, {{"cmd", "cancel"}, {"id", id}});
+        CHECK(!ok(rep) && has(str(parsed(rep), "error"), "handed to the station controller"));
+        CHECK(!ok(call(*s.core, {{"cmd", "hold"}, {"id", id}})) && !ok(call(*s.core, {{"cmd", "release"}, {"id", id}})));
+        // Nothing moved: still written, the same burst, and not submitted again.
+        std::this_thread::sleep_for(std::chrono::milliseconds(300));
+        CHECK(s.state(id) == "written" && f.count("key") == 1);
+        // The result comes back sent: nothing to requeue.
+        CHECK(wait_for([&] { return s.state(id) == "sent"; }, 5000));
+        CHECK(f.count("key") == 1);
+
+        // The controller refuses it (the token was spent): failed, and now requeue works.
+        const std::string id2 = s.written("FARSTN", "REFUSED THEN REQUEUED");
+        const std::string p2 = str(parsed(call(*s.core, {{"cmd", "key_prepare"}, {"msg_id", id2}})), "prepare_id");
+        {
+            std::lock_guard<std::mutex> g(f.mu);
+            f.live.clear();
+        }
+        s.now = s.now + 2;
+        const int keys_before = f.count("key");
+        CHECK(ok(call(*s.core, {{"cmd", "key_confirm"}, {"prepare_id", p2}, {"confirm", "Y"}})));
+        CHECK(!ok(call(*s.core, {{"cmd", "requeue"}, {"id", id2}})));
+        CHECK(f.count("key") == keys_before + 1);
+        CHECK(wait_for([&] { return s.state(id2) == "failed"; }, 5000));
+        CHECK(f.count("key") == keys_before + 1);
+        CHECK(ok(call(*s.core, {{"cmd", "requeue"}, {"id", id2}})));
+        CHECK(wait_for([&] { return s.state(id2) == "written"; }, 10000));
+        // Rewritten, it waits for a new y: nothing is handed down on its own.
+        std::this_thread::sleep_for(std::chrono::milliseconds(300));
+        CHECK(f.count("key") == keys_before + 1);
+    }
+
     // ---- a station with no controller at all: the calls say so, status says why
     {
         GreybeardConfig gc;
